@@ -14,6 +14,7 @@ import { groupPhotos, type GroupInput } from "@/lib/ai/grouping"
 import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
 import { scanFolderSegments } from "@/lib/ai/review"
+import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
 import type { AiRun } from "@/app/generated/prisma/client"
 
 // Runs AI review scans in the background, one at a time. All state lives in
@@ -105,6 +106,8 @@ async function processRun(run: AiRun) {
   const root = run.root as RootKey
   const dir = path.join(rootPath(root), ...segs)
   const cfg = clientConfig(config)
+  const saved = await prisma.aiRun.findUnique({ where: { id: run.id }, select: { snapshot: true } })
+  const snapshot: Snapshot | null = saved?.snapshot ? JSON.parse(saved.snapshot) : null
 
   try {
     const outcome = await analyzeGroups(
@@ -112,6 +115,7 @@ async function processRun(run: AiRun) {
       {
         customPrompt: config.customPrompt,
         isCancelled: async () => (await prisma.aiRun.findUnique({ where: { id: run.id }, select: { status: true } }))?.status === "CANCELLED",
+        checkFolder: () => (snapshot ? folderChange(dir, snapshot) : Promise.resolve(null)),
         callAi: (messages) => chatWithRetry(cfg, messages, { signal: controller.signal }),
         prepareImages: async (groupId) => {
           const photos = await prisma.aiGroupPhoto.findMany({ where: { groupId }, orderBy: PHOTO_ORDER })
@@ -154,14 +158,39 @@ async function processRun(run: AiRun) {
   }
 }
 
-async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiConfig) {
-  const dir = path.join(rootPath(root), ...segs)
+/** Every image directly in `dir` with its current version. */
+async function listImageVersions(dir: string): Promise<Map<string, string>> {
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch {
     throw new Error("The folder no longer exists.")
   }
+  const out = new Map<string, string>()
+  for (const e of entries) {
+    if (!e.isFile() || mediaKind(e.name) !== "image") continue
+    try {
+      out.set(e.name, fileVersion(await fs.stat(path.join(dir, e.name))))
+    } catch {
+      // removed between readdir and stat
+    }
+  }
+  return out
+}
+
+async function folderChange(dir: string, snapshot: Snapshot): Promise<string | null> {
+  try {
+    return describeChange(diffSnapshot(snapshot, await listImageVersions(dir)))
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiConfig) {
+  const dir = path.join(rootPath(root), ...segs)
+  const listing = await listImageVersions(dir)
+  const snapshot: Snapshot = Object.fromEntries(listing)
+  await prisma.aiRun.update({ where: { id: run.id }, data: { snapshot: JSON.stringify(snapshot) } })
 
   // Earlier unfinished groups of this folder are replaced by this run.
   await prisma.aiGroup.deleteMany({ where: { root, folder: run.folder, status: { in: ["PENDING", "ANALYZED", "FAILED"] } } })
@@ -176,29 +205,30 @@ async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiCon
   }
 
   const inputs: (GroupInput & { version: string })[] = []
-  for (const e of entries) {
-    if (!e.isFile() || mediaKind(e.name) !== "image") continue
-    const file = path.join(dir, e.name)
+  for (const [name, version] of listing) {
+    if (settled.has(`${name}\0${version}`)) continue
+    const file = path.join(dir, name)
     try {
       const st = await fs.stat(file)
-      const version = fileVersion(st)
-      if (settled.has(`${e.name}\0${version}`)) continue
-      const thumb = await ensureVariant(root, [...segs, e.name].join("/"), file, "thumb", "scan")
+      const thumb = await ensureVariant(root, [...segs, name].join("/"), file, "thumb", "scan")
       if ("failed" in thumb) continue
-      inputs.push({ name: e.name, version, takenAt: await readCaptureTime(file, st.mtimeMs), fp: await fingerprintImage(thumb.path) })
+      inputs.push({ name, version, takenAt: await readCaptureTime(file, st.mtimeMs), fp: await fingerprintImage(thumb.path) })
     } catch {
-      // unreadable or removed mid-scan
+      // unreadable; caught as a change by the check below if it was removed
     }
     if ((await prisma.aiRun.findUnique({ where: { id: run.id }, select: { status: true } }))?.status === "CANCELLED") return
   }
 
+  // Grouping takes a while on a big folder; don't save groups built from a folder that has since changed.
+  const changed = await folderChange(dir, snapshot)
+  if (changed) throw new Error(changed)
+
   const groups = groupPhotos(inputs, { windowSeconds: config.groupWindowSeconds, similarity: config.similarity, maxGroupSize: config.maxGroupSize })
-  const versions = new Map(inputs.map((i) => [i.name, i.version]))
   for (const group of groups) {
     await prisma.aiGroup.create({
       data: {
         runId: run.id, root, folder: run.folder, takenAt: new Date(group[0].takenAt),
-        photos: { create: group.map((p) => ({ name: p.name, version: versions.get(p.name)!, takenAt: new Date(p.takenAt) })) },
+        photos: { create: group.map((p) => ({ name: p.name, version: listing.get(p.name)!, takenAt: new Date(p.takenAt) })) },
       },
     })
   }

@@ -6,6 +6,8 @@ import { z } from "zod"
 import { auth } from "@/auth"
 import { moveToDropoff, restoreBatch, rotateFiles, trashFiles, type ActionResult } from "@/lib/file-ops-server"
 import { isPlainName, isRootKey, safeSegments, type RootKey } from "@/lib/media"
+import { folderLocked } from "@/lib/ai/lock-server"
+import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 
 const MAX_BATCH = 2000
 
@@ -24,6 +26,7 @@ async function parse(input: unknown): Promise<Target | { error: string }> {
   if (!parsed.success) return { error: "Invalid request." }
   const folder = safeSegments(parsed.data.folder)
   if (!folder) return { error: "Invalid folder." }
+  if (await folderLocked(parsed.data.root, folder)) return { error: SCAN_LOCK_MESSAGE }
   return { root: parsed.data.root as RootKey, folder, names: parsed.data.names }
 }
 
@@ -45,10 +48,13 @@ export async function deleteAction(input: { root: string; folder: string[]; name
   return done(await trashFiles(t.root, t.folder, t.names))
 }
 
-export async function undoDeleteAction(root: string, batchId: string) {
+export async function undoDeleteAction(root: string, batchId: string, folder: string[]) {
   const session = await auth()
   if (!session) redirect("/login")
-  if (!isRootKey(root) || typeof batchId !== "string") return { error: "Invalid request." }
+  const segs = Array.isArray(folder) ? safeSegments(folder) : null
+  if (!isRootKey(root) || typeof batchId !== "string" || !segs) return { error: "Invalid request." }
+  // Undo puts files back into the folder they were deleted from.
+  if (await folderLocked(root, segs)) return { error: SCAN_LOCK_MESSAGE }
   return done(await restoreBatch(root, batchId))
 }
 

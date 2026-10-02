@@ -19,6 +19,7 @@ function deps(replies: (string | Error)[], extra: Partial<LoopDeps> = {}) {
     onAnalyzed: async (id) => void analyzed.push(id),
     onFailed: async (id, error) => void failed.push({ id, error }),
     isCancelled: async () => false,
+    checkFolder: async () => null,
     customPrompt: null,
     ...extra,
   }
@@ -90,5 +91,12 @@ describe("analyzeGroups", () => {
   it("treats an aborted request as cancelled", async () => {
     const { d } = deps([new AiError("cancelled", "Cancelled.")])
     expect(await analyzeGroups(groups(2), d)).toEqual({ status: "cancelled" })
+  })
+
+  it("stops before the next group when the folder changed underneath it", async () => {
+    let checks = 0
+    const { d, analyzed } = deps([verdict()], { checkFolder: async () => (++checks > 1 ? "The folder changed outside the app" : null) })
+    expect(await analyzeGroups(groups(3), d)).toEqual({ status: "failed", error: "The folder changed outside the app" })
+    expect(analyzed).toEqual(["g0"])
   })
 })

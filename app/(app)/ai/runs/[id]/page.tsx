@@ -51,7 +51,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
         <h1 className="mt-1 font-heading text-2xl font-semibold">{where}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {run.groupCount} group{run.groupCount === 1 ? "" : "s"} from {run.photoCount} photos
-          {running && " · still analyzing — new groups appear as they finish"}
+          {running && " · still scanning — review actions unlock when it finishes (the folder is locked while it runs)"}
           {run.model && ` · ${run.model}`}
         </p>
       </div>
@@ -83,7 +83,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
                 current: same && st ? { name: p.name, kind: mediaKind(p.name) ?? "image", size: st.size, modified: st.mtimeMs, version: p.version } : null,
               }
             })
-            return <ReviewGroup key={g.id} id={g.id} root={run.root as "upload" | "dropoff"} folder={segs} status={g.status} reason={g.reason} error={g.error} photos={photos} />
+            return <ReviewGroup key={g.id} id={g.id} root={run.root as "upload" | "dropoff"} folder={segs} status={g.status} reason={g.reason} error={g.error} photos={photos} locked={running} />
           })}
         </div>
       )}

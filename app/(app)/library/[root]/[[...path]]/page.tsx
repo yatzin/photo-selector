@@ -1,10 +1,12 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
-import { ChevronRight, Folder, FolderX } from "lucide-react"
+import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
 import { isRootKey, ROOT_LABELS } from "@/lib/media"
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
 import { MediaGrid } from "@/components/library/media-grid"
+import { AutoRefresh } from "@/components/ai/auto-refresh"
+import { folderLocked } from "@/lib/ai/lock-server"
 
 // A library folder: subfolders as cards, then its photos and videos as a
 // sortable thumbnail grid.
@@ -32,7 +34,7 @@ export default async function LibraryPage({
     )
   }
 
-  const listing = await listDirectory(root, segments)
+  const [listing, locked] = await Promise.all([listDirectory(root, segments), folderLocked(root, segments)])
   if (!listing) notFound()
 
   const totalBytes = listing.files.reduce((sum, f) => sum + f.size, 0)
@@ -57,6 +59,17 @@ export default async function LibraryPage({
         </p>
       </div>
 
+      {locked && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+          <Lock className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>
+            An AI scan is reading this folder, so moving, deleting and rotating are paused until it finishes.{" "}
+            <Link href="/ai" className="font-medium text-primary underline-offset-2 hover:underline">View scan</Link>
+          </span>
+        </div>
+      )}
+      <AutoRefresh active={locked} intervalMs={5000} />
+
       {listing.folders.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {listing.folders.map((f) => (
@@ -80,8 +93,8 @@ export default async function LibraryPage({
           root={root}
           folder={segments}
           files={listing.files}
-          canMove={root === "upload" && status.writable}
-          canEdit={status.writable}
+          canMove={root === "upload" && status.writable && !locked}
+          canEdit={status.writable && !locked}
         />
       ) : (
         listing.folders.length === 0 && (

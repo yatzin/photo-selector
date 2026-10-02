@@ -16,6 +16,8 @@ export type LoopDeps = {
   onAnalyzed(groupId: string, verdict: AiVerdict): Promise<void>
   onFailed(groupId: string, error: string): Promise<void>
   isCancelled(): Promise<boolean>
+  /** Null while the folder still matches the scan's snapshot, else why the run must stop. */
+  checkFolder(): Promise<string | null>
   customPrompt: string | null
 }
 
@@ -26,6 +28,8 @@ export async function analyzeGroups(groups: PendingGroup[], deps: LoopDeps): Pro
 
   for (const group of groups) {
     if (await deps.isCancelled()) return { status: "cancelled" }
+    const changed = await deps.checkFolder()
+    if (changed) return { status: "failed", error: changed }
 
     let images: string[]
     try {

@@ -21,9 +21,11 @@ export type ReviewGroupProps = {
   reason: string | null
   error: string | null
   photos: ReviewPhoto[]
+  /** The folder is being scanned; files there must not change yet. */
+  locked: boolean
 }
 
-export function ReviewGroup({ id, root, folder, status, reason, error, photos }: ReviewGroupProps) {
+export function ReviewGroup({ id, root, folder, status, reason, error, photos, locked }: ReviewGroupProps) {
   const router = useRouter()
   const ordered = useMemo(() => [...photos].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99)), [photos])
   const present = ordered.filter((p) => p.current)
@@ -64,7 +66,7 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos }:
         <span className="text-muted-foreground">
           {status === "DISMISSED" ? "Marked as not duplicates" : `${root === "upload" ? "Moved" : "Kept"} ${keptNames}, trashed ${trashedNames}`}
         </span>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => undoGroupAction(id), (r) => (r.restored ? `Restored ${r.restored} from trash.` : "Back in To review."))}>
+        <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => undoGroupAction(id), (r) => (r.restored ? `Restored ${r.restored} from trash.` : "Back in To review."))}>
           <Undo2 className="h-4 w-4" /> Undo
         </Button>
       </div>
@@ -112,13 +114,13 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos }:
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => dismissGroupAction(id), () => "Marked as not duplicates.")}>
+        <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => dismissGroupAction(id), () => "Marked as not duplicates.")}>
           {present.length < 2 ? "Done" : "Not duplicates"}
         </Button>
         {status === "ANALYZED" && present.length >= 2 && (
           <Button
             size="sm"
-            disabled={busy || kept === 0}
+            disabled={busy || locked || kept === 0}
             onClick={() => act(() => resolveGroupAction(id, [...keep]), (r) => `${root === "upload" ? `Moved ${r.moved}` : `Kept ${r.kept}`}, trashed ${r.trashed}.`)}
           >
             {root === "upload" ? `Move ${kept} to Dropoff` : `Keep ${kept}`}, trash {trashed}

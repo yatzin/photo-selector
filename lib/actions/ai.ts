@@ -13,6 +13,8 @@ import { aiReady } from "@/lib/ai/config"
 import { folderKey, scanFolderSegments } from "@/lib/ai/review"
 import { abortRun, kickRunner } from "@/lib/ai/runner-server"
 import { dismissGroup, resolveGroup, undoGroup } from "@/lib/ai/review-server"
+import { folderLocked } from "@/lib/ai/lock-server"
+import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 
 async function requireUser() {
   const session = await auth()
@@ -26,6 +28,13 @@ function refresh() {
 }
 
 const ACTIVE = ["QUEUED", "GROUPING", "ANALYZING"] as const
+
+/** Review actions change files in the group's folder, so they wait while that folder is being scanned. */
+async function groupLocked(groupId: string): Promise<boolean> {
+  const group = await prisma.aiGroup.findUnique({ where: { id: groupId }, select: { root: true, folder: true } })
+  const segs = group ? scanFolderSegments(group.folder) : null
+  return !!group && !!segs && (await folderLocked(group.root, segs))
+}
 
 export async function startRunAction(input: { root: string; folder: string; fresh: boolean }): Promise<{ error: string } | { runId: string }> {
   const session = await requireUser()
@@ -81,6 +90,7 @@ export async function resolveGroupAction(groupId: string, keep: string[]) {
   const session = await requireUser()
   const parsed = z.object({ groupId: z.string().min(1), keep: z.array(z.string()).max(50) }).safeParse({ groupId, keep })
   if (!parsed.success) return { error: "Invalid request." }
+  if (await groupLocked(parsed.data.groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await resolveGroup(parsed.data.groupId, parsed.data.keep, session.user.id)
   refresh()
   return result
@@ -88,6 +98,7 @@ export async function resolveGroupAction(groupId: string, keep: string[]) {
 
 export async function dismissGroupAction(groupId: string) {
   const session = await requireUser()
+  if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await dismissGroup(groupId, session.user.id)
   refresh()
   return result
@@ -95,6 +106,7 @@ export async function dismissGroupAction(groupId: string) {
 
 export async function undoGroupAction(groupId: string) {
   await requireUser()
+  if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await undoGroup(groupId)
   refresh()
   return result

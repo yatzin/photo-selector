@@ -93,6 +93,9 @@ model AiRun {
   startedAt     DateTime?
   /// Set when grouping finished; a run with it set resumes at analysis.
   groupedAt     DateTime?
+  /// JSON {name: version} of every image when grouping started; the folder
+  /// is checked against it before each AI request.
+  snapshot      String?
   finishedAt    DateTime?
   groups        AiGroup[]
 

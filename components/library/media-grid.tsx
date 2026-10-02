@@ -208,7 +208,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
             action: {
               label: "Undo",
               onClick: async () => {
-                const restored = report(await undoDeleteAction(root, result.batchId), "restore")
+                const restored = report(await undoDeleteAction(root, result.batchId, folder), "restore")
                 if (restored.length) toast.success(`Restored ${restored.length}`)
                 refresh()
               },
