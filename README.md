@@ -22,6 +22,19 @@ access to the Photo share (`id <user>` over SSH).
 
 **Settings → Storage** shows whether each folder is readable and writable.
 
+## AI duplicate review
+
+The **AI** tab scans one folder for bursts of near-identical photos (grouped
+locally by capture time and visual similarity — no AI involved), then asks a
+vision model which take is best: eyes open, looking at the camera, smiling,
+sharp. Results are saved; start a scan, leave, and review later. Each group
+has one button: move the picks to Sort Dropoff and trash the rest (undoable).
+
+Set it up under **Settings → AI** (admins): any OpenAI-compatible server with
+a vision model, e.g. Ollama on a PC with a GPU (`ollama pull qwen2.5vl:7b`,
+base URL `http://<pc>:11434/v1`; start Ollama with `OLLAMA_HOST=0.0.0.0` so
+the NAS can reach it). Thumbnails of each group are sent to that server.
+
 ## Deploy (UGOS Docker / Portainer)
 
 1. Copy this repo to the NAS (or build and push the image elsewhere).
