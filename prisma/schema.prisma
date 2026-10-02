@@ -1,0 +1,25 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+model User {
+  id                String   @id @default(cuid())
+  name              String
+  email             String   @unique
+  passwordHash      String
+  role              Role     @default(USER)
+  mustResetPassword Boolean  @default(false)
+  /// Bumped to end every session this account has (password change, admin reset).
+  sessionVersion    Int      @default(0)
+  createdAt         DateTime @default(now())
+}

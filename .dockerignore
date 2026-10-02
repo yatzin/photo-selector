@@ -1,0 +1,11 @@
+.env
+.env.local
+node_modules
+.next
+.git
+*.log
+README.md
+dev-photos
+prisma/dev.db
+prisma/dev.db-journal
+app/generated

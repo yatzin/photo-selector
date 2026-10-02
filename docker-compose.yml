@@ -1,0 +1,43 @@
+services:
+  photo-selector:
+    build: .
+    image: photo-selector:latest
+    container_name: photo-selector
+    ports:
+      - "3200:3200"
+    volumes:
+      # App database (users, and later the thumbnail cache). Not the photos.
+      - /volume1/docker/photo-selector:/data
+      # The two photo folders, and nothing else from the share. The paths on
+      # the left are the NAS's own paths for \ugreen\Photo\... — check yours
+      # in the UGOS file manager (folder properties) or with `ls /volume1` over SSH.
+      - "/volume1/Photo/Mobile Upload:/photos/upload"
+      - "/volume1/Photo/Sort Dropoff:/photos/dropoff"
+    environment:
+      # The NAS user the app acts as when moving or deleting photos. Use the
+      # IDs of a user with read/write access to the Photo share: `id <user>`.
+      PUID: "1000"
+      PGID: "100"
+
+      # Encrypts/signs login sessions. Generate your own: `openssl rand -base64 32`.
+      # Changing it later signs everyone out.
+      AUTH_SECRET: "replace-me"
+
+      # The URL you'll browse to (e.g. http://192.168.1.50:3200). Optional:
+      # the host is detected from each request when blank.
+      AUTH_URL: ""
+
+      # Admin account created the FIRST time the database is set up. Changing
+      # these later does nothing — change the password in the app instead.
+      ADMIN_NAME: "Admin"
+      ADMIN_EMAIL: "you@example.com"
+      ADMIN_PASSWORD: "changeme-please"
+
+      TZ: "America/New_York"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3200/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
