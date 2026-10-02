@@ -122,3 +122,24 @@ export async function listDirectory(key: RootKey, segments: string[]): Promise<D
 export function cacheDir(): string {
   return path.resolve(process.env.PHOTOS_CACHE_DIR || "/data/cache")
 }
+
+export type ScanFolder = { root: RootKey; folder: string; imageCount: number }
+
+/** Every folder in both roots (depth ≤ 6) with the number of images directly inside, for the AI scan picker. */
+export async function listScanFolders(): Promise<ScanFolder[]> {
+  const out: ScanFolder[] = []
+  async function walk(root: RootKey, segments: string[], depth: number) {
+    let entries
+    try {
+      entries = await fs.readdir(path.join(rootPath(root), ...segments), { withFileTypes: true })
+    } catch {
+      return
+    }
+    const imageCount = entries.filter((e) => e.isFile() && mediaKind(e.name) === "image").length
+    out.push({ root, folder: segments.join("/"), imageCount })
+    if (depth >= 6) return
+    for (const e of entries) if (e.isDirectory() && !isSkippedDir(e.name)) await walk(root, [...segments, e.name], depth + 1)
+  }
+  for (const root of ROOT_KEYS) await walk(root, [], 0)
+  return out
+}
