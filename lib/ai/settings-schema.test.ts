@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { isAiReady, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "./settings-schema"
+import { isAiReady, keyMayFollow, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "./settings-schema"
 
 const base: AiSettingsInput = {
   enabled: true,
@@ -77,5 +77,18 @@ describe("helpers", () => {
     expect(parseExtraBody('{"a":1}')).toEqual({ a: 1 })
     expect(parseExtraBody("1")).toBeNull()
     expect(parseExtraBody("")).toBeNull()
+  })
+})
+
+describe("keyMayFollow", () => {
+  it("lets a stored key go only to the origin it was saved for", () => {
+    expect(keyMayFollow("http://a:1/v1", "http://a:1/v2")).toBe(true)
+    expect(keyMayFollow("http://a:1/v1", "http://b:1/v1")).toBe(false)
+  })
+
+  it("never sends a key whose original server is unknown", () => {
+    expect(keyMayFollow(null, "http://b/v1")).toBe(false)
+    expect(keyMayFollow("http://a/v1", null)).toBe(false)
+    expect(keyMayFollow("not a url", "http://a/v1")).toBe(false)
   })
 })

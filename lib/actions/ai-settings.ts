@@ -7,7 +7,7 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { encrypt } from "@/lib/secret-box"
 import { AI_SETTINGS_ID, loadAiConfig } from "@/lib/ai/config"
-import { AI_DEFAULTS, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "@/lib/ai/settings-schema"
+import { AI_DEFAULTS, keyMayFollow, parseAiSettings, parseExtraBody, type AiSettingsInput } from "@/lib/ai/settings-schema"
 import { AiError, chatOnce } from "@/lib/ai/client"
 
 async function requireAdmin() {
@@ -23,9 +23,9 @@ export async function updateAiSettings(data: AiSettingsInput): Promise<{ error: 
   if (!result.ok) return { error: result.error }
 
   const saved = await prisma.aiSettings.findUnique({ where: { id: AI_SETTINGS_ID }, select: { baseUrl: true } })
-  // A stored key never follows the settings to a different server.
-  const serverChanged = originChanged(saved?.baseUrl ?? null, result.value.baseUrl)
-  const apiKeyEnc = data.clearApiKey ? null : data.apiKey ? encrypt(data.apiKey) : serverChanged ? null : undefined
+  // A stored key never follows the settings to a different (or unknown) server.
+  const keepKey = keyMayFollow(saved?.baseUrl ?? null, result.value.baseUrl)
+  const apiKeyEnc = data.clearApiKey ? null : data.apiKey ? encrypt(data.apiKey) : keepKey ? undefined : null
 
   await prisma.aiSettings.upsert({
     where: { id: AI_SETTINGS_ID },
@@ -51,7 +51,7 @@ export async function testAiConnection(data: AiSettingsInput): Promise<AiTestRes
   const baseUrl = parsed.value.baseUrl ?? saved.baseUrl
   const model = parsed.value.model ?? saved.model
   if (!baseUrl || !model) return { error: "Enter a base URL and model first." }
-  const savedKey = originChanged(saved.baseUrl, baseUrl) ? null : saved.apiKey
+  const savedKey = keyMayFollow(saved.baseUrl, baseUrl) ? saved.apiKey : null
   const apiKey = data.clearApiKey ? null : data.apiKey || savedKey
 
   const red = await sharp({ create: { width: 64, height: 64, channels: 3, background: "#ff0000" } }).jpeg().toBuffer()

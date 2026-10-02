@@ -148,6 +148,20 @@ export function originChanged(saved: string | null, next: string | null): boolea
   }
 }
 
+/**
+ * Whether a stored key may be sent to `next`: only to the exact origin it was
+ * saved with. An unknown saved server (URL cleared while AI was off) counts
+ * as different, so the key never travels to a newly typed address.
+ */
+export function keyMayFollow(saved: string | null, next: string | null): boolean {
+  if (!saved || !next) return false
+  try {
+    return new URL(saved).origin === new URL(next).origin
+  } catch {
+    return false
+  }
+}
+
 export function parseExtraBody(raw: string | null | undefined): Record<string, unknown> | null {
   if (!raw) return null
   try {
