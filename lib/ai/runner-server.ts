@@ -176,7 +176,7 @@ async function processRun(run: AiRun) {
     const outcome = await analyzeGroups(
       pending.map((p) => ({ id: p.id, photoCount: p._count.photos })),
       {
-        customPrompt: config.customPrompt,
+        instructions: config.instructions,
         isCancelled: () => stopped(run.id),
         checkFolder: () => (snapshot ? folderChange(dir, snapshot) : Promise.resolve(null)),
         callAi: (messages) => chatWithRetry(cfg, messages, { signal: controller.signal }),

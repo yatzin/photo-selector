@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { testAiConnection, updateAiSettings, type AiTestResult } from "@/lib/actions/ai-settings"
 import { AI_PRESETS, type AiSettingsInput } from "@/lib/ai/settings-schema"
+import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS_LENGTH, REPLY_FORMAT, storedInstructions } from "@/lib/ai/prompt"
 
 export type AiSettingsInitial = Omit<AiSettingsInput, "apiKey" | "clearApiKey">
 
@@ -119,11 +120,26 @@ export function AiSettings({ initial, hasStoredKey, keyUnreadable }: { initial: 
           <Field id="ai-extra" label="Extra request JSON" hint='Merged into every request, e.g. {"keep_alive":"10m"}.'>
             <Textarea id="ai-extra" rows={3} className="font-mono text-xs" value={form.extraBody ?? ""} onChange={(e) => set("extraBody", e.target.value)} />
           </Field>
-          <Field id="ai-prompt" label="Extra instructions" hint="Added to the built-in instructions, e.g. “Prefer photos where the kids are in focus.”">
-            <Textarea id="ai-prompt" rows={3} maxLength={2000} value={form.customPrompt ?? ""} onChange={(e) => set("customPrompt", e.target.value)} />
-          </Field>
         </div>
       </details>
+
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">AI instructions</h2>
+          <Button type="button" variant="outline" size="sm" disabled={storedInstructions(form.instructions ?? "") === null} onClick={() => set("instructions", DEFAULT_INSTRUCTIONS)}>
+            Reset to default
+          </Button>
+        </div>
+        <div className="rounded-lg border bg-card p-4 space-y-3">
+          <Field id="ai-prompt" label="What makes a good photo" hint="Sent to the model with every group. Edit freely; Reset brings back the built-in text.">
+            <Textarea id="ai-prompt" rows={11} maxLength={MAX_INSTRUCTIONS_LENGTH} value={form.instructions ?? ""} onChange={(e) => set("instructions", e.target.value)} />
+          </Field>
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium">Reply format (always added, can&apos;t be changed)</p>
+            <pre className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">{REPLY_FORMAT}</pre>
+          </div>
+        </div>
+      </section>
 
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">Grouping</h2>

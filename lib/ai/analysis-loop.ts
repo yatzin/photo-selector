@@ -18,7 +18,8 @@ export type LoopDeps = {
   isCancelled(): Promise<boolean>
   /** Null while the folder still matches the scan's snapshot, else why the run must stop. */
   checkFolder(): Promise<string | null>
-  customPrompt: string | null
+  /** Custom AI instructions, or null for the default. */
+  instructions: string | null
 }
 
 export type LoopOutcome = { status: "done" } | { status: "cancelled" } | { status: "failed"; error: string }
@@ -40,10 +41,10 @@ export async function analyzeGroups(groups: PendingGroup[], deps: LoopDeps): Pro
     }
 
     try {
-      let text = await deps.callAi(buildMessages(images, deps.customPrompt))
+      let text = await deps.callAi(buildMessages(images, deps.instructions))
       let verdict = parseVerdict(text, images.length)
       if (!verdict.ok) {
-        text = await deps.callAi(buildMessages(images, deps.customPrompt, verdict.error))
+        text = await deps.callAi(buildMessages(images, deps.instructions, verdict.error))
         verdict = parseVerdict(text, images.length)
       }
       if (verdict.ok) await deps.onAnalyzed(group.id, verdict.value)

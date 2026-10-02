@@ -20,7 +20,7 @@ function deps(replies: (string | Error)[], extra: Partial<LoopDeps> = {}) {
     onFailed: async (id, error) => void failed.push({ id, error }),
     isCancelled: async () => false,
     checkFolder: async () => null,
-    customPrompt: null,
+    instructions: null,
     ...extra,
   }
   return { d, analyzed, failed, calls: () => call }

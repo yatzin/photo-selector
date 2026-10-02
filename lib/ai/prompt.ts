@@ -1,7 +1,11 @@
 import { z } from "zod"
 import type { ChatMessage, ContentPart } from "@/lib/ai/client"
 
-export const BUILTIN_INSTRUCTION = `You help a family choose the best photo from a burst of near-identical takes of the same moment.
+// The system prompt has two parts. The instructions (what makes a good photo)
+// can be replaced under Settings → AI. The reply format can't: the app parses
+// that exact JSON, so it is always appended last, after any custom text.
+
+export const DEFAULT_INSTRUCTIONS = `You help a family choose the best photo from a burst of near-identical takes of the same moment.
 Judge the main subjects only (the people the photo is clearly about); ignore people in the background.
 Rank every photo from best to worst using, in order of importance:
 1. Main subjects' eyes are open (no blinks, no half-closed eyes).
@@ -9,13 +13,24 @@ Rank every photo from best to worst using, in order of importance:
 3. Natural smiles and pleasant expressions.
 4. Sharp focus on faces, no motion blur.
 5. Good exposure; nobody important cut off at the edges.
-If there are no people, judge sharpness, exposure and composition.
-Reply with JSON only, no other text, in exactly this shape:
+If there are no people, judge sharpness, exposure and composition.`
+
+export const REPLY_FORMAT = `Reply with JSON only, no other text, in exactly this shape:
 {"ranking":[{"photo":<number>,"note":"<short reason, under 15 words>"}],"best":[<photo number>],"reason":"<one or two sentences on why the best photo wins>"}
 "ranking" must include every photo number exactly once. "best" is usually one photo; list two only if they are equally good.`
 
-export function buildMessages(images: string[], customPrompt: string | null, previousError?: string): ChatMessage[] {
-  const system = customPrompt ? `${BUILTIN_INSTRUCTION}\n\nAdditional instructions from the family:\n${customPrompt}` : BUILTIN_INSTRUCTION
+export const MAX_INSTRUCTIONS_LENGTH = 4000
+
+const normalise = (text: string) => text.replace(/\r\n?/g, "\n").trim()
+
+/** What to save for an instructions box: null (use the default) when blank or unedited. */
+export function storedInstructions(text: string): string | null {
+  const t = normalise(text)
+  return t === "" || t === normalise(DEFAULT_INSTRUCTIONS) ? null : t
+}
+
+export function buildMessages(images: string[], instructions: string | null, previousError?: string): ChatMessage[] {
+  const system = `${instructions ?? DEFAULT_INSTRUCTIONS}\n\n${REPLY_FORMAT}`
   const parts: ContentPart[] = [{ type: "text", text: `Here are ${images.length} photos of the same moment, numbered 1 to ${images.length}.` }]
   images.forEach((url, i) => {
     parts.push({ type: "text", text: `Photo ${i + 1}:` })

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { MAX_INSTRUCTIONS_LENGTH, storedInstructions } from "@/lib/ai/prompt"
 
 // Pure validation for Settings → AI. Shared by the server actions and the
 // runner's readiness check; no database access here.
@@ -34,7 +35,7 @@ const schema = z.object({
   maxTokens: z.string().trim().optional(),
   timeoutSeconds: z.string().trim().optional(),
   extraBody: z.string().trim().max(2000).optional(),
-  customPrompt: z.string().trim().optional(),
+  instructions: z.string().optional(),
   groupWindowSeconds: z.string().trim(),
   similarity: z.string().trim(),
   imageMaxPx: z.string().trim(),
@@ -51,7 +52,8 @@ export type ParsedAiSettings = {
   maxTokens: number | null
   timeoutSeconds: number | null
   extraBody: string | null
-  customPrompt: string | null
+  /** Replaces the default AI instructions; null = use the default. */
+  instructions: string | null
   groupWindowSeconds: number
   similarity: Similarity
   imageMaxPx: number
@@ -110,7 +112,8 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
     extraBody = JSON.stringify(obj)
   }
 
-  if ((v.customPrompt ?? "").length > 2000) return { ok: false, error: "Extra instructions are limited to 2000 characters." }
+  const instructions = storedInstructions(v.instructions ?? "")
+  if ((instructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `AI instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
 
   const groupWindowSeconds = intIn(v.groupWindowSeconds, 5, 600)
   if (groupWindowSeconds === null) return { ok: false, error: "Time window must be 5 to 600 seconds." }
@@ -129,7 +132,7 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
     ok: true,
     value: {
       enabled: v.enabled, baseUrl, model, temperature, maxTokens, timeoutSeconds, extraBody,
-      customPrompt: v.customPrompt || null, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
+      instructions, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
     },
   }
 }

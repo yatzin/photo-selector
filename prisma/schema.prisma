@@ -63,8 +63,9 @@ model AiSettings {
   timeoutSeconds     Int?
   /// JSON object merged into every request.
   extraBody          String?
-  /// Appended to the built-in instruction.
-  customPrompt       String?
+  /// Replaces the default AI instructions (null = default). The reply
+  /// format is never stored here: it is always appended by lib/ai/prompt.ts.
+  instructions       String?
   groupWindowSeconds Int      @default(60)
   /// strict | similar | loose
   similarity         String   @default("similar")

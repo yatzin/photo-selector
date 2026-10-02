@@ -24,7 +24,7 @@ export async function loadAiConfig(): Promise<AiConfig> {
     maxTokens: row?.maxTokens ?? null,
     timeoutSeconds: row?.timeoutSeconds ?? null,
     extraBody: row?.extraBody ?? null,
-    customPrompt: row?.customPrompt ?? null,
+    instructions: row?.instructions ?? null,
     groupWindowSeconds: row?.groupWindowSeconds ?? AI_DEFAULTS.groupWindowSeconds,
     similarity: (row?.similarity as Similarity | undefined) ?? AI_DEFAULTS.similarity,
     imageMaxPx: row?.imageMaxPx ?? AI_DEFAULTS.imageMaxPx,

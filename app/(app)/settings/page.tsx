@@ -6,6 +6,7 @@ import { AccountSettings } from "@/components/settings/account-settings"
 import { StorageStatus } from "@/components/settings/storage-status"
 import { AiSettings } from "@/components/settings/ai-settings"
 import { loadAiConfig } from "@/lib/ai/config"
+import { DEFAULT_INSTRUCTIONS } from "@/lib/ai/prompt"
 import { SettingsNav } from "@/components/settings/settings-nav"
 import { allRootStatuses } from "@/lib/library-server"
 import { workerStatus } from "@/lib/worker-server"
@@ -72,7 +73,7 @@ export default async function SettingsPage({
                 maxTokens: ai.maxTokens?.toString() ?? "",
                 timeoutSeconds: ai.timeoutSeconds?.toString() ?? "",
                 extraBody: ai.extraBody ? JSON.stringify(JSON.parse(ai.extraBody), null, 2) : "",
-                customPrompt: ai.customPrompt ?? "",
+                instructions: ai.instructions ?? DEFAULT_INSTRUCTIONS,
                 groupWindowSeconds: String(ai.groupWindowSeconds),
                 similarity: ai.similarity,
                 imageMaxPx: String(ai.imageMaxPx),

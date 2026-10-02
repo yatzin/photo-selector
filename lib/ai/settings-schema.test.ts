@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { DEFAULT_INSTRUCTIONS } from "./prompt"
 import { isAiReady, keyMayFollow, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "./settings-schema"
 
 const base: AiSettingsInput = {
@@ -55,8 +56,18 @@ describe("parseAiSettings", () => {
     expect(ok.ok && ok.value.extraBody).toBe('{"keep_alive":"10m"}')
   })
 
-  it("limits the custom prompt", () => {
-    expect(parseAiSettings({ ...base, customPrompt: "x".repeat(2001) }).ok).toBe(false)
+  it("limits the instructions", () => {
+    expect(parseAiSettings({ ...base, instructions: "x".repeat(4001) }).ok).toBe(false)
+    expect(parseAiSettings({ ...base, instructions: "x".repeat(4000) }).ok).toBe(true)
+  })
+
+  it("saves edited instructions and treats unedited or blank ones as the default", () => {
+    const edited = parseAiSettings({ ...base, instructions: "  Pick the sharpest photo.  " })
+    expect(edited.ok && edited.value.instructions).toBe("Pick the sharpest photo.")
+    const unedited = parseAiSettings({ ...base, instructions: DEFAULT_INSTRUCTIONS })
+    expect(unedited.ok && unedited.value.instructions).toBeNull()
+    const blank = parseAiSettings({ ...base, instructions: "" })
+    expect(blank.ok && blank.value.instructions).toBeNull()
   })
 })
 
