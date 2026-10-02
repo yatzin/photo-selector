@@ -26,6 +26,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
+    "exif-reader": "^2.0.3",
     "lucide-react": "^1.28.0",
     "next": "16.2.12",
     "next-auth": "5.0.0-beta.32",
