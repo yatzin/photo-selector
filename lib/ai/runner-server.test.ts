@@ -1,0 +1,198 @@
+import { execSync } from "child_process"
+import fs from "fs/promises"
+import http from "http"
+import os from "os"
+import path from "path"
+import type { AddressInfo } from "net"
+import sharp from "sharp"
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+
+// Integration test for the background runner: a throwaway SQLite database,
+// throwaway photo folders and a fake OpenAI-compatible vision server.
+
+type Behaviour = { status?: number; delayMs?: number; onStart?: () => void | Promise<void> }
+
+const tmp = path.join(os.tmpdir(), `ps-runner-${process.pid}-${Date.now()}`)
+const upload = path.join(tmp, "upload")
+const folder = path.join(upload, "burst")
+let server: http.Server
+let behaviours: Behaviour[] = []
+let calls = 0
+
+let runner: typeof import("./runner-server")
+let prisma: typeof import("@/lib/prisma").prisma
+
+function scene(variant: "a" | "b", dx: number): Buffer {
+  return Buffer.from(
+    variant === "a"
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#3a7bd5"/><circle cx="320" cy="70" r="40" fill="#ffd200"/><rect x="${150 + dx}" y="120" width="60" height="160" fill="#7b3f00"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#202020"/><rect x="${20 + dx}" y="20" width="120" height="260" fill="#c62828"/><circle cx="280" cy="200" r="80" fill="#f5f5f5"/></svg>`
+  )
+}
+
+async function makePhotos() {
+  await fs.rm(folder, { recursive: true, force: true })
+  await fs.mkdir(folder, { recursive: true })
+  for (const [variant, hour] of [["a", 10], ["b", 14]] as const) {
+    for (let i = 0; i < 3; i++) {
+      await sharp(scene(variant, i * 3))
+        .withExif({ IFD0: { DateTime: `2025:07:04 ${hour}:00:0${i * 2}` } })
+        .jpeg()
+        .toFile(path.join(folder, `${variant}${i + 1}.jpg`))
+    }
+  }
+}
+
+beforeAll(async () => {
+  await fs.mkdir(path.join(tmp, "dropoff"), { recursive: true })
+  const dbUrl = `file:${path.join(tmp, "test.db").split(path.sep).join("/")}`
+  Object.assign(process.env, {
+    DATABASE_URL: dbUrl,
+    AUTH_SECRET: "runner-test-secret",
+    PHOTOS_UPLOAD_DIR: upload,
+    PHOTOS_DROPOFF_DIR: path.join(tmp, "dropoff"),
+    PHOTOS_CACHE_DIR: path.join(tmp, "cache"),
+  })
+  execSync("npx prisma migrate deploy", { env: process.env, stdio: "ignore" })
+
+  server = http.createServer((req, res) => {
+    let raw = ""
+    req.on("data", (c) => (raw += c))
+    req.on("end", async () => {
+      const b = behaviours.shift() ?? {}
+      calls++
+      await b.onStart?.()
+      const parts = JSON.parse(raw).messages[1].content as { type: string }[]
+      const n = parts.filter((p) => p.type === "image_url").length
+      const ranking = Array.from({ length: n }, (_, i) => ({ photo: n - i, note: "" }))
+      setTimeout(() => {
+        res.writeHead(b.status ?? 200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(b.status && b.status >= 400 ? { error: { message: "nope" } } : { choices: [{ message: { content: JSON.stringify({ ranking, best: [n], reason: "ok" }) } }] }))
+      }, b.delayMs ?? 0)
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as AddressInfo).port
+
+  runner = await import("./runner-server")
+  prisma = (await import("@/lib/prisma")).prisma
+  await prisma.aiSettings.create({ data: { id: "singleton", enabled: true, baseUrl: `http://127.0.0.1:${port}/v1`, model: "fake", timeoutSeconds: 10 } })
+}, 120_000)
+
+afterAll(async () => {
+  await new Promise<void>((r) => server.close(() => r()))
+  await prisma?.$disconnect()
+  await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+})
+
+beforeEach(async () => {
+  behaviours = []
+  calls = 0
+  await prisma.aiRun.deleteMany({})
+  await makePhotos()
+})
+
+const groupsOf = (runId: string) => prisma.aiGroup.findMany({ where: { runId }, orderBy: { takenAt: "asc" }, include: { photos: true } })
+
+describe("AI runner", () => {
+  it("groups the folder and analyzes every group", async () => {
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const done = await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })
+    expect(done.status).toBe("DONE")
+    const groups = await groupsOf(run.runId)
+    expect(groups.map((g) => g.status)).toEqual(["ANALYZED", "ANALYZED"])
+    expect(groups.map((g) => g.photos.find((p) => p.suggested)?.name)).toEqual(["a3.jpg", "b3.jpg"])
+  }, 60_000)
+
+  it("refuses a second scan of a folder that is already being scanned", async () => {
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    expect("runId" in first).toBe(true)
+    const second = await runner.createRun({ root: "upload", folder: "burst", fresh: true, userId: null })
+    expect(second).toEqual({ error: expect.stringMatching(/already/i) })
+  }, 60_000)
+
+  it("retries failed groups after other groups were resolved and their files moved", async () => {
+    behaviours = [{ status: 400 }] // first group: model rejects it
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    let groups = await groupsOf(run.runId)
+    expect(groups.map((g) => g.status)).toEqual(["FAILED", "ANALYZED"])
+
+    // The user resolves the analyzed group: its photos leave the folder.
+    for (const p of groups[1].photos) await fs.rename(path.join(folder, p.name), path.join(tmp, "dropoff", p.name))
+    await prisma.aiGroup.update({ where: { id: groups[1].id }, data: { status: "RESOLVED" } })
+
+    expect(await runner.requeueRun(run.runId)).toEqual({ ok: true })
+    await runner.drainRunner()
+    const after = await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })
+    expect(after.error).toBeNull()
+    expect(after.status).toBe("DONE")
+    groups = await groupsOf(run.runId)
+    expect(groups.map((g) => g.status)).toEqual(["ANALYZED", "RESOLVED"])
+  }, 60_000)
+
+  it("fails only the group whose photo changed, not the whole retry", async () => {
+    behaviours = [{ status: 400 }, {}]
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const failed = (await groupsOf(run.runId))[0]
+    // Someone edits a photo of the failed group while the run is idle.
+    const p = path.join(folder, failed.photos[0].name)
+    await fs.utimes(p, new Date(), new Date(Date.now() + 60_000))
+
+    await runner.requeueRun(run.runId)
+    await runner.drainRunner()
+    const after = await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })
+    expect(after.status).toBe("DONE")
+    const g = await prisma.aiGroup.findUniqueOrThrow({ where: { id: failed.id } })
+    expect(g.status).toBe("FAILED")
+    expect(g.error).toMatch(/changed since the scan/i)
+  }, 60_000)
+
+  it("does not let a cancel overwrite a retry that arrived while the request was in flight", async () => {
+    let runId = ""
+    let retried: Promise<unknown> = Promise.resolve()
+    behaviours = [
+      {
+        delayMs: 300,
+        onStart: async () => {
+          // Cancel, then Retry, while the first AI request is still running.
+          // The Retry lands before the runner has noticed the cancel.
+          await prisma.aiRun.update({ where: { id: runId }, data: { status: "CANCELLED" } })
+          retried = runner.requeueRun(runId)
+          await retried
+          runner.abortRun(runId)
+        },
+      },
+    ]
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    runId = run.runId
+    await runner.drainRunner()
+    // The runner may go idle between the cancel and the retry landing; the
+    // retry kicks it again, as the Retry button does.
+    await new Promise((r) => setTimeout(r, 100))
+    await retried
+    await runner.drainRunner()
+    const after = await prisma.aiRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(after.status).toBe("DONE")
+    expect((await groupsOf(runId)).every((g) => g.status === "ANALYZED")).toBe(true)
+  }, 60_000)
+
+  it("resumes an analysis interrupted by a restart", async () => {
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    // Simulate a crash mid-analysis: groups back to PENDING, run still ANALYZING.
+    await prisma.aiGroup.updateMany({ where: { runId: run.runId }, data: { status: "PENDING" } })
+    await prisma.aiRun.update({ where: { id: run.runId }, data: { status: "ANALYZING", finishedAt: null } })
+    calls = 0
+    await runner.drainRunner()
+    expect(calls).toBe(2)
+    expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })).status).toBe("DONE")
+  }, 60_000)
+})

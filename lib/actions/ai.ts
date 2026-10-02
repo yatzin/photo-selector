@@ -1,17 +1,13 @@
 "use server"
 
-import fs from "fs/promises"
-import path from "path"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import { z } from "zod"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { rootPath } from "@/lib/library-server"
-import { isRootKey } from "@/lib/media"
 import { aiReady } from "@/lib/ai/config"
-import { folderKey, scanFolderSegments } from "@/lib/ai/review"
-import { abortRun, kickRunner } from "@/lib/ai/runner-server"
+import { scanFolderSegments } from "@/lib/ai/review"
+import { abortRun, createRun, requeueRun } from "@/lib/ai/runner-server"
 import { dismissGroup, resolveGroup, undoGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
@@ -39,21 +35,11 @@ async function groupLocked(groupId: string): Promise<boolean> {
 export async function startRunAction(input: { root: string; folder: string; fresh: boolean }): Promise<{ error: string } | { runId: string }> {
   const session = await requireUser()
   const parsed = z.object({ root: z.string(), folder: z.string().max(1024), fresh: z.boolean() }).safeParse(input)
-  if (!parsed.success || !isRootKey(parsed.data.root)) return { error: "Invalid request." }
-  const segs = scanFolderSegments(parsed.data.folder)
-  if (!segs) return { error: "Invalid folder." }
+  if (!parsed.success) return { error: "Invalid request." }
   if (!(await aiReady())) return { error: "AI is not set up. Ask an admin to configure Settings → AI." }
-  try {
-    if (!(await fs.stat(path.join(rootPath(parsed.data.root), ...segs))).isDirectory()) return { error: "That folder doesn't exist." }
-  } catch {
-    return { error: "That folder doesn't exist." }
-  }
-  const run = await prisma.aiRun.create({
-    data: { root: parsed.data.root, folder: folderKey(segs), fresh: parsed.data.fresh, createdById: session.user.id },
-  })
-  kickRunner()
+  const result = await createRun({ ...parsed.data, userId: session.user.id })
   refresh()
-  return { runId: run.id }
+  return result
 }
 
 export async function cancelRunAction(runId: string) {
@@ -66,15 +52,9 @@ export async function cancelRunAction(runId: string) {
 
 export async function retryRunAction(runId: string) {
   await requireUser()
-  const run = await prisma.aiRun.findUnique({ where: { id: runId } })
-  if (!run || (ACTIVE as readonly string[]).includes(run.status)) return { error: "That scan is still running." }
-  await prisma.$transaction([
-    prisma.aiGroup.updateMany({ where: { runId, status: "FAILED" }, data: { status: "PENDING", error: null } }),
-    prisma.aiRun.update({ where: { id: runId }, data: { status: "QUEUED", error: null, finishedAt: null } }),
-  ])
-  kickRunner()
+  const result = await requeueRun(runId)
   refresh()
-  return { ok: true }
+  return result
 }
 
 export async function removeRunAction(runId: string) {

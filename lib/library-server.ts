@@ -2,6 +2,7 @@ import "server-only"
 import fs from "fs/promises"
 import { constants } from "fs"
 import path from "path"
+import { createTtlCache } from "@/lib/ttl-cache"
 import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, type MediaKind, type RootKey } from "@/lib/media"
 
 // Reads the photo library from the mounted folders. In the container these are
@@ -125,8 +126,15 @@ export function cacheDir(): string {
 
 export type ScanFolder = { root: RootKey; folder: string; imageCount: number }
 
+const scanFolderCache = createTtlCache(30_000)
+
+/** Cached briefly: the AI page refreshes every few seconds while a scan runs. */
+export function listScanFolders(): Promise<ScanFolder[]> {
+  return scanFolderCache.get("all", walkScanFolders)
+}
+
 /** Every folder in both roots (depth ≤ 6) with the number of images directly inside, for the AI scan picker. */
-export async function listScanFolders(): Promise<ScanFolder[]> {
+async function walkScanFolders(): Promise<ScanFolder[]> {
   const out: ScanFolder[] = []
   async function walk(root: RootKey, segments: string[], depth: number) {
     let entries

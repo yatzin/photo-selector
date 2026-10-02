@@ -13,7 +13,7 @@ import { fingerprintImage } from "@/lib/ai/fingerprint"
 import { groupPhotos, type GroupInput } from "@/lib/ai/grouping"
 import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
-import { scanFolderSegments } from "@/lib/ai/review"
+import { folderKey, scanFolderSegments } from "@/lib/ai/review"
 import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
 import type { AiRun } from "@/app/generated/prisma/client"
 
@@ -26,9 +26,12 @@ const POLL_MS = 5_000
 // answer back, so it must be total (name breaks takenAt ties).
 const PHOTO_ORDER = [{ takenAt: "asc" as const }, { name: "asc" as const }]
 
-type State = { started: boolean; busy: boolean; timer: NodeJS.Timeout | null; current: { runId: string; controller: AbortController } | null }
+const ACTIVE = ["QUEUED", "GROUPING", "ANALYZING"] as const
+const WORKING = ["GROUPING", "ANALYZING"] as const
+
+type State = { started: boolean; ticking: Promise<void> | null; timer: NodeJS.Timeout | null; current: { runId: string; controller: AbortController } | null }
 const g = globalThis as unknown as { __psAiRunner?: State }
-const state: State = (g.__psAiRunner ??= { started: false, busy: false, timer: null, current: null })
+const state: State = (g.__psAiRunner ??= { started: false, ticking: null, timer: null, current: null })
 
 export function startAiRunner() {
   if (state.started) return
@@ -42,58 +45,119 @@ export function kickRunner() {
   void tick()
 }
 
+/** Processes every waiting run, resolving when the runner is idle (tests and actions). */
+export function drainRunner(): Promise<void> {
+  return tick()
+}
+
+/** Queues a scan, unless that folder already has one queued or running. */
+export async function createRun(input: { root: string; folder: string; fresh: boolean; userId: string | null }): Promise<{ error: string } | { runId: string }> {
+  if (!isRootKey(input.root)) return { error: "Unknown library folder." }
+  const segs = scanFolderSegments(input.folder)
+  if (!segs) return { error: "Invalid folder." }
+  try {
+    if (!(await fs.stat(path.join(rootPath(input.root), ...segs))).isDirectory()) return { error: "That folder doesn't exist." }
+  } catch {
+    return { error: "That folder doesn't exist." }
+  }
+  const folder = folderKey(segs)
+  // A second scan would replace the first one's unreviewed results.
+  const busy = await prisma.aiRun.findFirst({ where: { root: input.root, folder, status: { in: [...ACTIVE] } }, select: { id: true } })
+  if (busy) return { error: "A scan of this folder is already running or waiting." }
+  const run = await prisma.aiRun.create({ data: { root: input.root, folder, fresh: input.fresh, createdById: input.userId } })
+  kickRunner()
+  return { runId: run.id }
+}
+
+/** Retry failed groups / resume a cancelled run. */
+export async function requeueRun(runId: string): Promise<{ error: string } | { ok: true }> {
+  const run = await prisma.aiRun.findUnique({ where: { id: runId } })
+  if (!run) return { error: "That scan no longer exists." }
+  if ((ACTIVE as readonly string[]).includes(run.status)) return { error: "That scan is still running." }
+  await prisma.$transaction([
+    prisma.aiGroup.updateMany({ where: { runId, status: "FAILED" }, data: { status: "PENDING", error: null } }),
+    prisma.aiRun.update({ where: { id: runId }, data: { status: "QUEUED", error: null, finishedAt: null } }),
+  ])
+  kickRunner()
+  return { ok: true }
+}
+
 export function abortRun(runId: string) {
   if (state.current?.runId === runId) state.current.controller.abort()
 }
 
-async function tick() {
-  if (state.busy) return
-  state.busy = true
-  try {
-    for (;;) {
-      const run =
-        (await prisma.aiRun.findFirst({ where: { status: { in: ["GROUPING", "ANALYZING"] } }, orderBy: { createdAt: "asc" } })) ??
-        (await prisma.aiRun.findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } }))
-      if (!run) return
-      await processRun(run)
+function tick(): Promise<void> {
+  if (state.ticking) return state.ticking
+  state.ticking = (async () => {
+    try {
+      for (;;) {
+        const run =
+          (await prisma.aiRun.findFirst({ where: { status: { in: [...WORKING] } }, orderBy: { createdAt: "asc" } })) ??
+          (await prisma.aiRun.findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } }))
+        if (!run) return
+        await processRun(run)
+      }
+    } catch (error) {
+      console.error("[ai] runner error:", error)
     }
-  } catch (error) {
-    console.error("[ai] runner error:", error)
-  } finally {
-    state.busy = false
-  }
+  })().finally(() => {
+    state.ticking = null
+  })
+  return state.ticking
 }
 
-async function finish(runId: string, data: { status: "DONE" | "FAILED" | "CANCELLED"; error?: string }) {
+/** True once the run is no longer ours to work on: cancelled, or re-queued by a retry. */
+async function stopped(runId: string): Promise<boolean> {
+  const status = (await prisma.aiRun.findUnique({ where: { id: runId }, select: { status: true } }))?.status
+  return !status || !(WORKING as readonly string[]).includes(status)
+}
+
+/**
+ * Ends a run — but only from a status we own (`from`), so a Cancel or a Retry
+ * that arrived while we were working is never overwritten.
+ */
+async function finish(runId: string, data: { status: "DONE" | "FAILED" | "CANCELLED"; error?: string }, from: readonly AiRun["status"][] = WORKING) {
   const [analyzed, failed] = await Promise.all([
     prisma.aiGroup.count({ where: { runId, status: { in: ["ANALYZED", "RESOLVED", "DISMISSED"] } } }),
     prisma.aiGroup.count({ where: { runId, status: "FAILED" } }),
   ])
-  // Don't overwrite a cancel that arrived while we were working.
-  const current = await prisma.aiRun.findUnique({ where: { id: runId }, select: { status: true } })
-  const status = current?.status === "CANCELLED" ? "CANCELLED" : data.status
-  await prisma.aiRun.update({
-    where: { id: runId },
-    data: { status, error: data.error ?? null, analyzedCount: analyzed, failedCount: failed, finishedAt: new Date() },
+  await prisma.aiRun.updateMany({
+    where: { id: runId, status: { in: [...from] } },
+    data: { status: data.status, error: data.error ?? null, analyzedCount: analyzed, failedCount: failed, finishedAt: new Date() },
   })
 }
 
 async function processRun(run: AiRun) {
   const config = await loadAiConfig()
-  if (!isAiReady(config)) return finish(run.id, { status: "FAILED", error: "AI is not set up. Check Settings → AI." })
-  if (!isRootKey(run.root)) return finish(run.id, { status: "FAILED", error: "Unknown library folder." })
+  const picked = [run.status]
+  if (!isAiReady(config)) return finish(run.id, { status: "FAILED", error: "AI is not set up. Check Settings → AI." }, picked)
+  if (!isRootKey(run.root)) return finish(run.id, { status: "FAILED", error: "Unknown library folder." }, picked)
   const segs = scanFolderSegments(run.folder)
-  if (!segs) return finish(run.id, { status: "FAILED", error: "Invalid folder." })
+  if (!segs) return finish(run.id, { status: "FAILED", error: "Invalid folder." }, picked)
+  const dir = path.join(rootPath(run.root), ...segs)
+
+  // Claim the run from the status we found it in; a Cancel in between wins.
+  const claim = (data: { status: "GROUPING" | "ANALYZING"; startedAt?: Date; model: string | null; error: null; finishedAt?: null; snapshot?: string }) =>
+    prisma.aiRun.updateMany({ where: { id: run.id, status: run.status }, data }).then((r) => r.count > 0)
 
   if (!run.groupedAt) {
-    await prisma.aiRun.update({ where: { id: run.id }, data: { status: "GROUPING", startedAt: run.startedAt ?? new Date(), model: config.model, error: null } })
+    if (!(await claim({ status: "GROUPING", startedAt: run.startedAt ?? new Date(), model: config.model, error: null }))) return
     try {
       await groupRun(run, run.root, segs, config)
     } catch (error) {
       return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) })
     }
   } else {
-    await prisma.aiRun.update({ where: { id: run.id }, data: { status: "ANALYZING", model: config.model, error: null, finishedAt: null } })
+    // Resuming (retry, resume, restart): the folder may have changed while the
+    // run sat idle and unlocked — resolved groups moved files out — so compare
+    // against the folder as it is now. Each group still checks its own photos.
+    let snapshotNow: string
+    try {
+      snapshotNow = JSON.stringify(Object.fromEntries(await listImageVersions(dir)))
+    } catch (error) {
+      return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) }, picked)
+    }
+    if (!(await claim({ status: "ANALYZING", model: config.model, error: null, finishedAt: null, snapshot: snapshotNow }))) return
   }
 
   const pending = await prisma.aiGroup.findMany({
@@ -104,7 +168,6 @@ async function processRun(run: AiRun) {
   const controller = new AbortController()
   state.current = { runId: run.id, controller }
   const root = run.root as RootKey
-  const dir = path.join(rootPath(root), ...segs)
   const cfg = clientConfig(config)
   const saved = await prisma.aiRun.findUnique({ where: { id: run.id }, select: { snapshot: true } })
   const snapshot: Snapshot | null = saved?.snapshot ? JSON.parse(saved.snapshot) : null
@@ -114,7 +177,7 @@ async function processRun(run: AiRun) {
       pending.map((p) => ({ id: p.id, photoCount: p._count.photos })),
       {
         customPrompt: config.customPrompt,
-        isCancelled: async () => (await prisma.aiRun.findUnique({ where: { id: run.id }, select: { status: true } }))?.status === "CANCELLED",
+        isCancelled: () => stopped(run.id),
         checkFolder: () => (snapshot ? folderChange(dir, snapshot) : Promise.resolve(null)),
         callAi: (messages) => chatWithRetry(cfg, messages, { signal: controller.signal }),
         prepareImages: async (groupId) => {
@@ -122,6 +185,8 @@ async function processRun(run: AiRun) {
           return Promise.all(
             photos.map(async (p) => {
               const file = path.join(dir, p.name)
+              const now = await fs.stat(file).then(fileVersion, () => null)
+              if (now !== p.version) throw new Error(`${p.name} changed since the scan (moved, edited or deleted).`)
               const preview = await ensureVariant(root, [...segs, p.name].join("/"), file, "preview", "scan").catch(() => ({ failed: true as const }))
               if ("failed" in preview) throw new Error(`${p.name} is no longer readable.`)
               const jpeg = await sharp(preview.path)
@@ -216,7 +281,7 @@ async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiCon
     } catch {
       // unreadable; caught as a change by the check below if it was removed
     }
-    if ((await prisma.aiRun.findUnique({ where: { id: run.id }, select: { status: true } }))?.status === "CANCELLED") return
+    if (await stopped(run.id)) return
   }
 
   // Grouping takes a while on a big folder; don't save groups built from a folder that has since changed.
