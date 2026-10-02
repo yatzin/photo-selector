@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { FolderInput, FolderOutput, Images, Menu, Settings } from "lucide-react"
+import { FolderInput, FolderOutput, Images, Menu, Settings, Sparkles } from "lucide-react"
 
-type NavItem = { href: string; label: string; icon: React.ElementType }
+type NavItem = { href: string; label: string; icon: React.ElementType; badge?: number }
 
 const navItems: NavItem[] = [
   { href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
@@ -16,7 +16,7 @@ const navItems: NavItem[] = [
 
 const bottomItems: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings }]
 
-function NavLink({ href, label, icon: Icon, onClick }: NavItem & { onClick?: () => void }) {
+function NavLink({ href, label, icon: Icon, badge, onClick }: NavItem & { onClick?: () => void }) {
   const pathname = usePathname()
   const active = pathname === href || pathname.startsWith(href + "/")
   return (
@@ -39,11 +39,12 @@ function NavLink({ href, label, icon: Icon, onClick }: NavItem & { onClick?: () 
       />
       <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />
       {label}
+      {badge ? <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground">{badge}</span> : null}
     </Link>
   )
 }
 
-function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
+function SidebarContent({ onNavClick, aiPending }: { onNavClick?: () => void; aiPending: number }) {
   return (
     <div className="flex flex-col h-full px-3 py-4">
       <div className="mb-6 flex items-center gap-2 px-3">
@@ -55,6 +56,8 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
       <nav className="flex flex-1 flex-col gap-1">
         <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Library</p>
         {navItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} />)}
+        <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Review</p>
+        <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} />
       </nav>
       <nav className="flex flex-col gap-1 border-t pt-3 mt-3">
         {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} />)}
@@ -63,15 +66,15 @@ function SidebarContent({ onNavClick }: { onNavClick?: () => void }) {
   )
 }
 
-export function Sidebar() {
+export function Sidebar({ aiPending }: { aiPending: number }) {
   return (
     <aside className="hidden md:flex w-56 shrink-0 flex-col border-r bg-card">
-      <SidebarContent />
+      <SidebarContent aiPending={aiPending} />
     </aside>
   )
 }
 
-export function MobileSidebarTrigger() {
+export function MobileSidebarTrigger({ aiPending }: { aiPending: number }) {
   const [open, setOpen] = useState(false)
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -80,7 +83,7 @@ export function MobileSidebarTrigger() {
         <span className="sr-only">Menu</span>
       </SheetTrigger>
       <SheetContent side="left" className="w-56 p-0">
-        <SidebarContent onNavClick={() => setOpen(false)} />
+        <SidebarContent aiPending={aiPending} onNavClick={() => setOpen(false)} />
       </SheetContent>
     </Sheet>
   )
