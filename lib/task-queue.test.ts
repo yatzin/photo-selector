@@ -60,4 +60,29 @@ describe("createTaskQueue", () => {
     await expect(q.run("bad", async () => { throw new Error("boom") })).rejects.toThrow("boom")
     await expect(q.run("good", async () => 1)).resolves.toBe(1)
   })
+
+  it("runs scan work after background work", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    const order: string[] = []
+    const blocker = q.run("blocker", () => gate.promise)
+    const scan = q.run("scan", async () => void order.push("scan"), "scan")
+    const low = q.run("low", async () => void order.push("low"), "low")
+    gate.resolve()
+    await Promise.all([blocker, scan, low])
+    expect(order).toEqual(["low", "scan"])
+  })
+
+  it("promotes a queued scan job to high when someone views it", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    const order: string[] = []
+    const blocker = q.run("blocker", () => gate.promise)
+    const low = q.run("low", async () => void order.push("low"), "low")
+    const scan = q.run("x", async () => void order.push("x"), "scan")
+    const view = q.run("x", async () => void order.push("dup"), "high")
+    gate.resolve()
+    await Promise.all([blocker, low, scan, view])
+    expect(order).toEqual(["x", "low"])
+  })
 })
