@@ -4,6 +4,8 @@ import { redirect } from "next/navigation"
 import { UserManagement } from "@/components/settings/user-management"
 import { AccountSettings } from "@/components/settings/account-settings"
 import { StorageStatus } from "@/components/settings/storage-status"
+import { AiSettings } from "@/components/settings/ai-settings"
+import { loadAiConfig } from "@/lib/ai/config"
 import { SettingsNav } from "@/components/settings/settings-nav"
 import { allRootStatuses } from "@/lib/library-server"
 import { workerStatus } from "@/lib/worker-server"
@@ -23,10 +25,11 @@ export default async function SettingsPage({
   const is = (id: SettingsSectionId) => section.id === id
 
   // Only the open section's data is loaded.
-  const [me, users, roots] = await Promise.all([
+  const [me, users, roots, ai] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.user.id }, select: { name: true, email: true, role: true } }),
     is("users") ? prisma.user.findMany({ orderBy: { createdAt: "asc" } }) : Promise.resolve([]),
     is("storage") ? allRootStatuses() : Promise.resolve([]),
+    is("ai") ? loadAiConfig() : Promise.resolve(null),
   ])
   // A session whose user row is gone. Redirecting to /login would bounce
   // straight back (proxy.ts sends signed-in sessions away from /login).
@@ -59,6 +62,26 @@ export default async function SettingsPage({
         <div className={sections.length > 1 ? "min-w-0 max-w-3xl" : "min-w-0 max-w-3xl md:col-span-2"}>
           {is("account") && <AccountSettings name={me.name} email={me.email} role={me.role} />}
           {is("storage") && <StorageStatus roots={roots} worker={workerStatus()} />}
+          {is("ai") && ai && (
+            <AiSettings
+              initial={{
+                enabled: ai.enabled,
+                baseUrl: ai.baseUrl ?? "",
+                model: ai.model ?? "",
+                temperature: ai.temperature?.toString() ?? "",
+                maxTokens: ai.maxTokens?.toString() ?? "",
+                timeoutSeconds: ai.timeoutSeconds?.toString() ?? "",
+                extraBody: ai.extraBody ? JSON.stringify(JSON.parse(ai.extraBody), null, 2) : "",
+                customPrompt: ai.customPrompt ?? "",
+                groupWindowSeconds: String(ai.groupWindowSeconds),
+                similarity: ai.similarity,
+                imageMaxPx: String(ai.imageMaxPx),
+                maxGroupSize: String(ai.maxGroupSize),
+              }}
+              hasStoredKey={ai.hasStoredKey}
+              keyUnreadable={ai.keyUnreadable}
+            />
+          )}
           {is("users") && <UserManagement users={users} currentUserId={session.user.id} />}
         </div>
       </div>

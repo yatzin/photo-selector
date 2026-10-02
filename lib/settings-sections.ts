@@ -1,9 +1,9 @@
-import { HardDrive, UserRound, Users } from "lucide-react"
+import { HardDrive, Sparkles, UserRound, Users } from "lucide-react"
 
 // The sub-pages of Settings, chosen with ?tab=. Everyone manages their own
 // account; storage and users are server setup, for admins only.
 
-export type SettingsSectionId = "account" | "storage" | "users"
+export type SettingsSectionId = "account" | "storage" | "ai" | "users"
 
 export type SettingsSection = {
   id: SettingsSectionId
@@ -16,6 +16,7 @@ export type SettingsSection = {
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: "account", label: "Account", description: "Your name, email and password", icon: UserRound, adminOnly: false },
   { id: "storage", label: "Storage", description: "The photo folders this app reads and writes", icon: HardDrive, adminOnly: true },
+  { id: "ai", label: "AI", description: "Vision AI server and duplicate grouping", icon: Sparkles, adminOnly: true },
   { id: "users", label: "Users", description: "Who can sign in, and their roles", icon: Users, adminOnly: true },
 ]
 
