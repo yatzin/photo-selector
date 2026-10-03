@@ -11,8 +11,8 @@ describe("monthScanDays", () => {
   it("ignores non-photo files and folders that aren't days", () => {
     expect(monthScanDays(["2025", "10"], [dir("18"), dir("misc"), dir("32"), file("notes.txt"), file("Thumbs.db")])).toEqual(["18"])
   })
-  it("is null when the month folder holds photos itself", () => {
-    expect(monthScanDays(["2025", "10"], [dir("18"), file("IMG_1.jpg")])).toBeNull()
+  it("still counts a month that also holds a few loose photos of its own", () => {
+    expect(monthScanDays(["2025", "10"], [dir("18"), file("IMG_1.jpg")])).toEqual(["18"])
   })
   it("is null when the folder isn't a month inside a year", () => {
     expect(monthScanDays(["jessi", "Trip"], [dir("18")])).toBeNull()

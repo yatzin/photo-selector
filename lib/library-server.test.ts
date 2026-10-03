@@ -34,7 +34,7 @@ describe("listScanFolders", () => {
     await write("2025/10/10/b.jpg")
     await write("2025/10/11/c.jpg")
     await write("2025/10/misc/d.jpg")
-    await write("2025/11/e.jpg") // a month with photos of its own: scanned as a plain folder
+    await write("2025/11/e.jpg") // loose photos in the month are scanned along with its days
     await write("2025/11/03/f.jpg")
     await fs.mkdir(path.join(tmp, "scan-drop"), { recursive: true })
     process.env.PHOTOS_UPLOAD_DIR = up
@@ -46,8 +46,8 @@ describe("listScanFolders", () => {
     expect(byFolder["2025/10/10"]).toBeUndefined()
     expect(byFolder["2025/10/11"]).toBeUndefined()
     expect(byFolder["2025/10/misc"]).toMatchObject({ imageCount: 1 })
-    expect(byFolder["2025/11"]).toMatchObject({ imageCount: 1, includeDays: false })
-    expect(byFolder["2025/11/03"]).toMatchObject({ imageCount: 1 })
+    expect(byFolder["2025/11"]).toMatchObject({ imageCount: 2, includeDays: true })
+    expect(byFolder["2025/11/03"]).toBeUndefined()
   })
 })
 

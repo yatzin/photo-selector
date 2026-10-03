@@ -1,8 +1,7 @@
-import { mediaKind } from "@/lib/media"
-
 // Phones and photo apps often file uploads as year/month/day. A day holds a
 // handful of photos, and a burst can cross midnight, so a month folder with
-// no photos of its own is scanned as one: every photo in its day folders.
+// day folders is scanned as one: its day folders' photos plus any loose
+// photos in the month folder itself.
 
 const YEAR = /^\d{4}$/
 const MONTH = /^(0[1-9]|1[0-2])$/
@@ -10,11 +9,10 @@ const DAY = /^(0[1-9]|[12]\d|3[01])$/
 
 type Entry = { name: string; isDirectory(): boolean; isFile(): boolean }
 
-/** The day folders a month scan of `segments` covers (sorted), or null if it isn't a month-of-days folder. */
+/** The day folders a month scan of `segments` covers (sorted), or null if it isn't a year/month folder with days. */
 export function monthScanDays(segments: string[], entries: Entry[]): string[] | null {
   if (segments.length < 2) return null
   if (!YEAR.test(segments[segments.length - 2]) || !MONTH.test(segments[segments.length - 1])) return null
-  if (entries.some((e) => e.isFile() && mediaKind(e.name) === "image")) return null
   const days = dayFolderNames(entries)
   return days.length ? days : null
 }
