@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import Link from "next/link"
+import { TriangleAlert } from "lucide-react"
 import { notFound, redirect } from "next/navigation"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
@@ -61,10 +62,24 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
         <h1 className="mt-1 font-heading text-2xl font-semibold">{where}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {run.groupCount} group{run.groupCount === 1 ? "" : "s"} from {run.photoCount} photos
-          {running && " · still scanning — review actions unlock when it finishes (the folder is locked while it runs)"}
           {run.model && ` · ${run.model}`}
         </p>
       </div>
+
+      {running && (
+        <div role="alert" className="flex items-start gap-3 rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-3">
+          <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="space-y-0.5 text-sm">
+            <p className="font-semibold text-amber-800 dark:text-amber-300">
+              Scan in progress{run.status === "ANALYZING" && run.groupCount > 0 ? ` — ${run.analyzedCount + run.failedCount} of ${run.groupCount} groups done` : run.status === "QUEUED" ? " — waiting its turn" : " — grouping photos"}
+            </p>
+            <p className="text-amber-900/80 dark:text-amber-200/80">
+              You can look through results as they arrive, but the buttons stay locked until the scan finishes, so the folder doesn&apos;t change under it.
+              To stop it, cancel the scan on the <Link href="/ai" className="font-medium underline underline-offset-2">AI page</Link>.
+            </p>
+          </div>
+        </div>
+      )}
 
       <nav className="flex gap-1 border-b">
         {TABS.map((t) => (
