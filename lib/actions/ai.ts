@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma"
 import { aiReady } from "@/lib/ai/config"
 import { scanFolderSegments } from "@/lib/ai/review"
 import { abortRun, createRun, requeueRun } from "@/lib/ai/runner-server"
-import { dismissGroup, resolveGroup, undoGroup } from "@/lib/ai/review-server"
+import { dismissGroup, resolveGroup, undoGroup, trashGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 
@@ -72,6 +72,14 @@ export async function resolveGroupAction(groupId: string, keep: string[]) {
   if (!parsed.success) return { error: "Invalid request." }
   if (await groupLocked(parsed.data.groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await resolveGroup(parsed.data.groupId, parsed.data.keep, session.user.id)
+  refresh()
+  return result
+}
+
+export async function trashGroupAction(groupId: string) {
+  const session = await requireUser()
+  if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
+  const result = await trashGroup(groupId, session.user.id)
   refresh()
   return result
 }

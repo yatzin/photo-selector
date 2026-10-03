@@ -320,5 +320,24 @@ describe("AI runner", () => {
     await expect(fs.stat(path.join(month, "10", "a2.jpg"))).resolves.toBeTruthy()
     await fs.rm(path.join(tmp, "dropoff", "a3.jpg"))
   }, 60_000)
+
+  it("deleting a whole group trashes every photo in it, and undo restores them", async () => {
+    const review = await import("./review-server")
+    const user = await prisma.user.create({ data: { name: "t", email: `d${Date.now()}@x.y`, passwordHash: "x" } })
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const [a] = await groupsOf(run.runId)
+
+    expect(await review.trashGroup(a.id, user.id)).toEqual({ moved: 0, kept: 0, trashed: 3, missing: 0 })
+    for (const n of ["a1.jpg", "a2.jpg", "a3.jpg"]) await expect(fs.stat(path.join(folder, n))).rejects.toThrow()
+    const g = await prisma.aiGroup.findUniqueOrThrow({ where: { id: a.id }, include: { photos: true } })
+    expect(g.status).toBe("RESOLVED")
+    expect(g.photos.every((p) => p.decision === "TRASH")).toBe(true)
+    expect(await review.trashGroup(a.id, user.id)).toEqual({ error: expect.stringMatching(/already/i) })
+
+    expect(await review.undoGroup(a.id)).toEqual({ restored: 3 })
+    for (const n of ["a1.jpg", "a2.jpg", "a3.jpg"]) await expect(fs.stat(path.join(folder, n))).resolves.toBeTruthy()
+  }, 60_000)
 })
 

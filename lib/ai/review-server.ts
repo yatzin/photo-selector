@@ -26,7 +26,21 @@ export async function currentVersions(root: RootKey, folder: string, names: stri
 
 export type ResolveResult = { error: string } | { moved: number; kept: number; trashed: number; missing: number }
 
-export async function resolveGroup(groupId: string, keep: string[], userId: string): Promise<ResolveResult> {
+/** Keeps the photos named in `keep` (moved to Dropoff from Mobile Upload) and trashes the rest. */
+export function resolveGroup(groupId: string, keep: string[], userId: string): Promise<ResolveResult> {
+  return settleGroup(groupId, userId, (valid) => planResolution(valid, keep))
+}
+
+/** Trashes every photo in the group ("Delete all"). Undo restores them like any other resolution. */
+export function trashGroup(groupId: string, userId: string): Promise<ResolveResult> {
+  return settleGroup(groupId, userId, (valid) => (valid.length ? { keep: [], trash: valid } : { error: "None of these photos are still here." }))
+}
+
+async function settleGroup(
+  groupId: string,
+  userId: string,
+  planFor: (valid: string[]) => { keep: string[]; trash: string[] } | { error: string }
+): Promise<ResolveResult> {
   const group = await prisma.aiGroup.findUnique({ where: { id: groupId }, include: { photos: true } })
   if (!group || !isRootKey(group.root)) return { error: "That group no longer exists." }
   if (group.status !== "ANALYZED") return { error: "That group has already been handled." }
@@ -35,7 +49,7 @@ export async function resolveGroup(groupId: string, keep: string[], userId: stri
 
   const current = await currentVersions(group.root, group.folder, group.photos.map((p) => p.name))
   const { valid, missing } = classifyPhotos(group.photos, current)
-  const plan = planResolution(valid, keep)
+  const plan = planFor(valid)
   if ("error" in plan) return plan
 
   // Claim the group first so a double click or a second user can't act twice.

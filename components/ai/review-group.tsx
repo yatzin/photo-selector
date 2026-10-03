@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, Loader2, Undo2 } from "lucide-react"
+import { Check, Loader2, Trash2, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { mediaUrl } from "@/lib/format"
-import { dismissGroupAction, resolveGroupAction, undoGroupAction } from "@/lib/actions/ai"
+import { TRASH_RETENTION_DAYS } from "@/lib/media"
+import { dismissGroupAction, resolveGroupAction, trashGroupAction, undoGroupAction } from "@/lib/actions/ai"
 import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
@@ -65,7 +66,11 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-sm">
         <span className="text-muted-foreground">
-          {status === "DISMISSED" ? "Marked as not duplicates" : `${root === "upload" ? "Moved" : "Kept"} ${keptNames}, trashed ${trashedNames}`}
+          {status === "DISMISSED"
+            ? "Marked as not duplicates"
+            : keptNames === 0
+              ? `Deleted all ${trashedNames}`
+              : `${root === "upload" ? "Moved" : "Kept"} ${keptNames}, trashed ${trashedNames}`}
         </span>
         <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => undoGroupAction(id), (r) => (r.restored ? `Restored ${r.restored} from trash.` : "Back in To review."))}>
           <Undo2 className="h-4 w-4" /> Undo
@@ -113,6 +118,21 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
         })}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
+        {status === "ANALYZED" && present.length > 0 && (
+          <Button
+            size="sm"
+            className="mr-auto bg-destructive text-white hover:bg-destructive/90"
+            disabled={busy || locked}
+            onClick={() =>
+              confirm(
+                `Are you sure you want to delete all ${present.length} photo${present.length === 1 ? "" : "s"} in this group? ` +
+                  `They go to the trash and can be brought back with Undo for ${TRASH_RETENTION_DAYS} days.`
+              ) && act(() => trashGroupAction(id), (r) => `Deleted ${r.trashed} photo${r.trashed === 1 ? "" : "s"}.`)
+            }
+          >
+            <Trash2 className="h-4 w-4" /> Delete all
+          </Button>
+        )}
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => dismissGroupAction(id), () => "Marked as not duplicates.")}>
           {present.length < 2 ? "Done" : "Not duplicates"}
