@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { isRootKey, mediaKind, ROOT_LABELS } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
 import { currentVersions } from "@/lib/ai/review-server"
-import { scanFolderSegments } from "@/lib/ai/review"
+import { pageWindow, scanFolderSegments } from "@/lib/ai/review"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { ReviewGroup, type ReviewPhoto } from "@/components/ai/review-group"
 
@@ -18,21 +18,30 @@ const TABS = [
   { id: "failed", label: "Failed", statuses: ["FAILED"] },
 ] as const
 
-export default async function RunReviewPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
+// Groups per page. Each page stats only its own photos and requests only its
+// own thumbnails, so a scan of a huge folder stays quick to open.
+const PAGE_SIZE = 20
+
+export default async function RunReviewPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; page?: string }> }) {
   const session = await auth()
   if (!session) redirect("/login")
-  const [{ id }, { tab }] = await Promise.all([params, searchParams])
+  const [{ id }, { tab, page: pageParam }] = await Promise.all([params, searchParams])
   const run = await prisma.aiRun.findUnique({ where: { id } })
   if (!run || !isRootKey(run.root)) notFound()
   const segs = scanFolderSegments(run.folder)
   if (!segs) notFound()
   const active = TABS.find((t) => t.id === tab) ?? TABS[0]
 
-  const [groups, counts] = await Promise.all([
-    prisma.aiGroup.findMany({ where: { runId: id, status: { in: [...active.statuses] } }, orderBy: { takenAt: "asc" }, include: { photos: true } }),
-    prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true }),
-  ])
+  const counts = await prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true })
   const count = (statuses: readonly string[]) => counts.filter((c) => statuses.includes(c.status)).reduce((n, c) => n + c._count, 0)
+  const { page, pages, skip, take } = pageWindow(count(active.statuses), pageParam, PAGE_SIZE)
+  const groups = await prisma.aiGroup.findMany({
+    where: { runId: id, status: { in: [...active.statuses] } },
+    orderBy: [{ takenAt: "asc" }, { id: "asc" }],
+    include: { photos: true },
+    skip,
+    take,
+  })
 
   const allNames = [...new Set(groups.flatMap((g) => g.photos.map((p) => p.name)))]
   const versions = await currentVersions(run.root, run.folder, allNames)
@@ -87,7 +96,30 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
           })}
         </div>
       )}
+      {pages > 1 && <Pager href={(n) => `/ai/runs/${id}?tab=${active.id}&page=${n}`} page={page} pages={pages} />}
       <AutoRefresh active={running} intervalMs={5000} />
     </div>
+  )
+}
+
+/** Previous / numbered / next links; long runs of pages collapse to an ellipsis. */
+function Pager({ href, page, pages }: { href: (n: number) => string; page: number; pages: number }) {
+  const shown = [...new Set([1, page - 2, page - 1, page, page + 1, page + 2, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b)
+  const item = "inline-flex h-8 min-w-8 items-center justify-center rounded-lg border px-2.5 text-sm"
+  return (
+    <nav aria-label="Pages" className="flex flex-wrap items-center justify-center gap-1.5">
+      {page > 1 ? <Link href={href(page - 1)} className={cn(item, "hover:bg-muted")}>Previous</Link> : <span className={cn(item, "opacity-40")}>Previous</span>}
+      {shown.map((n, i) => (
+        <span key={n} className="contents">
+          {i > 0 && n - shown[i - 1] > 1 && <span className="px-1 text-muted-foreground">…</span>}
+          {n === page ? (
+            <span aria-current="page" className={cn(item, "border-primary bg-primary text-primary-foreground")}>{n}</span>
+          ) : (
+            <Link href={href(n)} className={cn(item, "hover:bg-muted")}>{n}</Link>
+          )}
+        </span>
+      ))}
+      {page < pages ? <Link href={href(page + 1)} className={cn(item, "hover:bg-muted")}>Next</Link> : <span className={cn(item, "opacity-40")}>Next</span>}
+    </nav>
   )
 }

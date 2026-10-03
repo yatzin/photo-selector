@@ -26,3 +26,11 @@ export function planResolution(valid: string[], keep: string[]): { keep: string[
   if (kept.length === 0) return { error: "Keep at least one photo." }
   return { keep: kept, trash: valid.filter((n) => !keepSet.has(n)) }
 }
+
+/** Which slice of `total` items page `requested` (1-based, from the URL) shows; out-of-range pages snap to the nearest real one. */
+export function pageWindow(total: number, requested: string | undefined, size: number): { page: number; pages: number; skip: number; take: number } {
+  const pages = Math.max(1, Math.ceil(total / size))
+  const n = Number.parseInt(requested ?? "", 10)
+  const page = Number.isFinite(n) ? Math.min(Math.max(n, 1), pages) : 1
+  return { page, pages, skip: (page - 1) * size, take: size }
+}

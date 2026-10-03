@@ -49,6 +49,7 @@ export function PhotoImage({
           src={src}
           alt={alt}
           decoding="async"
+          loading="lazy"
           draggable={false}
           onLoad={() => setState({ src, status: "loaded" })}
           onError={() => setState({ src, status: "failed" })}

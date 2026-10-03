@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { classifyPhotos, folderKey, planResolution, scanFolderSegments } from "./review"
+import { classifyPhotos, folderKey, pageWindow, planResolution, scanFolderSegments } from "./review"
 
 describe("scanFolderSegments", () => {
   it("accepts the root and nested folders with odd characters", () => {
@@ -34,5 +34,24 @@ describe("planResolution", () => {
   it("ignores keeps that are no longer valid and needs at least one keeper", () => {
     expect(planResolution(["a", "b"], ["z"])).toEqual({ error: "Keep at least one photo." })
     expect(planResolution(["a", "b"], ["a", "z"])).toEqual({ keep: ["a"], trash: ["b"] })
+  })
+})
+
+describe("pageWindow", () => {
+  it("returns the requested page's offset", () => {
+    expect(pageWindow(95, "3", 20)).toEqual({ page: 3, pages: 5, skip: 40, take: 20 })
+  })
+  it("starts at page 1 for a missing or invalid page", () => {
+    expect(pageWindow(95, undefined, 20)).toEqual({ page: 1, pages: 5, skip: 0, take: 20 })
+    expect(pageWindow(95, "abc", 20).page).toBe(1)
+    expect(pageWindow(95, "0", 20).page).toBe(1)
+    expect(pageWindow(95, "-2", 20).page).toBe(1)
+  })
+  it("moves back to the last page when the requested one no longer exists", () => {
+    // Resolving the last groups on the last page shrinks the total.
+    expect(pageWindow(40, "3", 20)).toEqual({ page: 2, pages: 2, skip: 20, take: 20 })
+  })
+  it("has one empty page when there is nothing", () => {
+    expect(pageWindow(0, "4", 20)).toEqual({ page: 1, pages: 1, skip: 0, take: 20 })
   })
 })
