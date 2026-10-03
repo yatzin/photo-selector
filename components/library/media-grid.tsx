@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react"
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
@@ -14,10 +14,13 @@ import type { FileEntry } from "@/lib/library-server"
 import { gridLayout } from "@/lib/grid-layout"
 import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
+import { useDragSelect } from "./use-drag-select"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
-// whole range from the last clicked photo, Ctrl/⌘+A selects all. Double-click
+// whole range from the last clicked photo, Ctrl/⌘+A selects all. Dragging
+// across photos selects the range (on touch: press and hold, then drag; see
+// use-drag-select.ts). Double-click
 // (double-tap) or Enter opens the viewer; the two clicks cancel out, so the
 // selection is unchanged.
 //
@@ -68,7 +71,8 @@ function Tile({
         focused && !selected && "ring-2 ring-ring/60"
       )}
       // touch-action: no double-tap zoom, so a double-tap reaches onDoubleClick.
-      style={{ touchAction: "manipulation" }}
+      // No iOS long-press menu: a long press starts a drag selection.
+      style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       title={item.name}
@@ -131,7 +135,9 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   // Measured on the client: the grid's width, the scrolling <main>, and how
   // far below the top of the scroll area the grid starts (folders, toolbar).
   const [frame, setFrame] = useState<{ width: number; scrollEl: HTMLElement | null; offset: number }>({ width: 0, scrollEl: null, offset: 0 })
+  const gridEl = useRef<HTMLDivElement | null>(null)
   const measureRef = useCallback((el: HTMLDivElement | null) => {
+    gridEl.current = el
     if (!el) return
     const scrollEl = el.closest("main") as HTMLElement | null
     const measure = () => {
@@ -274,6 +280,21 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   }, [virtualizer, layout.rowHeight])
 
   const columns = () => layout.columns
+
+  const itemNames = useMemo(() => items.map((f) => f.name), [items])
+  const dragSelect = useDragSelect({
+    grid: () => gridEl.current,
+    scrollEl: frame.scrollEl,
+    layout,
+    gap: GAP,
+    names: itemNames,
+    selected,
+    apply: (next, current, start) => {
+      setSelected(next)
+      setFocus(current)
+      setAnchor(start)
+    },
+  })
 
   const scrollTo = (name: string) => {
     const index = indexOf.get(name)
@@ -426,7 +447,13 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
         )}
       </div>
 
-      <div ref={measureRef} className="relative w-full" style={{ height: layout.rows ? virtualizer.getTotalSize() : undefined }}>
+      <div
+        ref={measureRef}
+        className="relative w-full"
+        style={{ height: layout.rows ? virtualizer.getTotalSize() : undefined }}
+        onPointerDown={dragSelect.onPointerDown}
+        onClickCapture={dragSelect.onClickCapture}
+      >
         {frame.width === 0 ? (
           <SkeletonGrid tile={tile} />
         ) : (
