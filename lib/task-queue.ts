@@ -1,5 +1,6 @@
-// A small job queue with three lanes: thumbnails someone is looking at, the
-// background worker's backlog, then AI scan preparation. A job asked for
+// A small job queue with three lanes: thumbnails someone is looking at, then
+// AI scan preparation (someone started it and is waiting), then the
+// background worker's backlog. A job asked for
 // twice runs once, and a queued job moves up when someone asks for it at a
 // higher priority.
 //
@@ -10,7 +11,7 @@
 // its result is cached for next time.
 
 export type Priority = "high" | "low" | "scan"
-const ORDER: Priority[] = ["high", "low", "scan"]
+const ORDER: Priority[] = ["high", "scan", "low"]
 
 type Job = { key: string; run: () => Promise<unknown>; resolve: (v: unknown) => void; reject: (e: unknown) => void }
 type Entry = { promise: Promise<unknown>; job: Job | null; priority: Priority; waiters: number }

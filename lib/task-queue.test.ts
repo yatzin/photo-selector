@@ -61,16 +61,32 @@ describe("createTaskQueue", () => {
     await expect(q.run("good", async () => 1)).resolves.toBe(1)
   })
 
-  it("runs scan work after background work", async () => {
+  it("runs AI scan work before the background backlog, after what someone is viewing", async () => {
+    // A scan someone started shouldn't wait behind thousands of queued
+    // background thumbnails.
     const q = createTaskQueue(1)
     const gate = deferred()
     const order: string[] = []
     const blocker = q.run("blocker", () => gate.promise)
-    const scan = q.run("scan", async () => void order.push("scan"), "scan")
     const low = q.run("low", async () => void order.push("low"), "low")
+    const scan = q.run("scan", async () => void order.push("scan"), "scan")
+    const high = q.run("high", async () => void order.push("high"), "high")
     gate.resolve()
-    await Promise.all([blocker, scan, low])
-    expect(order).toEqual(["low", "scan"])
+    await Promise.all([blocker, low, scan, high])
+    expect(order).toEqual(["high", "scan", "low"])
+  })
+
+  it("moves a queued background job up when an AI scan needs it", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    const order: string[] = []
+    const blocker = q.run("blocker", () => gate.promise)
+    const other = q.run("other", async () => void order.push("other"), "low")
+    const shared = q.run("shared", async () => void order.push("shared"), "low")
+    const scan = q.run("shared", async () => void order.push("dup"), "scan")
+    gate.resolve()
+    await Promise.all([blocker, other, shared, scan])
+    expect(order).toEqual(["shared", "other"])
   })
 
   it("promotes a queued scan job to high when someone views it", async () => {
