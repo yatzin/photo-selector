@@ -41,8 +41,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ root
   if (variant === "thumb" || variant === "preview") {
     let result
     try {
-      result = await ensureVariant(root, segments.join("/"), file, variant as Variant)
-    } catch {
+      result = await ensureVariant(root, segments.join("/"), file, variant as Variant, "high", request.signal)
+    } catch (error) {
+      // The browser scrolled past and dropped the request; nobody reads this.
+      if (error instanceof Error && error.name === "AbortError") return new Response(null, { status: 499 })
       return notFound() // file vanished
     }
     if ("failed" in result) return new Response("Could not make a preview", { status: 422 })

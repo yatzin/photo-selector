@@ -136,7 +136,9 @@ export async function ensureVariant(
   relPath: string,
   file: string,
   variant: Variant,
-  priority: Priority = "high"
+  priority: Priority = "high",
+  /** The browser request asking for it; if it goes away before the job starts, the job is dropped. */
+  signal?: AbortSignal
 ): Promise<VariantResult> {
   const st = await fs.stat(file)
   const key = cacheKey(rootKey, relPath, st)
@@ -155,7 +157,7 @@ export async function ensureVariant(
       await fs.writeFile(failPath(key), String(error instanceof Error ? error.message : error))
       return { failed: true }
     }
-  }, priority)
+  }, priority, signal)
 }
 
 /** Whether every variant for this version of the file is already cached (or known to fail). */

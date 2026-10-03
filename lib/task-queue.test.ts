@@ -86,3 +86,61 @@ describe("createTaskQueue", () => {
     expect(order).toEqual(["x", "low"])
   })
 })
+
+describe("abandoned requests", () => {
+  it("drops a queued job when its only waiter gives up", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    let ran = false
+    const blocker = q.run("blocker", () => gate.promise)
+    const ac = new AbortController()
+    const waiting = q.run("thumb", async () => void (ran = true), "high", ac.signal)
+    expect(q.pending).toBe(1)
+    ac.abort()
+    await expect(waiting).rejects.toThrow(/abort/i)
+    expect(q.pending).toBe(0)
+    gate.resolve()
+    await blocker
+    await new Promise((r) => setTimeout(r, 5))
+    expect(ran).toBe(false)
+  })
+
+  it("keeps the job while someone else still wants it", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    const blocker = q.run("blocker", () => gate.promise)
+    const ac = new AbortController()
+    const leaving = q.run("thumb", async () => "done", "high", ac.signal)
+    const staying = q.run("thumb", async () => "dup", "low") // e.g. the background worker
+    ac.abort()
+    await expect(leaving).rejects.toThrow(/abort/i)
+    gate.resolve()
+    await blocker
+    await expect(staying).resolves.toBe("done")
+  })
+
+  it("lets a job that already started finish", async () => {
+    const q = createTaskQueue(1)
+    const gate = deferred()
+    let finished = false
+    const ac = new AbortController()
+    const waiting = q.run("thumb", async () => { await gate.promise; finished = true }, "high", ac.signal)
+    await new Promise((r) => setTimeout(r, 0)) // job has started
+    ac.abort()
+    await expect(waiting).rejects.toThrow(/abort/i)
+    gate.resolve()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(finished).toBe(true)
+    expect(q.active).toBe(0)
+  })
+
+  it("refuses work for a request that is already gone", async () => {
+    const q = createTaskQueue(1)
+    let ran = false
+    const ac = new AbortController()
+    ac.abort()
+    await expect(q.run("thumb", async () => void (ran = true), "high", ac.signal)).rejects.toThrow(/abort/i)
+    expect(q.pending).toBe(0)
+    expect(ran).toBe(false)
+  })
+})
