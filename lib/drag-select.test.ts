@@ -1,26 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { dragSelection, edgeScrollSpeed, indexAt } from "./drag-select"
-
-// 3 columns of 100px tiles with 10px gaps; rows are 110px apart.
-const grid = { columns: 3, tileSize: 100, rowHeight: 110, gap: 10 }
-
-describe("indexAt", () => {
-  it("finds the tile under a point, row by row", () => {
-    expect(indexAt(5, 5, grid, 10)).toBe(0)
-    expect(indexAt(225, 5, grid, 10)).toBe(2)
-    expect(indexAt(115, 120, grid, 10)).toBe(4)
-  })
-  it("counts a gap as the tile before it", () => {
-    expect(indexAt(105, 5, grid, 10)).toBe(0)
-    expect(indexAt(5, 105, grid, 10)).toBe(0)
-  })
-  it("clamps points outside the grid to the nearest tile", () => {
-    expect(indexAt(-50, -50, grid, 10)).toBe(0)
-    expect(indexAt(999, 5, grid, 10)).toBe(2)
-    expect(indexAt(5, 9999, grid, 10)).toBe(9)
-    expect(indexAt(225, 335, grid, 10)).toBe(9) // past the last photo in a short last row
-  })
-})
+import { dragSelection, edgeScrollSpeed } from "./drag-select"
 
 describe("dragSelection", () => {
   const names = ["a", "b", "c", "d", "e"]

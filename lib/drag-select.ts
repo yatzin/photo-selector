@@ -1,16 +1,5 @@
-// Drag-to-select maths for the photo grid. Positions are worked out from the
-// grid layout rather than the DOM, so a drag reaches rows the virtualized
-// grid hasn't drawn yet.
-
-type Grid = { columns: number; tileSize: number; rowHeight: number; gap: number }
-
-/** The index of the photo under (x, y), measured from the grid's top-left; points outside snap to the nearest photo. */
-export function indexAt(x: number, y: number, grid: Grid, count: number): number {
-  if (count <= 0) return -1
-  const col = Math.min(grid.columns - 1, Math.max(0, Math.floor(x / (grid.tileSize + grid.gap))))
-  const row = Math.max(0, Math.floor(y / grid.rowHeight))
-  return Math.min(count - 1, row * grid.columns + col)
-}
+// Drag-to-select maths for the photo grid (which photo is under the pointer
+// lives in month-groups.ts).
 
 /**
  * The selection while dragging from `from` to `to`: everything that was

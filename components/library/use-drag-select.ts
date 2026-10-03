@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { dragSelection, edgeScrollSpeed, indexAt } from "@/lib/drag-select"
+import { dragSelection, edgeScrollSpeed } from "@/lib/drag-select"
 
 // Drag across photos to select the range from where the drag started to
 // where the pointer is (photos never move). Mouse: press and drag. Touch:
@@ -13,13 +13,11 @@ const MOUSE_SLOP = 6
 const TOUCH_SLOP = 10
 const LONG_PRESS_MS = 450
 
-type Layout = { columns: number; tileSize: number; rowHeight: number }
-
 type Options = {
   grid: () => HTMLElement | null
   scrollEl: HTMLElement | null
-  layout: Layout
-  gap: number
+  /** The photo index at (x, y) from the grid's top-left, or -1 (e.g. over a month header). */
+  hit: (x: number, y: number) => number
   names: string[]
   selected: Set<string>
   /** Called with the new selection, the photo under the pointer, and the one the drag started on. */
@@ -55,11 +53,11 @@ export function useDragSelect(options: Options) {
   useEffect(() => () => cleanup.current(), [])
 
   function indexAtPointer(d: Drag): number {
-    const { grid, layout, gap, names } = opts.current
+    const { grid, hit } = opts.current
     const el = grid()
     if (!el) return -1
     const r = el.getBoundingClientRect()
-    return indexAt(d.x - r.left, d.y - r.top, { ...layout, gap }, names.length)
+    return hit(d.x - r.left, d.y - r.top)
   }
 
   function update(d: Drag) {

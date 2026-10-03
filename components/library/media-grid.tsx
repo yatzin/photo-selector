@@ -12,6 +12,7 @@ import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
 import { gridLayout } from "@/lib/grid-layout"
+import { buildRows, itemAt, rowOfItem, rowTops, type GridRow } from "@/lib/month-groups"
 import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
 import { useDragSelect } from "./use-drag-select"
@@ -27,12 +28,17 @@ import { useDragSelect } from "./use-drag-select"
 // Keys: arrows move the focus, Space toggles it, Shift+arrows add a range,
 // Del deletes, M moves to Sort Dropoff, R / Shift+R rotate, Esc clears.
 //
+// Sorted by date, photos are grouped under month headers; the circle on a
+// header selects or deselects that whole month. Sorted by name, it's one grid.
+//
 // Large folders: only the rows on screen (plus a few either side) exist in
 // the page, so 10,000 photos cost about as much as 100. Selection, sorting
 // and keys work on the full list, not on what is drawn.
 
 const SIZES = { s: 128, m: 192, l: 288 } as const
 const GAP = 8
+// Height of a month header row ("July 2026  ○  42 photos").
+const HEADER_H = 48
 // Rows kept rendered above and below the visible ones.
 const OVERSCAN_ROWS = 3
 // A tile asks for its thumbnail only after this long on screen.
@@ -266,18 +272,35 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   // Phones get at least two columns, like the old 40vw rule.
   const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length })
 
+  const rows = useMemo(() => (frame.width ? buildRows(items, layout.columns, order !== "name") : []), [items, layout.columns, order, frame.width])
+  const rowSize = useCallback((r: GridRow) => (r.kind === "header" ? HEADER_H : layout.rowHeight), [layout.rowHeight])
+  const tops = useMemo(() => rowTops(rows, rowSize), [rows, rowSize])
+
   // eslint-disable-next-line react-hooks/incompatible-library -- not memoized by the compiler; re-rendering it is the intended use
   const virtualizer = useVirtualizer({
-    count: layout.rows,
+    count: rows.length,
     getScrollElement: () => frame.scrollEl,
-    estimateSize: () => layout.rowHeight,
+    estimateSize: (i) => rowSize(rows[i]),
     overscan: OVERSCAN_ROWS,
     scrollMargin: frame.offset,
   })
-  // Rows change height when the window or tile size changes.
+  // Rows change when the window, tile size, sort order or photos change.
   useEffect(() => {
     virtualizer.measure()
-  }, [virtualizer, layout.rowHeight])
+  }, [virtualizer, rows, rowSize])
+
+  const toggleMonth = (row: Extract<GridRow, { kind: "header" }>) => {
+    const monthNames = items.slice(row.start, row.end).map((f) => f.name)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      const all = monthNames.every((n) => next.has(n))
+      for (const n of monthNames) {
+        if (all) next.delete(n)
+        else next.add(n)
+      }
+      return next
+    })
+  }
 
   const columns = () => layout.columns
 
@@ -285,8 +308,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const dragSelect = useDragSelect({
     grid: () => gridEl.current,
     scrollEl: frame.scrollEl,
-    layout,
-    gap: GAP,
+    hit: (x, y) => itemAt(x, y, rows, tops, { columns: layout.columns, tileSize: layout.tileSize, gap: GAP }),
     names: itemNames,
     selected,
     apply: (next, current, start) => {
@@ -298,7 +320,8 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
 
   const scrollTo = (name: string) => {
     const index = indexOf.get(name)
-    if (index !== undefined && layout.rows > 0) virtualizer.scrollToIndex(layout.rowOf(index), { align: "auto" })
+    const row = index === undefined ? -1 : rowOfItem(rows, index)
+    if (row >= 0) virtualizer.scrollToIndex(row, { align: "auto" })
   }
 
   // One key handler for both the grid and the viewer, so shortcuts work the same in each.
@@ -450,24 +473,54 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
       <div
         ref={measureRef}
         className="relative w-full"
-        style={{ height: layout.rows ? virtualizer.getTotalSize() : undefined }}
+        style={{ height: rows.length ? virtualizer.getTotalSize() : undefined }}
         onPointerDown={dragSelect.onPointerDown}
         onClickCapture={dragSelect.onClickCapture}
       >
         {frame.width === 0 ? (
           <SkeletonGrid tile={tile} />
         ) : (
-          virtualizer.getVirtualItems().map((row) => (
+          virtualizer.getVirtualItems().map((v) => {
+            const row = rows[v.index]
+            const y = `translateY(${v.start - virtualizer.options.scrollMargin}px)`
+            if (row.kind === "header") {
+              const monthItems = items.slice(row.start, row.end)
+              const picked = monthItems.filter((f) => selected.has(f.name)).length
+              const all = picked === monthItems.length
+              return (
+                <div key={v.key} className="absolute left-0 top-0 flex w-full items-end gap-2 pb-2" style={{ transform: y, height: HEADER_H }}>
+                  <h2 className="text-base font-semibold">{row.label}</h2>
+                  <button
+                    type="button"
+                    onClick={() => toggleMonth(row)}
+                    aria-label={all ? `Deselect all of ${row.label}` : `Select all of ${row.label}`}
+                    aria-pressed={all ? true : picked ? "mixed" : false}
+                    title={all ? "Deselect this month" : "Select this month"}
+                    className={cn(
+                      "mb-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 transition-colors",
+                      all ? "border-primary bg-primary text-primary-foreground" : picked ? "border-primary text-link" : "border-muted-foreground/50 text-transparent hover:border-primary"
+                    )}
+                  >
+                    {all ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : picked ? <span className="h-0.5 w-2.5 rounded bg-current" /> : <Check className="h-3.5 w-3.5" strokeWidth={3} />}
+                  </button>
+                  <span className="mb-0.5 text-sm text-muted-foreground tabular-nums">
+                    {monthItems.length.toLocaleString()} item{monthItems.length === 1 ? "" : "s"}
+                    {picked > 0 && !all && ` · ${picked.toLocaleString()} selected`}
+                  </span>
+                </div>
+              )
+            }
+            return (
             <div
-              key={row.key}
+              key={v.key}
               className="absolute left-0 top-0 grid w-full"
               style={{
-                transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`,
+                transform: y,
                 gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
                 gap: GAP,
               }}
             >
-              {items.slice(row.index * layout.columns, (row.index + 1) * layout.columns).map((item) => (
+              {items.slice(row.start, row.end).map((item) => (
                 <Tile
                   key={item.name}
                   root={root}
@@ -481,7 +534,8 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
                 />
               ))}
             </div>
-          ))
+            )
+          })
         )}
       </div>
 
