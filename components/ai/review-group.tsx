@@ -100,7 +100,7 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
                 style={{ touchAction: "manipulation" }}
                 className={cn(
                   "relative block aspect-square w-full overflow-hidden rounded-md bg-muted",
-                  selected ? "ring-[3px] ring-primary ring-offset-2 ring-offset-background" : "opacity-60 hover:opacity-90"
+                  selected ? "ring-[3px] ring-primary ring-offset-2 ring-offset-background" : ""
                 )}
               >
                 <PhotoImage src={mediaUrl(root, folder, p.name, "thumb", p.current.version)} alt={p.name} fallbackLabel={p.name} />
