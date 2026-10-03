@@ -25,6 +25,9 @@ const LABEL: Record<RunRow["status"], string> = {
   QUEUED: "Waiting", GROUPING: "Grouping photos", ANALYZING: "Asking the AI", DONE: "Done", FAILED: "Stopped", CANCELLED: "Cancelled",
 }
 
+const folderLabel = (r: { root: keyof typeof ROOT_LABELS; folder: string }) =>
+  `${ROOT_LABELS[r.root]}${r.folder ? ` / ${r.folder.split("/").join(" / ")}` : ""}`
+
 export function RunsTable({ runs }: { runs: RunRow[] }) {
   const router = useRouter()
   if (runs.length === 0) return <p className="text-sm text-muted-foreground">No scans yet.</p>
@@ -54,7 +57,11 @@ export function RunsTable({ runs }: { runs: RunRow[] }) {
             return (
               <tr key={r.id}>
                 <td className="px-4 py-3">
-                  <div className="font-medium">{ROOT_LABELS[r.root]}{r.folder ? ` / ${r.folder.split("/").join(" / ")}` : ""}</div>
+                  {r.groupCount > 0 ? (
+                    <Link href={`/ai/runs/${r.id}`} className="font-medium hover:text-primary hover:underline underline-offset-2">{folderLabel(r)}</Link>
+                  ) : (
+                    <div className="font-medium">{folderLabel(r)}</div>
+                  )}
                   {r.toReview > 0 && <div className="text-xs text-primary">{r.toReview} group{r.toReview === 1 ? "" : "s"} to review</div>}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
