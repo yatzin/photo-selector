@@ -339,5 +339,39 @@ describe("AI runner", () => {
     expect(await review.undoGroup(a.id)).toEqual({ restored: 3 })
     for (const n of ["a1.jpg", "a2.jpg", "a3.jpg"]) await expect(fs.stat(path.join(folder, n))).resolves.toBeTruthy()
   }, 60_000)
+
+  it("queues a scan for each listed folder that has never been scanned", async () => {
+    const other = path.join(upload, "other")
+    await fs.rm(other, { recursive: true, force: true })
+    await fs.mkdir(other, { recursive: true })
+    for (const n of ["x1.jpg", "x2.jpg"]) await sharp(scene("a", 0)).jpeg().toFile(path.join(other, n))
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+
+    const folders = [
+      { root: "upload" as const, folder: "burst", imageCount: 6, includeDays: false },
+      { root: "upload" as const, folder: "other", imageCount: 2, includeDays: false },
+      { root: "upload" as const, folder: "tiny", imageCount: 1, includeDays: false },
+    ]
+    expect(await runner.queueUnscanned(folders, null)).toEqual({ queued: 1 })
+    await runner.drainRunner()
+    expect(await prisma.aiRun.count({ where: { folder: "other" } })).toBe(1)
+    expect(await prisma.aiRun.count({ where: { folder: "burst" } })).toBe(1)
+    expect(await runner.queueUnscanned(folders, null)).toEqual({ queued: 0 })
+  }, 60_000)
+
+  it("clears waiting scans but leaves running and finished ones", async () => {
+    const mk = (folder: string, status: "QUEUED" | "ANALYZING" | "DONE") => prisma.aiRun.create({ data: { root: "upload", folder, status } })
+    await mk("q1", "QUEUED")
+    await mk("q2", "QUEUED")
+    const running = await mk("r", "ANALYZING")
+    const done = await mk("d", "DONE")
+    // A finished scan put back in the queue by Retry keeps its results.
+    const retried = await prisma.aiRun.create({ data: { root: "upload", folder: "t", status: "QUEUED", startedAt: new Date(), groupedAt: new Date() } })
+    expect(await runner.clearQueue()).toEqual({ removed: 3 })
+    expect((await prisma.aiRun.findMany({ select: { id: true } })).map((r) => r.id).sort()).toEqual([running.id, done.id, retried.id].sort())
+    expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: retried.id } })).status).toBe("CANCELLED")
+  }, 60_000)
 })
 

@@ -2,6 +2,9 @@ import { safeSegments } from "@/lib/media"
 
 // Pure rules for acting on a reviewed group.
 
+/** A folder needs at least this many photos to have anything to compare. */
+export const MIN_SCAN_IMAGES = 2
+
 /** Folder string as stored on a run ("a/b", "" = root) → safe segments, or null. */
 export function scanFolderSegments(folder: string): string[] | null {
   if (folder === "") return []

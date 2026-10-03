@@ -8,12 +8,13 @@ import { Loader2, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { startRunAction } from "@/lib/actions/ai"
 import { ROOT_LABELS, type RootKey } from "@/lib/media"
+import { MIN_SCAN_IMAGES } from "@/lib/ai/review"
 
 type Folder = { root: RootKey; folder: string; imageCount: number; includeDays: boolean }
 
 export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; ready: boolean; isAdmin: boolean }) {
   const router = useRouter()
-  const options = folders.filter((f) => f.imageCount >= 2)
+  const options = folders.filter((f) => f.imageCount >= MIN_SCAN_IMAGES)
   const [value, setValue] = useState(options[0] ? `${options[0].root}|${options[0].folder}` : "")
   const [fresh, setFresh] = useState(false)
   const [busy, setBusy] = useState(false)

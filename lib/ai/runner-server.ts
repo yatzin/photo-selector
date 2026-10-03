@@ -13,7 +13,7 @@ import { fingerprintImage } from "@/lib/ai/fingerprint"
 import { groupPhotos, type GroupInput } from "@/lib/ai/grouping"
 import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
-import { folderKey, scanFolderSegments } from "@/lib/ai/review"
+import { folderKey, MIN_SCAN_IMAGES, scanFolderSegments } from "@/lib/ai/review"
 import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
 import { coveredByMonthScan, dayFolderNames, monthScanDays } from "@/lib/ai/month-scan"
 import type { AiRun } from "@/app/generated/prisma/client"
@@ -77,6 +77,37 @@ export async function createRun(input: { root: string; folder: string; fresh: bo
   const run = await prisma.aiRun.create({ data: { root: input.root, folder, fresh: input.fresh, includeDays, createdById: input.userId } })
   kickRunner()
   return { runId: run.id }
+}
+
+/**
+ * "Scan all": queues a separate scan for every folder in `folders` (the
+ * picker's list) that has enough photos and no scan on record yet.
+ */
+export async function queueUnscanned(
+  folders: { root: string; folder: string; imageCount: number }[],
+  userId: string | null
+): Promise<{ queued: number }> {
+  const known = new Set((await prisma.aiRun.findMany({ select: { root: true, folder: true } })).map((r) => `${r.root}|${r.folder}`))
+  let queued = 0
+  for (const f of folders) {
+    if (f.imageCount < MIN_SCAN_IMAGES || known.has(`${f.root}|${f.folder}`)) continue
+    const r = await createRun({ root: f.root, folder: f.folder, fresh: false, userId })
+    if ("runId" in r) queued++
+  }
+  return { queued }
+}
+
+/**
+ * Takes every waiting scan out of the queue. A new scan that never started is
+ * deleted; one put back in the queue by Retry keeps its results and returns
+ * to Cancelled. Running and finished scans stay.
+ */
+export async function clearQueue(): Promise<{ removed: number }> {
+  const [fresh, retried] = await prisma.$transaction([
+    prisma.aiRun.deleteMany({ where: { status: "QUEUED", startedAt: null } }),
+    prisma.aiRun.updateMany({ where: { status: "QUEUED" }, data: { status: "CANCELLED", finishedAt: new Date() } }),
+  ])
+  return { removed: fresh.count + retried.count }
 }
 
 /** Retry failed groups / resume a cancelled run. */

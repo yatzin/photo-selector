@@ -7,7 +7,8 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { aiReady } from "@/lib/ai/config"
 import { scanFolderSegments } from "@/lib/ai/review"
-import { abortRun, createRun, requeueRun } from "@/lib/ai/runner-server"
+import { abortRun, clearQueue, createRun, queueUnscanned, requeueRun } from "@/lib/ai/runner-server"
+import { listScanFolders } from "@/lib/library-server"
 import { dismissGroup, resolveGroup, undoGroup, trashGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
@@ -38,6 +39,22 @@ export async function startRunAction(input: { root: string; folder: string; fres
   if (!parsed.success) return { error: "Invalid request." }
   if (!(await aiReady())) return { error: "AI is not set up. Ask an admin to configure Settings → AI." }
   const result = await createRun({ ...parsed.data, userId: session.user.id })
+  refresh()
+  return result
+}
+
+/** Queues a separate scan for every folder in the picker that has never been scanned. */
+export async function queueUnscannedAction(): Promise<{ error: string } | { queued: number }> {
+  const session = await requireUser()
+  if (!(await aiReady())) return { error: "AI is not set up. Ask an admin to configure Settings → AI." }
+  const result = await queueUnscanned(await listScanFolders(), session.user.id)
+  refresh()
+  return result
+}
+
+export async function clearQueueAction(): Promise<{ removed: number }> {
+  await requireUser()
+  const result = await clearQueue()
   refresh()
   return result
 }
