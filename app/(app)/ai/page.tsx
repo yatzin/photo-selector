@@ -8,27 +8,35 @@ import { isRootKey } from "@/lib/media"
 import { cn } from "@/lib/utils"
 import { NewScanForm } from "@/components/ai/new-scan-form"
 import { QueueButtons } from "@/components/ai/queue-buttons"
-import { MIN_SCAN_IMAGES } from "@/lib/ai/review"
+import { MIN_SCAN_IMAGES, pageWindow } from "@/lib/ai/review"
+import { Pager } from "@/components/ai/pager"
 import { RunsTable, type RunRow } from "@/components/ai/runs-table"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 
-export default async function AiPage({ searchParams }: { searchParams: Promise<{ by?: string }> }) {
+const RUNS_PER_PAGE = 25
+
+export default async function AiPage({ searchParams }: { searchParams: Promise<{ by?: string; page?: string }> }) {
   const session = await auth()
   if (!session) redirect("/login")
-  const { by } = await searchParams
+  const { by, page: pageParam } = await searchParams
 
   // Filter buttons: everyone, then each person who has started a scan (you first).
   const starters = await prisma.user.findMany({ where: { aiRuns: { some: {} } }, select: { id: true, name: true }, orderBy: { name: "asc" } })
   starters.sort((a, b) => Number(b.id === session.user.id) - Number(a.id === session.user.id))
   const filterBy = starters.some((u) => u.id === by) ? by : undefined
 
+  // Oldest first, the order the queue runs in, so the next scan up is on top.
+  const runFilter = filterBy ? { createdById: filterBy } : {}
+  const { page, pages, skip, take } = pageWindow(await prisma.aiRun.count({ where: runFilter }), pageParam, RUNS_PER_PAGE)
+
   const [ready, folders, runs, anyActive, scanned, queued] = await Promise.all([
     aiReady(),
     listScanFolders(),
     prisma.aiRun.findMany({
-      where: filterBy ? { createdById: filterBy } : {},
-      orderBy: { createdAt: "desc" },
-      take: 50,
+      where: runFilter,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      skip,
+      take,
       include: { createdBy: { select: { name: true } }, _count: { select: { groups: { where: { status: "ANALYZED" } } } } },
     }),
     // Keep refreshing while any scan runs, even one the filter hides.
@@ -59,7 +67,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
       <NewScanForm folders={folders} ready={ready} isAdmin={session.user.role === "ADMIN"} />
       <section className="space-y-3">
         <h2 className="font-semibold">Scans</h2>
-        {starters.length > 1 && (
+        {starters.length > 0 && (
           <nav aria-label="Started by" className="flex flex-wrap items-center gap-1.5">
             {[{ id: undefined, name: "Everyone" }, ...starters.map((u) => ({ id: u.id, name: u.id === session.user.id ? `${u.name} (you)` : u.name }))].map((u) => (
               <Link
@@ -77,6 +85,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
           </nav>
         )}
         <RunsTable runs={rows} />
+        {pages > 1 && <Pager href={(n) => `/ai?${filterBy ? `by=${filterBy}&` : ""}page=${n}`} page={page} pages={pages} />}
       </section>
       <AutoRefresh active={anyActive > 0} />
     </div>
