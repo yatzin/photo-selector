@@ -20,7 +20,7 @@ export function SettingsNav({ sections, active }: { sections: SettingsSection[];
                 className={cn(
                   "relative flex items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
                   current
-                    ? "bg-primary/10 text-primary"
+                    ? "bg-primary/10 text-link"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                 )}
               >

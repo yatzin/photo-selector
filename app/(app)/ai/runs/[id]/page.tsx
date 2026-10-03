@@ -70,7 +70,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
           <Link
             key={t.id}
             href={`/ai/runs/${id}?tab=${t.id}`}
-            className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-medium", t.id === active.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}
+            className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-medium", t.id === active.id ? "border-primary text-link" : "border-transparent text-muted-foreground hover:text-foreground")}
           >
             {t.label} <span className="text-xs text-muted-foreground">({count(t.statuses)})</span>
           </Link>

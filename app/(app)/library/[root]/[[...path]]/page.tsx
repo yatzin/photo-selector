@@ -65,7 +65,7 @@ export default async function LibraryPage({
           <Lock className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <span>
             An AI scan is reading this folder, so moving, deleting and rotating are paused until it finishes.{" "}
-            <Link href="/ai" className="font-medium text-primary underline-offset-2 hover:underline">View scan</Link>
+            <Link href="/ai" className="font-medium text-link underline-offset-2 hover:underline">View scan</Link>
           </span>
         </div>
       )}
@@ -79,7 +79,7 @@ export default async function LibraryPage({
               href={libraryHref(root, [...segments, f.name])}
               className="flex items-center gap-3 rounded-lg border bg-card p-4 transition-colors hover:bg-muted/40"
             >
-              <Folder className="h-5 w-5 shrink-0 text-primary" strokeWidth={1.5} />
+              <Folder className="h-5 w-5 shrink-0 text-link" strokeWidth={1.5} />
               <div className="min-w-0">
                 <div className="truncate font-medium">{f.name}</div>
                 <div className="text-xs text-muted-foreground">{f.mediaCount.toLocaleString()} items</div>

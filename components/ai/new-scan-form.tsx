@@ -37,7 +37,7 @@ export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; re
       {!ready && (
         <p className="text-sm text-muted-foreground">
           AI isn&apos;t set up yet.{" "}
-          {isAdmin ? <Link href="/settings?tab=ai" className="text-primary underline-offset-2 hover:underline">Open Settings → AI</Link> : "Ask an admin to set it up."}
+          {isAdmin ? <Link href="/settings?tab=ai" className="text-link underline-offset-2 hover:underline">Open Settings → AI</Link> : "Ask an admin to set it up."}
         </p>
       )}
       <div className="flex flex-wrap items-center gap-3">

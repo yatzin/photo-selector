@@ -59,11 +59,11 @@ export function RunsTable({ runs }: { runs: RunRow[] }) {
               <tr key={r.id}>
                 <td className="px-4 py-3">
                   {r.groupCount > 0 ? (
-                    <Link href={`/ai/runs/${r.id}`} className="font-medium hover:text-primary hover:underline underline-offset-2">{folderLabel(r)}</Link>
+                    <Link href={`/ai/runs/${r.id}`} className="font-medium hover:text-link hover:underline underline-offset-2">{folderLabel(r)}</Link>
                   ) : (
                     <div className="font-medium">{folderLabel(r)}</div>
                   )}
-                  {r.toReview > 0 && <div className="text-xs text-primary">{r.toReview} group{r.toReview === 1 ? "" : "s"} to review</div>}
+                  {r.toReview > 0 && <div className="text-xs text-link">{r.toReview} group{r.toReview === 1 ? "" : "s"} to review</div>}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                   {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}

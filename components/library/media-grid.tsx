@@ -414,7 +414,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
                     aria-pressed={sizeKey === k}
                     className={cn(
                       "h-7 w-7 rounded-md text-xs font-medium uppercase",
-                      sizeKey === k ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+                      sizeKey === k ? "bg-primary/10 text-link" : "text-muted-foreground hover:text-foreground"
                     )}
                   >
                     {k}
