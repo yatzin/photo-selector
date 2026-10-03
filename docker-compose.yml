@@ -17,8 +17,11 @@ services:
     environment:
       # The NAS user the app acts as when moving or deleting photos. Use the
       # IDs of a user with read/write access to the Photo share: `id <user>`.
+      # The app gets only this ONE group, not all of the user's groups, so pick
+      # the group the share is open to. On UGOS that's usually admin (10), not
+      # users (100). Settings → Storage shows whether the folders can be read.
       PUID: "1000"
-      PGID: "100"
+      PGID: "10"
 
       # Encrypts/signs login sessions. Generate your own: `openssl rand -base64 32`.
       # Changing it later signs everyone out.

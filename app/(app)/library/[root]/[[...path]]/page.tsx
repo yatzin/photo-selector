@@ -27,8 +27,9 @@ export default async function LibraryPage({
         <FolderX className="h-8 w-8 mb-3 text-muted-foreground/60" strokeWidth={1.5} />
         <p className="font-medium">{ROOT_LABELS[root]} isn&apos;t available</p>
         <p className="text-sm text-muted-foreground mt-1 max-w-md">
-          The app can&apos;t read <code className="font-mono">{status.path}</code>. Check the volume mapping in
-          docker-compose.yml, or set <code className="font-mono">{status.envName}</code>.
+          The app can&apos;t open <code className="font-mono">{status.path}</code>. Check the volume mapping in
+          docker-compose.yml, and that PUID/PGID name a NAS user and group allowed into the share (on UGOS the
+          share&apos;s group is often <code className="font-mono">admin</code>, gid 10).
         </p>
       </div>
     )

@@ -31,6 +31,15 @@ export type RootStatus = {
   writable: boolean
 }
 
+async function canList(p: string): Promise<boolean> {
+  try {
+    await (await fs.opendir(p)).close()
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function canAccess(p: string, mode: number): Promise<boolean> {
   try {
     await fs.access(p, mode)
@@ -42,7 +51,10 @@ async function canAccess(p: string, mode: number): Promise<boolean> {
 
 export async function rootStatus(key: RootKey): Promise<RootStatus> {
   const p = rootPath(key)
-  const [readable, writable] = await Promise.all([canAccess(p, constants.R_OK), canAccess(p, constants.W_OK)])
+  // "Readable" means the folder can actually be listed. A permission check
+  // alone isn't enough: NAS shares controlled by ACLs (UGOS, Synology) can pass
+  // access() for a user who is then refused when opening the folder.
+  const [readable, writable] = await Promise.all([canList(p), canAccess(p, constants.W_OK)])
   return { key, path: p, envName: ENV_NAMES[key], readable, writable }
 }
 
