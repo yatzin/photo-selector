@@ -19,7 +19,8 @@ import type { AiRun } from "@/app/generated/prisma/client"
 
 // Runs AI review scans in the background, one at a time. All state lives in
 // the database, so a restart resumes: a run without groupedAt is grouped
-// (again), a grouped run continues with its PENDING groups.
+// (again), a grouped run continues with its PENDING groups. A new scan of a
+// folder takes over the earlier scans' unreviewed groups (replaceEarlierGroups).
 
 const POLL_MS = 5_000
 // Photos are numbered 1..n for the AI in this order; the same order maps its
@@ -74,6 +75,8 @@ export async function requeueRun(runId: string): Promise<{ error: string } | { o
   const run = await prisma.aiRun.findUnique({ where: { id: runId } })
   if (!run) return { error: "That scan no longer exists." }
   if ((ACTIVE as readonly string[]).includes(run.status)) return { error: "That scan is still running." }
+  const newer = await prisma.aiRun.findFirst({ where: { root: run.root, folder: run.folder, status: { in: [...ACTIVE] } }, select: { id: true } })
+  if (newer) return { error: "Another scan of this folder is running or waiting. Try again when it's done." }
   await prisma.$transaction([
     prisma.aiGroup.updateMany({ where: { runId, status: "FAILED" }, data: { status: "PENDING", error: null } }),
     prisma.aiRun.update({ where: { id: runId }, data: { status: "QUEUED", error: null, finishedAt: null } }),
@@ -257,13 +260,14 @@ async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiCon
   const snapshot: Snapshot = Object.fromEntries(listing)
   await prisma.aiRun.update({ where: { id: run.id }, data: { snapshot: JSON.stringify(snapshot) } })
 
-  // Earlier unfinished groups of this folder are replaced by this run.
-  await prisma.aiGroup.deleteMany({ where: { root, folder: run.folder, status: { in: ["PENDING", "ANALYZED", "FAILED"] } } })
+  await replaceEarlierGroups(run, root, listing)
 
+  // Photos already in a group (reviewed, or analyzed and waiting) are skipped
+  // unless starting fresh; a changed photo has a new version and is redone.
   const settled = new Set<string>()
   if (!run.fresh) {
     const done = await prisma.aiGroupPhoto.findMany({
-      where: { group: { root, folder: run.folder, status: { in: ["RESOLVED", "DISMISSED"] } } },
+      where: { group: { root, folder: run.folder, status: { in: ["RESOLVED", "DISMISSED", "ANALYZED"] } } },
       select: { name: true, version: true },
     })
     for (const p of done) settled.add(`${p.name}\0${p.version}`)
@@ -301,4 +305,34 @@ async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiCon
     where: { id: run.id },
     data: { status: "ANALYZING", groupedAt: new Date(), photoCount: inputs.length, groupCount: groups.length, analyzedCount: 0, failedCount: 0 },
   })
+}
+
+/**
+ * Removes the unreviewed groups this run takes over: this run's own (when
+ * grouping again after a restart), every earlier pending or failed group, and
+ * earlier analyzed groups too when starting fresh or when one of their photos
+ * has changed. Earlier scans that lost groups get their counts updated, and
+ * are removed when nothing is left in them.
+ */
+async function replaceEarlierGroups(run: AiRun, root: RootKey, listing: Map<string, string>) {
+  const open = await prisma.aiGroup.findMany({
+    where: { root, folder: run.folder, status: { in: ["PENDING", "ANALYZED", "FAILED"] } },
+    select: { id: true, runId: true, status: true, photos: { select: { name: true, version: true } } },
+  })
+  const replaced = open.filter(
+    (g) => g.runId === run.id || run.fresh || g.status !== "ANALYZED" || g.photos.some((p) => listing.get(p.name) !== p.version)
+  )
+  if (!replaced.length) return
+  await prisma.aiGroup.deleteMany({ where: { id: { in: replaced.map((g) => g.id) } } })
+
+  for (const runId of new Set(replaced.map((g) => g.runId))) {
+    if (runId === run.id) continue
+    const [total, analyzed, failed] = await Promise.all([
+      prisma.aiGroup.count({ where: { runId } }),
+      prisma.aiGroup.count({ where: { runId, status: { in: ["ANALYZED", "RESOLVED", "DISMISSED"] } } }),
+      prisma.aiGroup.count({ where: { runId, status: "FAILED" } }),
+    ])
+    if (total === 0) await prisma.aiRun.deleteMany({ where: { id: runId } })
+    else await prisma.aiRun.updateMany({ where: { id: runId }, data: { groupCount: total, analyzedCount: analyzed, failedCount: failed } })
+  }
 }

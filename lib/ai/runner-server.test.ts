@@ -183,6 +183,78 @@ describe("AI runner", () => {
     expect((await groupsOf(runId)).every((g) => g.status === "ANALYZED")).toBe(true)
   }, 60_000)
 
+  it("a re-scan keeps the earlier scan's analyzed groups and redoes only its failed ones", async () => {
+    behaviours = [{ status: 400 }] // first group (a*) fails, second (b*) is analyzed
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+
+    calls = 0
+    const second = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in second) throw new Error(second.error)
+    await runner.drainRunner()
+
+    expect(calls).toBe(1)
+    const kept = await groupsOf(first.runId)
+    expect(kept.map((g) => [g.status, g.photos.map((p) => p.name).sort()])).toEqual([["ANALYZED", ["b1.jpg", "b2.jpg", "b3.jpg"]]])
+    const old = await prisma.aiRun.findUniqueOrThrow({ where: { id: first.runId } })
+    expect([old.groupCount, old.analyzedCount, old.failedCount]).toEqual([1, 1, 0])
+    const redone = await groupsOf(second.runId)
+    expect(redone.map((g) => [g.status, g.photos.map((p) => p.name).sort()])).toEqual([["ANALYZED", ["a1.jpg", "a2.jpg", "a3.jpg"]]])
+  }, 60_000)
+
+  it("a re-scan redoes a kept group whose photo changed since it was analyzed", async () => {
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+    await fs.utimes(path.join(folder, "a1.jpg"), new Date(), new Date(Date.now() + 60_000))
+
+    const second = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in second) throw new Error(second.error)
+    await runner.drainRunner()
+
+    expect((await groupsOf(first.runId)).map((g) => g.photos.map((p) => p.name).sort())).toEqual([["b1.jpg", "b2.jpg", "b3.jpg"]])
+    expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: first.runId } })).groupCount).toBe(1)
+    expect((await groupsOf(second.runId)).map((g) => g.photos.map((p) => p.name).sort())).toEqual([["a1.jpg", "a2.jpg", "a3.jpg"]])
+  }, 60_000)
+
+  it("start fresh takes over every unreviewed group and removes an older scan left empty", async () => {
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+
+    const second = await runner.createRun({ root: "upload", folder: "burst", fresh: true, userId: null })
+    if ("error" in second) throw new Error(second.error)
+    await runner.drainRunner()
+
+    expect(await prisma.aiRun.findUnique({ where: { id: first.runId } })).toBeNull()
+    expect(await groupsOf(second.runId)).toHaveLength(2)
+  }, 60_000)
+
+  it("start fresh keeps an older scan that still has reviewed groups, with its count updated", async () => {
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+    const [a] = await groupsOf(first.runId)
+    await prisma.aiGroup.update({ where: { id: a.id }, data: { status: "DISMISSED" } })
+
+    const second = await runner.createRun({ root: "upload", folder: "burst", fresh: true, userId: null })
+    if ("error" in second) throw new Error(second.error)
+    await runner.drainRunner()
+
+    const old = await prisma.aiRun.findUniqueOrThrow({ where: { id: first.runId } })
+    expect([old.groupCount, old.analyzedCount, old.failedCount]).toEqual([1, 1, 0])
+  }, 60_000)
+
+  it("refuses to retry an older scan while a newer scan of the same folder is running", async () => {
+    behaviours = [{ status: 400 }, { status: 400 }]
+    const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in first) throw new Error(first.error)
+    await runner.drainRunner()
+    await prisma.aiRun.create({ data: { root: "upload", folder: "burst", fresh: false, status: "QUEUED" } })
+    expect(await runner.requeueRun(first.runId)).toEqual({ error: expect.stringMatching(/another scan/i) })
+  }, 60_000)
+
   it("resumes an analysis interrupted by a restart", async () => {
     const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
     if ("error" in run) throw new Error(run.error)
