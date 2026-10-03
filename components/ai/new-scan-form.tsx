@@ -45,7 +45,7 @@ export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; re
           value={value}
           onChange={(e) => setValue(e.target.value)}
           aria-label="Folder to scan"
-          className="h-8 min-w-64 max-w-full rounded-lg border border-input bg-transparent px-2 text-sm"
+          className="h-8 min-w-64 max-w-full rounded-lg border border-input bg-background text-foreground px-2 text-sm"
         >
           {options.map((f) => (
             <option key={`${f.root}|${f.folder}`} value={`${f.root}|${f.folder}`}>

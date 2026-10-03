@@ -148,7 +148,7 @@ export function AiSettings({ initial, hasStoredKey, keyUnreadable }: { initial: 
             <Input id="ai-window" inputMode="numeric" value={form.groupWindowSeconds} onChange={(e) => set("groupWindowSeconds", e.target.value)} />
           </Field>
           <Field id="ai-sim" label="How similar" hint="Loose groups more; strict only near-identical shots.">
-            <select id="ai-sim" value={form.similarity} onChange={(e) => set("similarity", e.target.value)} className="h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm">
+            <select id="ai-sim" value={form.similarity} onChange={(e) => set("similarity", e.target.value)} className="h-8 w-full rounded-lg border border-input bg-background text-foreground px-2 text-sm">
               <option value="strict">Strict</option>
               <option value="similar">Similar</option>
               <option value="loose">Loose</option>

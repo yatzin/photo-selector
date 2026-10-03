@@ -399,7 +399,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
                 value={order}
                 onChange={(e) => setOrder(e.target.value as Order)}
                 aria-label="Sort order"
-                className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
+                className="h-8 rounded-lg border border-input bg-background text-foreground px-2 text-sm"
               >
                 <option value="newest">Newest first</option>
                 <option value="oldest">Oldest first</option>
