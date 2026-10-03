@@ -10,6 +10,7 @@ import { mediaUrl } from "@/lib/format"
 import { dismissGroupAction, resolveGroupAction, undoGroupAction } from "@/lib/actions/ai"
 import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
+import { PhotoImage } from "@/components/library/photo-image"
 
 export type ReviewPhoto = { name: string; rank: number | null; note: string | null; suggested: boolean; decision: "KEEP" | "TRASH" | null; current: FileEntry | null }
 
@@ -102,8 +103,7 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
                   selected ? "ring-[3px] ring-primary ring-offset-2 ring-offset-background" : "opacity-60 hover:opacity-90"
                 )}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element -- served from our own cache */}
-                <img src={mediaUrl(root, folder, p.name, "thumb", p.current.version)} alt={p.name} loading="lazy" className="h-full w-full object-cover" />
+                <PhotoImage src={mediaUrl(root, folder, p.name, "thumb", p.current.version)} alt={p.name} fallbackLabel={p.name} />
                 {p.rank !== null && <span className="absolute left-1.5 top-1.5 rounded-full bg-black/65 px-1.5 py-0.5 text-[11px] font-semibold text-white">#{p.rank}</span>}
                 {selected && <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground"><Check className="h-3.5 w-3.5" strokeWidth={3} /></span>}
               </button>

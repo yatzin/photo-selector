@@ -22,6 +22,7 @@
     "@libsql/client": "^0.17.0",
     "@prisma/adapter-libsql": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "@tanstack/react-virtual": "^3.14.13",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

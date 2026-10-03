@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, Download, FolderOutput, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { formatBytes, mediaUrl } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import type { FileEntry } from "@/lib/library-server"
 
 // Full-screen viewer. The cached thumbnail shows at once and the large
@@ -59,7 +60,8 @@ function Picture({ root, folder, item, onBackdrop }: { root: string; folder: str
   const preview = mediaUrl(root, folder, item.name, "preview", item.version)
   return (
     <div
-      className="relative h-full w-full"
+      // Shimmer over the blurred thumbnail until the full-size preview arrives.
+      className={cn("relative h-full w-full", loadedSrc !== preview && "shimmer")}
       onClick={(e) => {
         const img = e.currentTarget.querySelector("img")
         if (img && !onContent(e, img, img.naturalWidth, img.naturalHeight)) onBackdrop()

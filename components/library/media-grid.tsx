@@ -1,16 +1,19 @@
 "use client"
 
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useTransition } from "react"
+import { useCallback, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, FolderOutput, ImageOff, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, FolderOutput, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
+import { gridLayout } from "@/lib/grid-layout"
 import { Lightbox } from "./lightbox"
+import { PhotoImage } from "./photo-image"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
@@ -20,8 +23,17 @@ import { Lightbox } from "./lightbox"
 //
 // Keys: arrows move the focus, Space toggles it, Shift+arrows add a range,
 // Del deletes, M moves to Sort Dropoff, R / Shift+R rotate, Esc clears.
+//
+// Large folders: only the rows on screen (plus a few either side) exist in
+// the page, so 10,000 photos cost about as much as 100. Selection, sorting
+// and keys work on the full list, not on what is drawn.
 
 const SIZES = { s: 128, m: 192, l: 288 } as const
+const GAP = 8
+// Rows kept rendered above and below the visible ones.
+const OVERSCAN_ROWS = 3
+// A tile asks for its thumbnail only after this long on screen.
+const THUMB_DELAY_MS = 150
 type SizeKey = keyof typeof SIZES
 const ORDERS = ["newest", "oldest", "name"] as const
 type Order = (typeof ORDERS)[number]
@@ -36,19 +48,17 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function Tile({
-  root, folder, item, size, selected, focused, onClick, onDoubleClick, onToggle,
+  root, folder, item, selected, focused, onClick, onDoubleClick, onToggle,
 }: {
   root: string
   folder: string[]
   item: FileEntry
-  size: number
   selected: boolean
   focused: boolean
   onClick: (e: React.MouseEvent) => void
   onDoubleClick: () => void
   onToggle: () => void
 }) {
-  const [failed, setFailed] = useState(false)
   return (
     <div
       data-name={item.name}
@@ -58,28 +68,18 @@ function Tile({
         focused && !selected && "ring-2 ring-ring/60"
       )}
       // touch-action: no double-tap zoom, so a double-tap reaches onDoubleClick.
-      style={{ contentVisibility: "auto", containIntrinsicSize: `${size}px ${size}px`, touchAction: "manipulation" }}
+      style={{ touchAction: "manipulation" }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       title={item.name}
     >
-      {failed ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-2 text-muted-foreground">
-          <ImageOff className="h-6 w-6" strokeWidth={1.5} />
-          <span className="line-clamp-2 break-all text-center text-[11px]">{item.name}</span>
-        </div>
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element -- served from our own cache, already sized
-        <img
-          src={mediaUrl(root, folder, item.name, "thumb", item.version)}
-          alt={item.name}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          onError={() => setFailed(true)}
-          className={cn("h-full w-full object-cover transition-transform duration-150", selected && "scale-[0.94]")}
-        />
-      )}
+      <PhotoImage
+        src={mediaUrl(root, folder, item.name, "thumb", item.version)}
+        alt={item.name}
+        delayMs={THUMB_DELAY_MS}
+        fallbackLabel={item.name}
+        className={cn("transition-transform duration-150", selected && "scale-[0.94]")}
+      />
       {item.kind === "video" && (
         <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <span className="flex h-[28%] min-h-10 w-[28%] min-w-10 items-center justify-center rounded-full bg-black/55 text-white shadow-lg ring-1 ring-white/30 backdrop-blur-[2px]">
@@ -108,6 +108,15 @@ function Tile({
   )
 }
 
+/** Shown before the grid has measured its width (server render, first paint). */
+function SkeletonGrid({ tile }: { tile: number }) {
+  return (
+    <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${tile}px, 40vw), 1fr))` }} aria-hidden="true">
+      {Array.from({ length: 12 }, (_, i) => <div key={i} className="shimmer aspect-square rounded-md bg-muted" />)}
+    </div>
+  )
+}
+
 export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const router = useRouter()
   const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l"])
@@ -119,7 +128,22 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [, startTransition] = useTransition()
-  const gridRef = useRef<HTMLDivElement>(null)
+  // Measured on the client: the grid's width, the scrolling <main>, and how
+  // far below the top of the scroll area the grid starts (folders, toolbar).
+  const [frame, setFrame] = useState<{ width: number; scrollEl: HTMLElement | null; offset: number }>({ width: 0, scrollEl: null, offset: 0 })
+  const measureRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return
+    const scrollEl = el.closest("main") as HTMLElement | null
+    const measure = () => {
+      const offset = scrollEl ? el.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop : 0
+      setFrame((f) => (f.width === el.clientWidth && f.offset === offset && f.scrollEl === scrollEl ? f : { width: el.clientWidth, scrollEl, offset }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    if (scrollEl) ro.observe(scrollEl)
+    return () => ro.disconnect()
+  }, [])
 
   // Fresh data from the server (after an action or a new upload): anything
   // hidden optimistically is either gone for real or back (Undo).
@@ -232,14 +256,28 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const viewerIndex = viewer === null ? null : Math.min(viewer, items.length - 1)
   const viewerOpen = viewerIndex !== null && viewerIndex >= 0
 
-  const columns = () => {
-    const el = gridRef.current
-    if (!el) return 1
-    return Math.max(1, getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length)
-  }
+  const tile = SIZES[sizeKey]
+  // Phones get at least two columns, like the old 40vw rule.
+  const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length })
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- not memoized by the compiler; re-rendering it is the intended use
+  const virtualizer = useVirtualizer({
+    count: layout.rows,
+    getScrollElement: () => frame.scrollEl,
+    estimateSize: () => layout.rowHeight,
+    overscan: OVERSCAN_ROWS,
+    scrollMargin: frame.offset,
+  })
+  // Rows change height when the window or tile size changes.
+  useEffect(() => {
+    virtualizer.measure()
+  }, [virtualizer, layout.rowHeight])
+
+  const columns = () => layout.columns
 
   const scrollTo = (name: string) => {
-    gridRef.current?.querySelector(`[data-name="${CSS.escape(name)}"]`)?.scrollIntoView({ block: "nearest" })
+    const index = indexOf.get(name)
+    if (index !== undefined && layout.rows > 0) virtualizer.scrollToIndex(layout.rowOf(index), { align: "auto" })
   }
 
   // One key handler for both the grid and the viewer, so shortcuts work the same in each.
@@ -309,7 +347,6 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
 
   if (files.length === 0) return null
 
-  const tile = SIZES[sizeKey]
   const imageNames = chosen.filter((f) => f.kind === "image").map((f) => f.name)
   const names = chosen.map((f) => f.name)
 
@@ -389,25 +426,36 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
         )}
       </div>
 
-      <div
-        ref={gridRef}
-        className="grid gap-2"
-        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${tile}px, 40vw), 1fr))` }}
-      >
-        {items.map((item) => (
-          <Tile
-            key={item.name}
-            root={root}
-            folder={folder}
-            item={item}
-            size={tile}
-            selected={selected.has(item.name)}
-            focused={focus === item.name}
-            onClick={(e) => onTileClick(e, item.name)}
-            onDoubleClick={() => setViewer(indexOf.get(item.name) ?? 0)}
-            onToggle={() => toggle(item.name)}
-          />
-        ))}
+      <div ref={measureRef} className="relative w-full" style={{ height: layout.rows ? virtualizer.getTotalSize() : undefined }}>
+        {frame.width === 0 ? (
+          <SkeletonGrid tile={tile} />
+        ) : (
+          virtualizer.getVirtualItems().map((row) => (
+            <div
+              key={row.key}
+              className="absolute left-0 top-0 grid w-full"
+              style={{
+                transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`,
+                gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
+                gap: GAP,
+              }}
+            >
+              {items.slice(row.index * layout.columns, (row.index + 1) * layout.columns).map((item) => (
+                <Tile
+                  key={item.name}
+                  root={root}
+                  folder={folder}
+                  item={item}
+                  selected={selected.has(item.name)}
+                  focused={focus === item.name}
+                  onClick={(e) => onTileClick(e, item.name)}
+                  onDoubleClick={() => setViewer(indexOf.get(item.name) ?? 0)}
+                  onToggle={() => toggle(item.name)}
+                />
+              ))}
+            </div>
+          ))
+        )}
       </div>
 
       {viewerOpen && (
