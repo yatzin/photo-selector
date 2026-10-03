@@ -48,37 +48,126 @@ take of each, using any OpenAI-compatible vision model you host yourself.
 ## Install (Docker)
 
 Images are published to GitHub Container Registry on every push to `main`
-(`linux/amd64` and `linux/arm64`), tagged `latest` and `sha-<commit>`.
+(`linux/amd64` and `linux/arm64`), tagged `latest` and `sha-<commit>`:
+`ghcr.io/yatzin/photo-selector`.
 
-1. Copy [`docker-compose.yml`](docker-compose.yml) to the NAS.
-2. Edit it:
-   - the left-hand volume paths for your two photo folders and the app's data folder;
-   - `PUID` / `PGID` (see [Permissions](#permissions));
-   - `AUTH_SECRET` (`openssl rand -base64 32`);
-   - `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for the first admin account.
-3. `docker compose up -d`, then open `http://<nas>:3200`.
+### 1. Create a `docker-compose.yml`
 
-To update: `docker compose pull && docker compose up -d`. Database changes apply
-themselves on start.
+On the NAS (or anywhere with Docker and access to the photo folders):
+
+```yaml
+services:
+  photo-selector:
+    image: ghcr.io/yatzin/photo-selector:latest
+    container_name: photo-selector
+    ports:
+      - "3200:3200"
+    volumes:
+      # App data: database and thumbnail cache (~25 KB per photo). Not the photos.
+      - /volume1/docker/photo-selector:/data
+      # The two photo folders, and nothing else from the share. Left side = the
+      # NAS's own path for the share folder (UGOS: folder properties, or `ls /volume1`).
+      - "/volume1/Photo/Mobile Upload:/photos/upload"
+      - "/volume1/Photo/Sort Dropoff:/photos/dropoff"
+    environment:
+      # The NAS user and group the app acts as. See "File share permissions" below.
+      PUID: "1000"
+      PGID: "10"
+
+      # Signs login sessions. Generate your own: `openssl rand -base64 32`.
+      # Changing it later signs everyone out.
+      AUTH_SECRET: "replace-me"
+
+      # Optional: the URL you browse to, e.g. http://192.168.1.50:3200.
+      AUTH_URL: ""
+
+      # First admin account, created only when the database is first set up.
+      ADMIN_NAME: "Admin"
+      ADMIN_EMAIL: "you@example.com"
+      ADMIN_PASSWORD: "changeme-please"
+
+      TZ: "America/New_York"
+
+      # Optional: set to "off" to make thumbnails only when someone views them.
+      # THUMB_WORKER: "off"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3200/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+```
+
+The same file is in the repo: [`docker-compose.yml`](docker-compose.yml).
+
+### 2. Start it
+
+```sh
+docker compose up -d
+```
+
+Open `http://<nas>:3200` and sign in with the admin account. Check
+**Settings → Storage**: both folders should show a tick for *Read* and *Write*.
+
+### 3. Update
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+Database changes apply themselves on start.
 
 ### Folders
-
-The container sees only the two photo folders mapped in `docker-compose.yml`:
 
 | NAS share path                  | In container       | Env override          |
 | ------------------------------- | ------------------ | --------------------- |
 | `\\ugreen\Photo\Mobile Upload`  | `/photos/upload`   | `PHOTOS_UPLOAD_DIR`   |
 | `\\ugreen\Photo\Sort Dropoff`   | `/photos/dropoff`  | `PHOTOS_DROPOFF_DIR`  |
+| (app data)                      | `/data`            | `DATABASE_URL`, `PHOTOS_CACHE_DIR` |
 
-The database and thumbnail cache live in `/data` (about 25 KB of cache per photo).
+## File share permissions
 
-### Permissions
+The app runs as the user and group in `PUID` / `PGID`, so files it moves keep
+normal ownership on the share. That user needs:
 
-The app runs as `PUID:PGID` so moved files keep normal ownership. It gets only
-that **one** group, not all of the user's groups, so choose the group the share
-is open to. On UGOS that's usually `admin` (10), not `users` (100); `id <user>`
-over SSH lists the IDs. If a folder can't be opened, the library and
-Settings → Storage say so.
+| Folder | Access | Why |
+| --- | --- | --- |
+| Mobile Upload (`/photos/upload`) | **read + write**, including subfolders | Lists photos, moves picks out, moves deleted photos into its trash folder, writes rotations |
+| Sort Dropoff (`/photos/dropoff`) | **read + write** | Receives the photos you keep; deleting and rotating work there too |
+| App data (`/data`) | read + write | Database and thumbnail cache. The container makes it owned by `PUID:PGID` on start |
+
+Deleted photos go to a hidden `.photo-selector-trash` folder inside each photo
+folder, so Undo can put them back. It's emptied after 30 days. Both photo
+folders should be on the same volume so moves are instant. Across volumes, the
+app copies, verifies and then deletes, which is slower but safe.
+
+**Choosing PUID and PGID**
+
+1. Pick a NAS account that can open both folders over the network
+   (e.g. the account you use for `\\ugreen\Photo`).
+2. Over SSH, run `id <that-user>`:
+   ```
+   uid=1000(nasuser) gid=10(admin) groups=10(admin),100(users),1000(standard)
+   ```
+   `PUID` is the `uid`.
+3. For `PGID`, pick the group the share is actually open to. The app gets only
+   this one group, not all of the user's groups. On UGOS, shared folders are
+   usually controlled by an access list that admits `admin` (10), not `users`
+   (100), even though plain `ls -l` shows the folder as open to everyone.
+
+**Checking access**
+
+Settings → Storage and `http://<nas>:3200/api/health` report whether each
+folder can be read and written. If the library says *"Mobile Upload isn't
+available"*, the user/group can't open the folder. To test candidate groups
+from the NAS:
+
+```sh
+sudo docker exec photo-selector sh -c 'for g in 10 100 1000; do printf "gid %s: " $g; gosu 1000:$g ls /photos/upload >/dev/null 2>&1 && echo OK || echo denied; done'
+```
+
+Use a group that says `OK`, update `PGID`, and run `docker compose up -d`.
 
 ## AI setup
 
