@@ -387,5 +387,13 @@ describe("AI runner", () => {
     expect((await groupsOf(run.runId)).map((g) => g.status)).toEqual(["RESOLVED", "RESOLVED"])
     for (const n of ["a1.jpg", "b2.jpg", "b3.jpg"]) await fs.rm(path.join(tmp, "dropoff", n))
   }, 60_000)
+
+  it("locks a folder only while its scan is actually running, not while it waits in the queue", async () => {
+    const { folderLocked } = await import("./lock-server")
+    await prisma.aiRun.create({ data: { root: "upload", folder: "waiting", status: "QUEUED" } })
+    await prisma.aiRun.create({ data: { root: "upload", folder: "busy", status: "ANALYZING" } })
+    expect(await folderLocked("upload", ["waiting"])).toBe(false)
+    expect(await folderLocked("upload", ["busy"])).toBe(true)
+  }, 60_000)
 })
 

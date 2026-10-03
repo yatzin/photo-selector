@@ -10,6 +10,7 @@ import { isRootKey, mediaKind, ROOT_LABELS } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
 import { currentVersions } from "@/lib/ai/review-server"
 import { pageWindow, scanFolderSegments } from "@/lib/ai/review"
+import { folderLocked } from "@/lib/ai/lock-server"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { type ReviewPhoto } from "@/components/ai/review-group"
 import { ReviewList } from "@/components/ai/review-list"
@@ -54,6 +55,8 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
   )
 
   const running = run.status === "QUEUED" || run.status === "GROUPING" || run.status === "ANALYZING"
+  // Buttons lock only while a scan is actually reading this folder, not while one waits in the queue.
+  const locked = await folderLocked(run.root, segs)
   const where = `${ROOT_LABELS[run.root]}${segs.length ? ` / ${segs.join(" / ")}` : ""}${run.includeDays ? " — all days" : ""}`
 
   return (
@@ -67,7 +70,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
         </p>
       </div>
 
-      {running && (
+      {locked && (
         <div role="alert" className="flex items-start gap-3 rounded-lg border border-amber-500/50 bg-amber-500/15 px-4 py-3">
           <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="space-y-0.5 text-sm">
@@ -100,9 +103,9 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
         </p>
       ) : (
         <ReviewList
-          acceptAll={active.id === "review" && !running}
+          acceptAll={active.id === "review" && !locked}
           groups={groups.map((g) => ({
-            id: g.id, root: run.root as "upload" | "dropoff", folder: segs, status: g.status, reason: g.reason, error: g.error, locked: running,
+            id: g.id, root: run.root as "upload" | "dropoff", folder: segs, status: g.status, reason: g.reason, error: g.error, locked,
             photos: g.photos.map((p): ReviewPhoto => {
               const st = stats.get(p.name)
               const same = versions.get(p.name) === p.version

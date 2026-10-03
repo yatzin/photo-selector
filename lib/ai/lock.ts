@@ -2,6 +2,7 @@ import { folderKey } from "@/lib/ai/review"
 
 // A folder an AI scan is reading must not change under it: grouping lists
 // and fingerprints its files, and analysis numbers them in a fixed order.
+// Only running scans count (lock-server.ts); queued ones don't lock yet.
 // A scan reads one folder, so that folder is locked — plus, for a month scan
 // (see month-scan.ts), the day folders directly inside it.
 
