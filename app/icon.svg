@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- The sidebar logo: lucide "images" on the primary blue (oklch(0.488 0.243 264.376)). -->
+  <rect width="32" height="32" rx="8" fill="#1447e6"/>
+  <g transform="translate(6 6) scale(0.8333)" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16"/>
+    <path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2"/>
+    <circle cx="13" cy="7" r="1" fill="#ffffff"/>
+    <rect x="8" y="2" width="14" height="14" rx="2"/>
+  </g>
+</svg>
