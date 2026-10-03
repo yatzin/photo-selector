@@ -25,7 +25,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </header>
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
         <footer className="shrink-0 border-t border-border/60 px-4 py-2 text-center text-xs text-muted-foreground">
-          Photo Selector &middot; v{packageJson.version}
+          <a href="https://github.com/yatzin/photo-selector" target="_blank" rel="noopener noreferrer" className="hover:text-foreground hover:underline underline-offset-2">
+            Photo Selector
+          </a>{" "}
+          &middot; v{packageJson.version}
         </footer>
       </div>
     </div>
