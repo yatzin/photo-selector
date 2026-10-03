@@ -1,8 +1,9 @@
 import "server-only"
 import fs from "fs/promises"
-import { constants } from "fs"
+import { constants, type Dirent } from "fs"
 import path from "path"
 import { createTtlCache } from "@/lib/ttl-cache"
+import { monthScanDays } from "@/lib/ai/month-scan"
 import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, type MediaKind, type RootKey } from "@/lib/media"
 
 // Reads the photo library from the mounted folders. In the container these are
@@ -136,7 +137,8 @@ export function cacheDir(): string {
   return path.resolve(process.env.PHOTOS_CACHE_DIR || "/data/cache")
 }
 
-export type ScanFolder = { root: RootKey; folder: string; imageCount: number }
+/** `includeDays`: a year/month folder scanned together with its day folders (see lib/ai/month-scan.ts). */
+export type ScanFolder = { root: RootKey; folder: string; imageCount: number; includeDays: boolean }
 
 const scanFolderCache = createTtlCache(30_000)
 
@@ -145,20 +147,26 @@ export function listScanFolders(): Promise<ScanFolder[]> {
   return scanFolderCache.get("all", walkScanFolders)
 }
 
-/** Every folder in both roots (depth ≤ 6) with the number of images directly inside, for the AI scan picker. */
+/**
+ * Every folder in both roots (depth ≤ 6) with the number of images directly
+ * inside, for the AI scan picker. A month of day folders is one entry counting
+ * all its days, and the days themselves aren't listed.
+ */
 async function walkScanFolders(): Promise<ScanFolder[]> {
   const out: ScanFolder[] = []
+  const images = (entries: Dirent[]) => entries.filter((e) => e.isFile() && mediaKind(e.name) === "image").length
+  const read = (dir: string) => fs.readdir(dir, { withFileTypes: true }).catch(() => null)
   async function walk(root: RootKey, segments: string[], depth: number) {
-    let entries
-    try {
-      entries = await fs.readdir(path.join(rootPath(root), ...segments), { withFileTypes: true })
-    } catch {
-      return
-    }
-    const imageCount = entries.filter((e) => e.isFile() && mediaKind(e.name) === "image").length
-    out.push({ root, folder: segments.join("/"), imageCount })
+    const dir = path.join(rootPath(root), ...segments)
+    const entries = await read(dir)
+    if (!entries) return
+    const days = monthScanDays(segments, entries)
+    let imageCount = images(entries)
+    if (days) for (const day of days) imageCount += images((await read(path.join(dir, day))) ?? [])
+    out.push({ root, folder: segments.join("/"), imageCount, includeDays: days !== null })
     if (depth >= 6) return
-    for (const e of entries) if (e.isDirectory() && !isSkippedDir(e.name)) await walk(root, [...segments, e.name], depth + 1)
+    const skip = new Set(days ?? [])
+    for (const e of entries) if (e.isDirectory() && !isSkippedDir(e.name) && !skip.has(e.name)) await walk(root, [...segments, e.name], depth + 1)
   }
   for (const root of ROOT_KEYS) await walk(root, [], 0)
   return out

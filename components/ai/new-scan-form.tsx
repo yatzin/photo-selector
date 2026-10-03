@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { startRunAction } from "@/lib/actions/ai"
 import { ROOT_LABELS, type RootKey } from "@/lib/media"
 
-type Folder = { root: RootKey; folder: string; imageCount: number }
+type Folder = { root: RootKey; folder: string; imageCount: number; includeDays: boolean }
 
 export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; ready: boolean; isAdmin: boolean }) {
   const router = useRouter()
@@ -33,7 +33,7 @@ export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; re
 
   return (
     <div className="rounded-lg border bg-card p-4 space-y-3">
-      <h2 className="font-semibold">Find duplicates</h2>
+      <h2 className="font-semibold">Find similar</h2>
       {!ready && (
         <p className="text-sm text-muted-foreground">
           AI isn&apos;t set up yet.{" "}
@@ -49,7 +49,7 @@ export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; re
         >
           {options.map((f) => (
             <option key={`${f.root}|${f.folder}`} value={`${f.root}|${f.folder}`}>
-              {ROOT_LABELS[f.root]}{f.folder ? ` / ${f.folder.split("/").join(" / ")}` : ""} ({f.imageCount})
+              {ROOT_LABELS[f.root]}{f.folder ? ` / ${f.folder.split("/").join(" / ")}` : ""}{f.includeDays ? " — all days" : ""} ({f.imageCount})
             </option>
           ))}
         </select>
@@ -60,9 +60,17 @@ export function NewScanForm({ folders, ready, isAdmin }: { folders: Folder[]; re
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Run
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Scans one folder (not its subfolders). Photos you&apos;ve already reviewed there are skipped unless you start fresh.
-      </p>
+      <div className="space-y-1 text-xs text-muted-foreground">
+        <p>
+          Finds bursts of near-identical shots — photos taken moments apart that look alike — and has
+          the AI rank each burst so you can keep the best and trash the rest. Photos with nothing similar are left alone.
+        </p>
+        <p>
+          Scans one folder, not its subfolders; a year/month folder of day folders (&ldquo;all days&rdquo;) scans every
+          day in it. The folder is locked while the scan runs. Photos you&apos;ve already reviewed are skipped unless you
+          start fresh.
+        </p>
+      </div>
     </div>
   )
 }

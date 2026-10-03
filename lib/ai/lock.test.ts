@@ -19,4 +19,12 @@ describe("isFolderLocked", () => {
   it("is unlocked with no active scans", () => {
     expect(isFolderLocked([], "upload", ["jessi"])).toBe(false)
   })
+  it("also locks the day folders of a month scan, and only those", () => {
+    const month = [{ root: "upload", folder: "jessi/2025/10", includeDays: true }]
+    expect(isFolderLocked(month, "upload", ["jessi", "2025", "10"])).toBe(true)
+    expect(isFolderLocked(month, "upload", ["jessi", "2025", "10", "18"])).toBe(true)
+    expect(isFolderLocked(month, "upload", ["jessi", "2025", "10", "18", "deeper"])).toBe(false)
+    expect(isFolderLocked(month, "upload", ["jessi", "2025", "11", "18"])).toBe(false)
+    expect(isFolderLocked(month, "dropoff", ["jessi", "2025", "10", "18"])).toBe(false)
+  })
 })

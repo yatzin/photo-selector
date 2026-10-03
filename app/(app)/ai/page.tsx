@@ -25,7 +25,7 @@ export default async function AiPage() {
   const rows: RunRow[] = runs
     .filter((r) => isRootKey(r.root))
     .map((r) => ({
-      id: r.id, root: r.root as RunRow["root"], folder: r.folder, status: r.status,
+      id: r.id, root: r.root as RunRow["root"], folder: r.folder, includeDays: r.includeDays, status: r.status,
       groupCount: r.groupCount, analyzedCount: r.analyzedCount, failedCount: r.failedCount,
       toReview: r._count.groups, error: r.error, createdAt: r.createdAt.toISOString(), createdBy: r.createdBy?.name ?? null,
     }))

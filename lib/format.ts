@@ -19,6 +19,7 @@ export type MediaVariant = "thumb" | "preview" | "original"
 
 /** Image/video URL for a file; `version` makes it safe to cache forever. */
 export function mediaUrl(root: string, folder: string[], name: string, variant: MediaVariant, version: string): string {
-  const p = [...folder, name].map(encodeURIComponent).join("/")
+  // `name` may include a subfolder ("18/IMG_1.jpg", from a month scan).
+  const p = [...folder, ...name.split("/")].map(encodeURIComponent).join("/")
   return `/api/media/${root}/${p}?v=${variant}&k=${encodeURIComponent(version)}`
 }

@@ -23,4 +23,7 @@ describe("mediaUrl", () => {
       "/api/media/upload/jessi/Trip%202026/IMG%20%231.jpg?v=thumb&k=a-b-c"
     )
   })
+  it("keeps a month scan's day folder as its own path segment", () => {
+    expect(mediaUrl("upload", ["2025", "10"], "18/IMG_1.jpg", "thumb", "k")).toBe("/api/media/upload/2025/10/18/IMG_1.jpg?v=thumb&k=k")
+  })
 })

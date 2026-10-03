@@ -105,7 +105,8 @@ export async function moveToDropoff(folder: string[], names: string[]): Promise<
   return eachFile("upload", folder, names, async (file, name) => {
     const before = await fs.stat(file)
     const fromKey = cacheKey("upload", relOf("upload", file), before)
-    const dest = await moveNoClobber(file, dropoff, name)
+    // Straight into Dropoff, even from a day folder of a month scan ("18/IMG_1.jpg").
+    const dest = await moveNoClobber(file, dropoff, path.basename(name))
     await moveCached(fromKey, cacheKey("dropoff", relOf("dropoff", dest), await fs.stat(dest)))
   })
 }
@@ -118,7 +119,8 @@ export async function trashFiles(rootKey: RootKey, folder: string[], names: stri
   const batchId = trashBatchId(Date.now(), randomBytes(6).toString("hex"))
   const batchDir = path.join(rootPath(rootKey), TRASH_DIR, batchId, ...folder)
   const result = await eachFile(rootKey, folder, names, async (file, name) => {
-    await moveNoClobber(file, batchDir, name)
+    // `name` may sit in a subfolder ("18/IMG_1.jpg"); keep it so Undo puts it back there.
+    await moveNoClobber(file, path.join(batchDir, path.dirname(name)), path.basename(name))
   })
   return { ...result, batchId }
 }

@@ -81,6 +81,8 @@ model AiRun {
   /// Path inside the root, "/"-separated; "" = the root itself.
   folder        String
   fresh         Boolean     @default(false)
+  /// Month scan: also reads the day folders directly inside `folder` (see lib/ai/month-scan.ts).
+  includeDays   Boolean     @default(false)
   status        AiRunStatus @default(QUEUED)
   photoCount    Int         @default(0)
   groupCount    Int         @default(0)

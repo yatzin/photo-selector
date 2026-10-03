@@ -11,6 +11,7 @@ export type RunRow = {
   id: string
   root: RootKey
   folder: string
+  includeDays: boolean
   status: "QUEUED" | "GROUPING" | "ANALYZING" | "DONE" | "FAILED" | "CANCELLED"
   groupCount: number
   analyzedCount: number
@@ -25,8 +26,8 @@ const LABEL: Record<RunRow["status"], string> = {
   QUEUED: "Waiting", GROUPING: "Grouping photos", ANALYZING: "Asking the AI", DONE: "Done", FAILED: "Stopped", CANCELLED: "Cancelled",
 }
 
-const folderLabel = (r: { root: keyof typeof ROOT_LABELS; folder: string }) =>
-  `${ROOT_LABELS[r.root]}${r.folder ? ` / ${r.folder.split("/").join(" / ")}` : ""}`
+const folderLabel = (r: { root: keyof typeof ROOT_LABELS; folder: string; includeDays: boolean }) =>
+  `${ROOT_LABELS[r.root]}${r.folder ? ` / ${r.folder.split("/").join(" / ")}` : ""}${r.includeDays ? " — all days" : ""}`
 
 export function RunsTable({ runs }: { runs: RunRow[] }) {
   const router = useRouter()

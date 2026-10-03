@@ -15,6 +15,7 @@ import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
 import { folderKey, scanFolderSegments } from "@/lib/ai/review"
 import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
+import { coveredByMonthScan, dayFolderNames, monthScanDays } from "@/lib/ai/month-scan"
 import type { AiRun } from "@/app/generated/prisma/client"
 
 // Runs AI review scans in the background, one at a time. All state lives in
@@ -61,11 +62,19 @@ export async function createRun(input: { root: string; folder: string; fresh: bo
   } catch {
     return { error: "That folder doesn't exist." }
   }
+  const base = rootPath(input.root)
+  // A day of a year/month/day folder is scanned with its month, never alone:
+  // two open reviews would otherwise hold the same photos.
+  const month = coveredByMonthScan(segs)
+  if (month && monthScanDays(month, await readEntries(path.join(base, ...month)))) {
+    return { error: `That day is part of a month scan. Scan ${month.join(" / ")} instead.` }
+  }
+  const includeDays = monthScanDays(segs, await readEntries(path.join(base, ...segs))) !== null
   const folder = folderKey(segs)
   // A second scan would replace the first one's unreviewed results.
   const busy = await prisma.aiRun.findFirst({ where: { root: input.root, folder, status: { in: [...ACTIVE] } }, select: { id: true } })
   if (busy) return { error: "A scan of this folder is already running or waiting." }
-  const run = await prisma.aiRun.create({ data: { root: input.root, folder, fresh: input.fresh, createdById: input.userId } })
+  const run = await prisma.aiRun.create({ data: { root: input.root, folder, fresh: input.fresh, includeDays, createdById: input.userId } })
   kickRunner()
   return { runId: run.id }
 }
@@ -156,7 +165,7 @@ async function processRun(run: AiRun) {
     // against the folder as it is now. Each group still checks its own photos.
     let snapshotNow: string
     try {
-      snapshotNow = JSON.stringify(Object.fromEntries(await listImageVersions(dir)))
+      snapshotNow = JSON.stringify(Object.fromEntries(await listImageVersions(dir, run.includeDays)))
     } catch (error) {
       return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) }, picked)
     }
@@ -181,7 +190,7 @@ async function processRun(run: AiRun) {
       {
         instructions: config.instructions,
         isCancelled: () => stopped(run.id),
-        checkFolder: () => (snapshot ? folderChange(dir, snapshot) : Promise.resolve(null)),
+        checkFolder: () => (snapshot ? folderChange(dir, snapshot, run.includeDays) : Promise.resolve(null)),
         callAi: (messages) => chatWithRetry(cfg, messages, { signal: controller.signal }),
         prepareImages: async (groupId) => {
           const photos = await prisma.aiGroupPhoto.findMany({ where: { groupId }, orderBy: PHOTO_ORDER })
@@ -226,8 +235,15 @@ async function processRun(run: AiRun) {
   }
 }
 
-/** Every image directly in `dir` with its current version. */
-async function listImageVersions(dir: string): Promise<Map<string, string>> {
+async function readEntries(dir: string) {
+  return fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+}
+
+/**
+ * Every image directly in `dir` with its current version — and, for a month
+ * scan, every image in its day folders too, keyed "18/IMG_1.jpg".
+ */
+async function listImageVersions(dir: string, includeDays = false): Promise<Map<string, string>> {
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -235,20 +251,25 @@ async function listImageVersions(dir: string): Promise<Map<string, string>> {
     throw new Error("The folder no longer exists.")
   }
   const out = new Map<string, string>()
-  for (const e of entries) {
-    if (!e.isFile() || mediaKind(e.name) !== "image") continue
+  const add = async (rel: string) => {
     try {
-      out.set(e.name, fileVersion(await fs.stat(path.join(dir, e.name))))
+      out.set(rel, fileVersion(await fs.stat(path.join(dir, rel))))
     } catch {
       // removed between readdir and stat
+    }
+  }
+  for (const e of entries) if (e.isFile() && mediaKind(e.name) === "image") await add(e.name)
+  if (includeDays) {
+    for (const day of dayFolderNames(entries)) {
+      for (const e of await readEntries(path.join(dir, day))) if (e.isFile() && mediaKind(e.name) === "image") await add(`${day}/${e.name}`)
     }
   }
   return out
 }
 
-async function folderChange(dir: string, snapshot: Snapshot): Promise<string | null> {
+async function folderChange(dir: string, snapshot: Snapshot, includeDays: boolean): Promise<string | null> {
   try {
-    return describeChange(diffSnapshot(snapshot, await listImageVersions(dir)))
+    return describeChange(diffSnapshot(snapshot, await listImageVersions(dir, includeDays)))
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
@@ -256,7 +277,7 @@ async function folderChange(dir: string, snapshot: Snapshot): Promise<string | n
 
 async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiConfig) {
   const dir = path.join(rootPath(root), ...segs)
-  const listing = await listImageVersions(dir)
+  const listing = await listImageVersions(dir, run.includeDays)
   const snapshot: Snapshot = Object.fromEntries(listing)
   await prisma.aiRun.update({ where: { id: run.id }, data: { snapshot: JSON.stringify(snapshot) } })
 
@@ -289,7 +310,7 @@ async function groupRun(run: AiRun, root: RootKey, segs: string[], config: AiCon
   }
 
   // Grouping takes a while on a big folder; don't save groups built from a folder that has since changed.
-  const changed = await folderChange(dir, snapshot)
+  const changed = await folderChange(dir, snapshot, run.includeDays)
   if (changed) throw new Error(changed)
 
   const groups = groupPhotos(inputs, { windowSeconds: config.groupWindowSeconds, similarity: config.similarity, maxGroupSize: config.maxGroupSize })

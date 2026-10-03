@@ -51,7 +51,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
   )
 
   const running = run.status === "QUEUED" || run.status === "GROUPING" || run.status === "ANALYZING"
-  const where = `${ROOT_LABELS[run.root]}${segs.length ? ` / ${segs.join(" / ")}` : ""}`
+  const where = `${ROOT_LABELS[run.root]}${segs.length ? ` / ${segs.join(" / ")}` : ""}${run.includeDays ? " — all days" : ""}`
 
   return (
     <div className="max-w-6xl space-y-5">

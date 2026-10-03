@@ -43,6 +43,21 @@ async function makePhotos() {
   }
 }
 
+/** jessi/2025/10 with no photos of its own: day 10 has burst a, day 11 has burst b. */
+const month = path.join(upload, "2025", "10")
+async function makeMonth() {
+  await fs.rm(path.join(upload, "2025"), { recursive: true, force: true })
+  for (const [variant, day] of [["a", "10"], ["b", "11"]] as const) {
+    await fs.mkdir(path.join(month, day), { recursive: true })
+    for (let i = 0; i < 3; i++) {
+      await sharp(scene(variant, i * 3))
+        .withExif({ IFD0: { DateTime: `2025:10:${day} 12:00:0${i * 2}` } })
+        .jpeg()
+        .toFile(path.join(month, day, `${variant}${i + 1}.jpg`))
+    }
+  }
+}
+
 beforeAll(async () => {
   await fs.mkdir(path.join(tmp, "dropoff"), { recursive: true })
   const dbUrl = `file:${path.join(tmp, "test.db").split(path.sep).join("/")}`
@@ -267,4 +282,43 @@ describe("AI runner", () => {
     expect(calls).toBe(2)
     expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })).status).toBe("DONE")
   }, 60_000)
+
+  it("a month scan groups the photos of all its day folders", async () => {
+    await makeMonth()
+    const run = await runner.createRun({ root: "upload", folder: "2025/10", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const done = await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })
+    expect([done.status, done.includeDays, done.photoCount]).toEqual(["DONE", true, 6])
+    const groups = await groupsOf(run.runId)
+    expect(groups.map((g) => g.photos.map((p) => p.name).sort())).toEqual([
+      ["10/a1.jpg", "10/a2.jpg", "10/a3.jpg"],
+      ["11/b1.jpg", "11/b2.jpg", "11/b3.jpg"],
+    ])
+  }, 60_000)
+
+  it("refuses to scan a day folder on its own when its month can be scanned", async () => {
+    await makeMonth()
+    expect(await runner.createRun({ root: "upload", folder: "2025/10/10", fresh: false, userId: null })).toEqual({ error: expect.stringMatching(/month/i) })
+  }, 60_000)
+
+  it("resolving a month-scan group moves picks to Dropoff, trashes the rest from their day folder, and undo restores them there", async () => {
+    await makeMonth()
+    const review = await import("./review-server")
+    const user = await prisma.user.create({ data: { name: "t", email: `t${Date.now()}@x.y`, passwordHash: "x" } })
+    const run = await runner.createRun({ root: "upload", folder: "2025/10", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const [a] = await groupsOf(run.runId)
+
+    expect(await review.resolveGroup(a.id, ["10/a3.jpg"], user.id)).toMatchObject({ moved: 1, trashed: 2, missing: 0 })
+    await expect(fs.stat(path.join(tmp, "dropoff", "a3.jpg"))).resolves.toBeTruthy()
+    await expect(fs.stat(path.join(month, "10", "a1.jpg"))).rejects.toThrow()
+
+    expect(await review.undoGroup(a.id)).toEqual({ restored: 2 })
+    await expect(fs.stat(path.join(month, "10", "a1.jpg"))).resolves.toBeTruthy()
+    await expect(fs.stat(path.join(month, "10", "a2.jpg"))).resolves.toBeTruthy()
+    await fs.rm(path.join(tmp, "dropoff", "a3.jpg"))
+  }, 60_000)
 })
+
