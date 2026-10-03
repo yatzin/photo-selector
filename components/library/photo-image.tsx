@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { ImageOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -32,6 +32,16 @@ export function PhotoImage({
 
   const status = state.src === src ? state.status : "loading"
 
+  // A cached image rendered on the server can finish loading before React
+  // attaches onLoad, so the event is missed; check once it's in the page.
+  const imgRef = useCallback(
+    (img: HTMLImageElement | null) => {
+      if (!img?.complete) return
+      setState((s) => (s.src === src && s.status === "loading" ? { src, status: img.naturalWidth > 0 ? "loaded" : "failed" } : s))
+    },
+    [src]
+  )
+
   if (status === "failed") {
     return (
       <div className={cn("flex h-full w-full flex-col items-center justify-center gap-1 bg-muted p-2 text-muted-foreground", className)}>
@@ -46,6 +56,7 @@ export function PhotoImage({
       {armed && (
         // eslint-disable-next-line @next/next/no-img-element -- served from our own cache, already sized
         <img
+          ref={imgRef}
           src={src}
           alt={alt}
           decoding="async"
