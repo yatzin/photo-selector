@@ -1,7 +1,8 @@
 services:
   photo-selector:
-    build: .
-    image: photo-selector:latest
+    # Built and published by .github/workflows/docker-publish.yml on every push
+    # to main. Pin a build with :sha-<commit> instead of :latest if you like.
+    image: ghcr.io/yatzin/photo-selector:latest
     container_name: photo-selector
     ports:
       - "3200:3200"

@@ -9,3 +9,8 @@ dev-photos
 prisma/dev.db
 prisma/dev.db-journal
 app/generated
+.data
+coverage
+.superpowers
+*.tsbuildinfo
+.github

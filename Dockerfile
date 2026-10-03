@@ -32,9 +32,11 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-# gosu drops root in the entrypoint; wget serves the compose healthcheck.
+# gosu drops root in the entrypoint; wget serves the compose healthcheck;
+# ffmpeg makes video thumbnails; heif-convert (libheif-examples) decodes iPhone
+# HEIC photos, which sharp's bundled libvips can't.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gosu wget openssl ca-certificates \
+  && apt-get install -y --no-install-recommends gosu wget openssl ca-certificates ffmpeg libheif-examples \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
@@ -52,4 +54,5 @@ ENV HOSTNAME="0.0.0.0"
 ENV DATABASE_URL="file:/data/photo-selector.db"
 ENV PHOTOS_UPLOAD_DIR=/photos/upload
 ENV PHOTOS_DROPOFF_DIR=/photos/dropoff
+ENV PHOTOS_CACHE_DIR=/data/cache
 ENTRYPOINT ["./docker-entrypoint.sh"]
