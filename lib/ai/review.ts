@@ -37,3 +37,14 @@ export function pageWindow(total: number, requested: string | undefined, size: n
   const page = Number.isFinite(n) ? Math.min(Math.max(n, 1), pages) : 1
   return { page, pages, skip: (page - 1) * size, take: size }
 }
+
+/** "Accept all selections": which groups on a page to settle, and with which picks. */
+export function acceptAllPlan(groups: { id: string; present: string[]; keep: string[] }[]): { items: { groupId: string; keep: string[] }[]; skipped: number } {
+  const items: { groupId: string; keep: string[] }[] = []
+  for (const g of groups) {
+    const here = new Set(g.present)
+    const keep = g.keep.filter((n) => here.has(n))
+    if (g.present.length >= 2 && keep.length > 0) items.push({ groupId: g.id, keep })
+  }
+  return { items, skipped: groups.length - items.length }
+}

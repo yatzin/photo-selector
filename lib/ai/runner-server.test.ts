@@ -373,5 +373,19 @@ describe("AI runner", () => {
     expect((await prisma.aiRun.findMany({ select: { id: true } })).map((r) => r.id).sort()).toEqual([running.id, done.id, retried.id].sort())
     expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: retried.id } })).status).toBe("CANCELLED")
   }, 60_000)
+
+  it("settles several groups in one go and reports the totals", async () => {
+    const review = await import("./review-server")
+    const user = await prisma.user.create({ data: { name: "t", email: `m${Date.now()}@x.y`, passwordHash: "x" } })
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const [a, b] = await groupsOf(run.runId)
+
+    const r = await review.resolveGroups([{ groupId: a.id, keep: ["a1.jpg"] }, { groupId: b.id, keep: ["b2.jpg", "b3.jpg"] }, { groupId: "nope", keep: ["x"] }], user.id)
+    expect(r).toEqual({ groups: 2, moved: 3, trashed: 3, failed: 1 })
+    expect((await groupsOf(run.runId)).map((g) => g.status)).toEqual(["RESOLVED", "RESOLVED"])
+    for (const n of ["a1.jpg", "b2.jpg", "b3.jpg"]) await fs.rm(path.join(tmp, "dropoff", n))
+  }, 60_000)
 })
 

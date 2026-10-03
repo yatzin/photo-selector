@@ -27,12 +27,27 @@ export type ReviewGroupProps = {
   locked: boolean
 }
 
-export function ReviewGroup({ id, root, folder, status, reason, error, photos, locked }: ReviewGroupProps) {
+/** The photos picked by default: the AI's suggestions that are still there. */
+export function suggestedKeep(photos: ReviewPhoto[]): Set<string> {
+  return new Set(photos.filter((p) => p.current && p.suggested).map((p) => p.name))
+}
+
+export function ReviewGroup({
+  id, root, folder, status, reason, error, photos, locked, keep, onToggle, disabled = false,
+}: ReviewGroupProps & {
+  /** Picked photos; the list above owns them so "Accept all selections" can read every group's picks. */
+  keep: Set<string>
+  onToggle: (name: string) => void
+  /** A page-wide action is running. */
+  disabled?: boolean
+}) {
   const router = useRouter()
   const ordered = useMemo(() => [...photos].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99)), [photos])
   const present = ordered.filter((p) => p.current)
-  const [keep, setKeep] = useState<Set<string>>(() => new Set(present.filter((p) => p.suggested).map((p) => p.name)))
   const [busy, setBusy] = useState(false)
+  // Collapses the group the moment an action is clicked, so it's clear
+  // something happened; it comes back if the action fails.
+  const [leaving, setLeaving] = useState(false)
   const [viewer, setViewer] = useState<number | null>(null)
   const items = present.map((p) => p.current!)
 
@@ -51,19 +66,27 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
   const trashed = present.length - kept
   const done = status === "RESOLVED" || status === "DISMISSED"
 
-  async function act(fn: () => Promise<unknown>, success: (r: Record<string, number>) => string) {
+  async function act(fn: () => Promise<unknown>, success: (r: Record<string, number>) => string, undoable = true) {
     setBusy(true)
+    setLeaving(true)
     const r = (await fn()) as { error?: string } & Record<string, number>
     setBusy(false)
-    if (r.error) toast.error(r.error)
-    else toast.success(success(r))
+    if (r.error) {
+      setLeaving(false)
+      toast.error(r.error)
+    } else {
+      toast.success(success(r), undoable ? { action: { label: "Undo", onClick: () => void undoGroupAction(id).then(() => router.refresh()) } } : undefined)
+    }
     router.refresh()
   }
+
+  const off = busy || locked || disabled
 
   if (done) {
     const keptNames = photos.filter((p) => p.decision === "KEEP").length
     const trashedNames = photos.filter((p) => p.decision === "TRASH").length
     return (
+      <Collapse gone={leaving}>
       <div className="flex items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-sm">
         <span className="text-muted-foreground">
           {status === "DISMISSED"
@@ -72,14 +95,16 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
               ? `Deleted all ${trashedNames}`
               : `${root === "upload" ? "Moved" : "Kept"} ${keptNames}, trashed ${trashedNames}`}
         </span>
-        <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => undoGroupAction(id), (r) => (r.restored ? `Restored ${r.restored} from trash.` : "Back in To review."))}>
+        <Button variant="ghost" size="sm" disabled={off} onClick={() => act(() => undoGroupAction(id), (r) => (r.restored ? `Restored ${r.restored} from trash.` : "Back in To review."), false)}>
           <Undo2 className="h-4 w-4" /> Undo
         </Button>
       </div>
+      </Collapse>
     )
   }
 
   return (
+    <Collapse gone={leaving}>
     <div className="rounded-lg border bg-card p-4 space-y-3">
       {reason && <p className="text-sm">{reason}</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -99,7 +124,7 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
             <div key={p.name} className="space-y-1">
               <button
                 type="button"
-                onClick={() => setKeep((prev) => { const n = new Set(prev); if (n.has(p.name)) n.delete(p.name); else n.add(p.name); return n })}
+                onClick={() => onToggle(p.name)}
                 onDoubleClick={() => setViewer(index)}
                 title={`${p.name} — click to keep or trash, double-click to view`}
                 style={{ touchAction: "manipulation" }}
@@ -122,7 +147,7 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
           <Button
             size="sm"
             className="mr-auto bg-destructive text-white hover:bg-destructive/90"
-            disabled={busy || locked}
+            disabled={off}
             onClick={() =>
               confirm(
                 `Are you sure you want to delete all ${present.length} photo${present.length === 1 ? "" : "s"} in this group? ` +
@@ -134,13 +159,13 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
           </Button>
         )}
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-        <Button variant="ghost" size="sm" disabled={busy || locked} onClick={() => act(() => dismissGroupAction(id), () => "Marked as not duplicates.")}>
+        <Button variant="ghost" size="sm" disabled={off} onClick={() => act(() => dismissGroupAction(id), () => "Marked as not duplicates.")}>
           {present.length < 2 ? "Done" : "Not duplicates"}
         </Button>
         {status === "ANALYZED" && present.length >= 2 && (
           <Button
             size="sm"
-            disabled={busy || locked || kept === 0}
+            disabled={off || kept === 0}
             onClick={() => act(() => resolveGroupAction(id, [...keep]), (r) => `${root === "upload" ? `Moved ${r.moved}` : `Kept ${r.kept}`}, trashed ${r.trashed}.`)}
           >
             {root === "upload" ? `Move ${kept} to Dropoff` : `Keep ${kept}`}, trash {trashed}
@@ -163,6 +188,22 @@ export function ReviewGroup({ id, root, folder, status, reason, error, photos, l
           onRotate={() => {}}
         />
       )}
+    </div>
+    </Collapse>
+  )
+}
+
+/** Animates a group's height and opacity to nothing; the spacing between groups lives inside so it collapses too. */
+function Collapse({ gone, children }: { gone: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className="grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none"
+      style={{ gridTemplateRows: gone ? "0fr" : "1fr", opacity: gone ? 0 : 1 }}
+      aria-hidden={gone || undefined}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div className="pb-4">{children}</div>
+      </div>
     </div>
   )
 }

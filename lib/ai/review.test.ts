@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { classifyPhotos, folderKey, pageWindow, planResolution, scanFolderSegments } from "./review"
+import { acceptAllPlan, classifyPhotos, folderKey, pageWindow, planResolution, scanFolderSegments } from "./review"
 
 describe("scanFolderSegments", () => {
   it("accepts the root and nested folders with odd characters", () => {
@@ -55,3 +55,24 @@ describe("pageWindow", () => {
     expect(pageWindow(0, "4", 20)).toEqual({ page: 1, pages: 1, skip: 0, take: 20 })
   })
 })
+
+describe("acceptAllPlan", () => {
+  it("acts on every group with a pick, keeping only photos still there", () => {
+    expect(
+      acceptAllPlan([
+        { id: "g1", present: ["a", "b", "c"], keep: ["b"] },
+        { id: "g2", present: ["d", "e"], keep: ["e", "gone"] },
+      ])
+    ).toEqual({ items: [{ groupId: "g1", keep: ["b"] }, { groupId: "g2", keep: ["e"] }], skipped: 0 })
+  })
+  it("skips groups with nothing picked or fewer than two photos left", () => {
+    expect(
+      acceptAllPlan([
+        { id: "none", present: ["a", "b"], keep: [] },
+        { id: "single", present: ["c"], keep: ["c"] },
+        { id: "ok", present: ["d", "e"], keep: ["d"] },
+      ])
+    ).toEqual({ items: [{ groupId: "ok", keep: ["d"] }], skipped: 2 })
+  })
+})
+

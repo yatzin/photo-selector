@@ -31,6 +31,21 @@ export function resolveGroup(groupId: string, keep: string[], userId: string): P
   return settleGroup(groupId, userId, (valid) => planResolution(valid, keep))
 }
 
+/** Settles several groups one after another ("Accept all selections"). */
+export async function resolveGroups(items: { groupId: string; keep: string[] }[], userId: string): Promise<{ groups: number; moved: number; trashed: number; failed: number }> {
+  const total = { groups: 0, moved: 0, trashed: 0, failed: 0 }
+  for (const item of items) {
+    const r = await resolveGroup(item.groupId, item.keep, userId)
+    if ("error" in r) total.failed++
+    else {
+      total.groups++
+      total.moved += r.moved
+      total.trashed += r.trashed
+    }
+  }
+  return total
+}
+
 /** Trashes every photo in the group ("Delete all"). Undo restores them like any other resolution. */
 export function trashGroup(groupId: string, userId: string): Promise<ResolveResult> {
   return settleGroup(groupId, userId, (valid) => (valid.length ? { keep: [], trash: valid } : { error: "None of these photos are still here." }))

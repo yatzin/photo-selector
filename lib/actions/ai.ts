@@ -9,7 +9,7 @@ import { aiReady } from "@/lib/ai/config"
 import { scanFolderSegments } from "@/lib/ai/review"
 import { abortRun, clearQueue, createRun, queueUnscanned, requeueRun } from "@/lib/ai/runner-server"
 import { listScanFolders } from "@/lib/library-server"
-import { dismissGroup, resolveGroup, undoGroup, trashGroup } from "@/lib/ai/review-server"
+import { dismissGroup, resolveGroup, resolveGroups, undoGroup, trashGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 
@@ -91,6 +91,18 @@ export async function resolveGroupAction(groupId: string, keep: string[]) {
   const result = await resolveGroup(parsed.data.groupId, parsed.data.keep, session.user.id)
   refresh()
   return result
+}
+
+/** "Accept all selections" on a review page: settles each group with its picks, in turn. */
+export async function resolveGroupsAction(items: { groupId: string; keep: string[] }[]) {
+  const session = await requireUser()
+  const parsed = z.array(z.object({ groupId: z.string().min(1), keep: z.array(z.string()).max(50) })).max(100).safeParse(items)
+  if (!parsed.success) return { error: "Invalid request." }
+  const open: typeof parsed.data = []
+  for (const item of parsed.data) if (!(await groupLocked(item.groupId))) open.push(item)
+  const result = await resolveGroups(open, session.user.id)
+  refresh()
+  return { ...result, failed: result.failed + (parsed.data.length - open.length) }
 }
 
 export async function trashGroupAction(groupId: string) {

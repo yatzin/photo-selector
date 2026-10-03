@@ -10,7 +10,8 @@ import { rootPath } from "@/lib/library-server"
 import { currentVersions } from "@/lib/ai/review-server"
 import { pageWindow, scanFolderSegments } from "@/lib/ai/review"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
-import { ReviewGroup, type ReviewPhoto } from "@/components/ai/review-group"
+import { type ReviewPhoto } from "@/components/ai/review-group"
+import { ReviewList } from "@/components/ai/review-list"
 
 const TABS = [
   { id: "review", label: "To review", statuses: ["ANALYZED"] },
@@ -82,19 +83,20 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
           {active.id === "review" ? (running ? "Waiting for the AI…" : "All caught up.") : "Nothing here."}
         </p>
       ) : (
-        <div className="space-y-4">
-          {groups.map((g) => {
-            const photos: ReviewPhoto[] = g.photos.map((p) => {
+        <ReviewList
+          acceptAll={active.id === "review" && !running}
+          groups={groups.map((g) => ({
+            id: g.id, root: run.root as "upload" | "dropoff", folder: segs, status: g.status, reason: g.reason, error: g.error, locked: running,
+            photos: g.photos.map((p): ReviewPhoto => {
               const st = stats.get(p.name)
               const same = versions.get(p.name) === p.version
               return {
                 name: p.name, rank: p.rank, note: p.note, suggested: p.suggested, decision: p.decision,
                 current: same && st ? { name: p.name, kind: mediaKind(p.name) ?? "image", size: st.size, modified: st.mtimeMs, version: p.version } : null,
               }
-            })
-            return <ReviewGroup key={g.id} id={g.id} root={run.root as "upload" | "dropoff"} folder={segs} status={g.status} reason={g.reason} error={g.error} photos={photos} locked={running} />
-          })}
-        </div>
+            }),
+          }))}
+        />
       )}
       {pages > 1 && <Pager href={(n) => `/ai/runs/${id}?tab=${active.id}&page=${n}`} page={page} pages={pages} />}
       <AutoRefresh active={running} intervalMs={5000} />
