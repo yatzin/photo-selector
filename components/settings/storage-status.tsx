@@ -4,6 +4,7 @@ import type { RootStatus } from "@/lib/library-server"
 import type { WorkerStatus } from "@/lib/worker-server"
 import { rescanAction } from "@/lib/actions/worker"
 import { Button } from "@/components/ui/button"
+import { AutoRefresh } from "@/components/ai/auto-refresh"
 
 function Check({ ok, label }: { ok: boolean; label: string }) {
   return (
@@ -50,6 +51,8 @@ export function StorageStatus({ roots, worker }: { roots: RootStatus[]; worker: 
       </p>
 
       <h2 className="pt-4 text-lg font-semibold">Thumbnails</h2>
+      {/* Keeps the counts below current while this tab is open. */}
+      <AutoRefresh active intervalMs={5000} />
       <div className="rounded-lg border bg-card p-4 space-y-3">
         <dl className="grid grid-cols-[10rem_1fr] gap-y-1.5 text-sm">
           <dt className="text-muted-foreground">Background worker</dt>
