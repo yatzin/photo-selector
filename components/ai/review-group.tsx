@@ -18,6 +18,8 @@ export type ReviewPhoto = { name: string; rank: number | null; note: string | nu
 export type ReviewGroupProps = {
   id: string
   root: "upload" | "dropoff"
+  /** The root folder on disk (e.g. /photos/upload), for the viewer's full path. */
+  rootDir?: string
   folder: string[]
   status: "PENDING" | "ANALYZED" | "FAILED" | "RESOLVED" | "DISMISSED"
   reason: string | null
@@ -33,7 +35,7 @@ export function suggestedKeep(photos: ReviewPhoto[]): Set<string> {
 }
 
 export function ReviewGroup({
-  id, root, folder, status, reason, error, photos, locked, keep, onToggle, disabled = false,
+  id, root, rootDir, folder, status, reason, error, photos, locked, keep, onToggle, disabled = false,
 }: ReviewGroupProps & {
   /** Picked photos; the list above owns them so "Accept all selections" can read every group's picks. */
   keep: Set<string>
@@ -48,6 +50,14 @@ export function ReviewGroup({
   // Collapses the group the moment an action is clicked, so it's clear
   // something happened; it comes back if the action fails.
   const [leaving, setLeaving] = useState(false)
+  // "Delete all" asks for a second click instead of a browser dialog; it
+  // forgets after a few seconds or when focus moves elsewhere.
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  useEffect(() => {
+    if (!confirmingDelete) return
+    const t = setTimeout(() => setConfirmingDelete(false), 4000)
+    return () => clearTimeout(t)
+  }, [confirmingDelete])
   const [viewer, setViewer] = useState<number | null>(null)
   const items = present.map((p) => p.current!)
 
@@ -146,16 +156,22 @@ export function ReviewGroup({
         {status === "ANALYZED" && present.length > 0 && (
           <Button
             size="sm"
-            className="mr-auto bg-destructive text-white hover:bg-destructive/90"
+            className={cn(
+              "mr-auto bg-destructive text-white hover:bg-destructive/90",
+              confirmingDelete && "ring-2 ring-destructive ring-offset-2 ring-offset-background"
+            )}
             disabled={off}
-            onClick={() =>
-              confirm(
-                `Are you sure you want to delete all ${present.length} photo${present.length === 1 ? "" : "s"} in this group? ` +
-                  `They go to the trash and can be brought back with Undo for ${TRASH_RETENTION_DAYS} days.`
-              ) && act(() => trashGroupAction(id), (r) => `Deleted ${r.trashed} photo${r.trashed === 1 ? "" : "s"}.`)
-            }
+            title={`Moves all ${present.length} to the trash; Undo brings them back for ${TRASH_RETENTION_DAYS} days.`}
+            onBlur={() => setConfirmingDelete(false)}
+            onClick={() => {
+              if (!confirmingDelete) setConfirmingDelete(true)
+              else {
+                setConfirmingDelete(false)
+                void act(() => trashGroupAction(id), (r) => `Deleted ${r.trashed} photo${r.trashed === 1 ? "" : "s"}.`)
+              }
+            }}
           >
-            <Trash2 className="h-4 w-4" /> Delete all
+            <Trash2 className="h-4 w-4" /> {confirmingDelete ? `Positive? Delete ${present.length}` : "Delete all"}
           </Button>
         )}
         {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
@@ -175,6 +191,7 @@ export function ReviewGroup({
       {viewer !== null && items[viewer] && (
         <Lightbox
           root={root}
+          rootDir={rootDir}
           folder={folder}
           items={items}
           index={viewer}

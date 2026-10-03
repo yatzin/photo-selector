@@ -114,7 +114,13 @@ export async function undoGroup(groupId: string): Promise<{ error: string } | { 
   if (group.status !== "RESOLVED" && group.status !== "DISMISSED") return { error: "Nothing to undo." }
   let restored = 0
   if (group.trashBatchId) restored = (await restoreBatch(group.root, group.trashBatchId)).ok.length
+  // Moving a file back out of the trash changes its ctime, which is part of
+  // its version; record the new versions so the restored photos count as
+  // still here.
+  const trashed = await prisma.aiGroupPhoto.findMany({ where: { groupId, decision: "TRASH" }, select: { id: true, name: true } })
+  const now = await currentVersions(group.root, group.folder, trashed.map((p) => p.name))
   await prisma.$transaction([
+    ...trashed.flatMap((p) => (now.has(p.name) ? [prisma.aiGroupPhoto.update({ where: { id: p.id }, data: { version: now.get(p.name)! } })] : [])),
     prisma.aiGroupPhoto.updateMany({ where: { groupId }, data: { decision: null } }),
     prisma.aiGroup.update({ where: { id: groupId }, data: { status: "ANALYZED", trashBatchId: null, resolvedById: null, resolvedAt: null } }),
   ])

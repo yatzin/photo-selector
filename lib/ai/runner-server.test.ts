@@ -338,6 +338,9 @@ describe("AI runner", () => {
 
     expect(await review.undoGroup(a.id)).toEqual({ restored: 3 })
     for (const n of ["a1.jpg", "a2.jpg", "a3.jpg"]) await expect(fs.stat(path.join(folder, n))).resolves.toBeTruthy()
+    // The restored photos are usable again in the group (restoring changes their ctime).
+    expect(await review.trashGroup(a.id, user.id)).toEqual({ moved: 0, kept: 0, trashed: 3, missing: 0 })
+    await review.undoGroup(a.id)
   }, 60_000)
 
   it("queues a scan for each listed folder that has never been scanned", async () => {

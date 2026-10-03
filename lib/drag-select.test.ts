@@ -9,6 +9,9 @@ describe("dragSelection", () => {
   it("works dragging backwards", () => {
     expect([...dragSelection(new Set(), names, 3, 1, "add")].sort()).toEqual(["b", "c", "d"])
   })
+  it("skips photos that are hidden (in a collapsed month)", () => {
+    expect([...dragSelection(new Set(), names, 0, 4, "add", (i) => i === 2 || i === 3)].sort()).toEqual(["a", "b", "e"])
+  })
   it("removes the range when the drag started on a selected photo", () => {
     expect([...dragSelection(new Set(names), names, 1, 2, "remove")].sort()).toEqual(["a", "d", "e"])
   })

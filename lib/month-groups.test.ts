@@ -16,6 +16,14 @@ describe("buildRows", () => {
       { kind: "tiles", start: 5, end: 7 },
     ])
   })
+  it("keeps a collapsed month's header but leaves out its photos", () => {
+    expect(buildRows(items, 2, true, new Set(["2026-07"]))).toEqual([
+      { kind: "header", key: "2026-07", label: "July 2026", start: 0, end: 3 },
+      { kind: "header", key: "2026-06", label: "June 2026", start: 3, end: 7 },
+      { kind: "tiles", start: 3, end: 5 },
+      { kind: "tiles", start: 5, end: 7 },
+    ])
+  })
   it("is a plain grid when not grouping", () => {
     expect(buildRows(items, 3, false)).toEqual([
       { kind: "tiles", start: 0, end: 3 },

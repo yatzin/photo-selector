@@ -12,6 +12,8 @@ import type { FileEntry } from "@/lib/library-server"
 
 type Props = {
   root: string
+  /** The folder's location on disk, as the server sees it (e.g. /photos/upload); shown as the photo's full path. */
+  rootDir?: string
   folder: string[]
   items: FileEntry[]
   index: number
@@ -23,6 +25,12 @@ type Props = {
   onMove: (name: string) => void
   onDelete: (name: string) => void
   onRotate: (name: string, direction: "cw" | "ccw") => void
+}
+
+/** rootDir + folder + name, with the separator rootDir already uses. */
+function fullPath(rootDir: string, folder: string[], name: string): string {
+  const sep = rootDir.includes("\\") && !rootDir.includes("/") ? "\\" : "/"
+  return [rootDir.replace(/[\\/]+$/, ""), ...folder, ...name.split("/")].join(sep)
 }
 
 function IconButton({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
@@ -87,7 +95,7 @@ function Picture({ root, folder, item, onBackdrop }: { root: string; folder: str
   )
 }
 
-export function Lightbox({ root, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate }: Props) {
+export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate }: Props) {
   const item = items[index]
   const touchX = useRef<number | null>(null)
 
@@ -125,6 +133,12 @@ export function Lightbox({ root, folder, items, index, canMove, canEdit, busy, o
             {index + 1} of {items.length} &middot; {formatBytes(item.size)} &middot;{" "}
             {new Date(item.modified).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
           </div>
+          {rootDir && (
+            // select-all: one click selects the whole path for copying.
+            <div className="select-all break-all font-mono text-[11px] text-white/50" title="Full path">
+              {fullPath(rootDir, folder, item.name)}
+            </div>
+          )}
         </div>
         {item.kind === "image" && canEdit && (
           <>

@@ -92,6 +92,7 @@ export default async function LibraryPage({
       {listing.files.length > 0 ? (
         <MediaGrid
           root={root}
+          rootDir={status.path}
           folder={segments}
           files={listing.files}
           canMove={root === "upload" && status.writable && !locked}

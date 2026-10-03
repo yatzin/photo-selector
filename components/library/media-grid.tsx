@@ -4,7 +4,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, FolderOutput, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, FolderOutput, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl } from "@/lib/format"
@@ -16,6 +16,7 @@ import { buildRows, itemAt, rowOfItem, rowTops, type GridRow } from "@/lib/month
 import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
 import { useDragSelect } from "./use-drag-select"
+import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
@@ -29,7 +30,8 @@ import { useDragSelect } from "./use-drag-select"
 // Del deletes, M moves to Sort Dropoff, R / Shift+R rotate, Esc clears.
 //
 // Sorted by date, photos are grouped under month headers; the circle on a
-// header selects or deselects that whole month. Sorted by name, it's one grid.
+// header selects or deselects that whole month, and the chevron collapses it
+// (view only; nothing is saved). Sorted by name, it's one grid.
 //
 // Large folders: only the rows on screen (plus a few either side) exist in
 // the page, so 10,000 photos cost about as much as 100. Selection, sorting
@@ -47,7 +49,7 @@ type SizeKey = keyof typeof SIZES
 const ORDERS = ["newest", "oldest", "name"] as const
 type Order = (typeof ORDERS)[number]
 
-type Props = { root: string; folder: string[]; files: FileEntry[]; canMove: boolean; canEdit: boolean }
+type Props = { root: string; rootDir?: string; folder: string[]; files: FileEntry[]; canMove: boolean; canEdit: boolean }
 
 type ActionResult = { ok: string[]; failed: { name: string; error: string }[] } | { error: string }
 
@@ -57,7 +59,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function Tile({
-  root, folder, item, selected, focused, onClick, onDoubleClick, onToggle,
+  root, folder, item, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu,
 }: {
   root: string
   folder: string[]
@@ -67,6 +69,7 @@ function Tile({
   onClick: (e: React.MouseEvent) => void
   onDoubleClick: () => void
   onToggle: () => void
+  onContextMenu: (e: React.MouseEvent) => void
 }) {
   return (
     <div
@@ -81,6 +84,7 @@ function Tile({
       style={{ touchAction: "manipulation", WebkitTouchCallout: "none" }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
       title={item.name}
     >
       <PhotoImage
@@ -127,7 +131,7 @@ function SkeletonGrid({ tile }: { tile: number }) {
   )
 }
 
-export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
+export function MediaGrid({ root, rootDir, folder, files, canMove, canEdit }: Props) {
   const router = useRouter()
   const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l"])
   const [order, setOrder] = useStoredState<Order>("ps.order", "newest", ORDERS)
@@ -176,6 +180,8 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const chosen = useMemo(() => items.filter((f) => selected.has(f.name)), [items, selected])
   const chosenBytes = chosen.reduce((sum, f) => sum + f.size, 0)
 
+  // Filled in once the rows are built (below); ranges skip photos in collapsed months.
+  const hiddenIdx = useRef<Set<number>>(new Set())
   const selectRange = useCallback((from: string | null, to: string, additive: boolean) => {
     const a = from !== null ? indexOf.get(from) : undefined
     const b = indexOf.get(to)
@@ -184,7 +190,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
     const end = Math.max(a ?? b, b)
     setSelected((prev) => {
       const next = additive ? new Set(prev) : new Set<string>()
-      for (let i = start; i <= end; i++) next.add(items[i].name)
+      for (let i = start; i <= end; i++) if (!hiddenIdx.current.has(i)) next.add(items[i].name)
       return next
     })
   }, [indexOf, items])
@@ -272,7 +278,27 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   // Phones get at least two columns, like the old 40vw rule.
   const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length })
 
-  const rows = useMemo(() => (frame.width ? buildRows(items, layout.columns, order !== "name") : []), [items, layout.columns, order, frame.width])
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const toggleCollapsed = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const rows = useMemo(
+    () => (frame.width ? buildRows(items, layout.columns, order !== "name", collapsed) : []),
+    [items, layout.columns, order, frame.width, collapsed]
+  )
+  // Indices of photos inside collapsed months: ranges (drag, Shift-click) skip them.
+  const hiddenNow = useMemo(() => {
+    const out = new Set<number>()
+    for (const r of rows) if (r.kind === "header" && collapsed.has(r.key)) for (let i = r.start; i < r.end; i++) out.add(i)
+    return out
+  }, [rows, collapsed])
+  useEffect(() => {
+    hiddenIdx.current = hiddenNow
+  }, [hiddenNow])
   const rowSize = useCallback((r: GridRow) => (r.kind === "header" ? HEADER_H : layout.rowHeight), [layout.rowHeight])
   const tops = useMemo(() => rowTops(rows, rowSize), [rows, rowSize])
 
@@ -305,11 +331,27 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
   const columns = () => layout.columns
 
   const itemNames = useMemo(() => items.map((f) => f.name), [items])
+
+  // Right-click menu (mouse only: on touch a long press starts drag-select).
+  const lastPointer = useRef<string>("mouse")
+  const [menu, setMenu] = useState<{ x: number; y: number; names: string[] } | null>(null)
+  const openMenu = (e: React.MouseEvent, name: string) => {
+    e.preventDefault()
+    if (lastPointer.current !== "mouse") return
+    setMenu({ x: e.clientX, y: e.clientY, names: selected.has(name) ? chosen.map((f) => f.name) : [name] })
+  }
+  const closeMenu = useCallback(() => setMenu(null), [])
+  const menuImages = menu ? menu.names.filter((n) => items[indexOf.get(n) ?? -1]?.kind === "image") : []
+  const onMenu = (action: PhotoMenuAction) => {
+    if (!menu) return
+    void run(action, action.startsWith("rotate") ? menuImages : menu.names)
+  }
   const dragSelect = useDragSelect({
     grid: () => gridEl.current,
     scrollEl: frame.scrollEl,
     hit: (x, y) => itemAt(x, y, rows, tops, { columns: layout.columns, tileSize: layout.tileSize, gap: GAP }),
     names: itemNames,
+    hidden: (i) => hiddenNow.has(i),
     selected,
     apply: (next, current, start) => {
       setSelected(next)
@@ -474,7 +516,10 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
         ref={measureRef}
         className="relative w-full"
         style={{ height: rows.length ? virtualizer.getTotalSize() : undefined }}
-        onPointerDown={dragSelect.onPointerDown}
+        onPointerDown={(e) => {
+          lastPointer.current = e.pointerType
+          dragSelect.onPointerDown(e)
+        }}
         onClickCapture={dragSelect.onClickCapture}
       >
         {frame.width === 0 ? (
@@ -489,6 +534,16 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
               const all = picked === monthItems.length
               return (
                 <div key={v.key} className="absolute left-0 top-0 flex w-full items-end gap-2 pb-2" style={{ transform: y, height: HEADER_H }}>
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(row.key)}
+                    aria-expanded={!collapsed.has(row.key)}
+                    aria-label={collapsed.has(row.key) ? `Show ${row.label}` : `Hide ${row.label}`}
+                    title={collapsed.has(row.key) ? "Show this month" : "Hide this month"}
+                    className="-ml-1 mb-0.5 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed.has(row.key) && "-rotate-90")} />
+                  </button>
                   <h2 className="text-base font-semibold">{row.label}</h2>
                   <button
                     type="button"
@@ -531,6 +586,7 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
                   onClick={(e) => onTileClick(e, item.name)}
                   onDoubleClick={() => setViewer(indexOf.get(item.name) ?? 0)}
                   onToggle={() => toggle(item.name)}
+                  onContextMenu={(e) => openMenu(e, item.name)}
                 />
               ))}
             </div>
@@ -539,9 +595,23 @@ export function MediaGrid({ root, folder, files, canMove, canEdit }: Props) {
         )}
       </div>
 
+      {menu && (
+        <PhotoMenu
+          x={menu.x}
+          y={menu.y}
+          count={menu.names.length}
+          canRotate={menuImages.length > 0}
+          showMove={root === "upload"}
+          canMove={canMove && !busy}
+          canEdit={canEdit && !busy}
+          onAction={onMenu}
+          onClose={closeMenu}
+        />
+      )}
       {viewerOpen && (
         <Lightbox
           root={root}
+          rootDir={rootDir}
           folder={folder}
           items={items}
           index={viewerIndex}

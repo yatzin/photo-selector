@@ -1,5 +1,8 @@
 # ── base ──────────────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS base
+# Debian 13 (trixie): its libheif (1.23) decodes the HDR "gain map" HEIC that
+# recent iPhones and Android phones write, which Debian 12's 1.15 rejects, and
+# its ffmpeg (7.1) can read HEIC as a fallback.
+FROM node:22-trixie-slim AS base
 # Prisma picks its engine by the OpenSSL it finds at install/generate time and
 # needs it at runtime; the slim image ships none.
 RUN apt-get update \
@@ -28,13 +31,13 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # ── runner ────────────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS runner
+FROM node:22-trixie-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 # gosu drops root in the entrypoint; wget serves the compose healthcheck;
-# ffmpeg makes video thumbnails; heif-convert (libheif-examples) decodes iPhone
-# HEIC photos, which sharp's bundled libvips can't.
+# ffmpeg makes video thumbnails; heif-dec (libheif-examples, with the libde265
+# HEVC plugin it depends on) decodes HEIC photos, which sharp's bundled libvips can't.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends gosu wget openssl ca-certificates ffmpeg libheif-examples \
   && rm -rf /var/lib/apt/lists/*

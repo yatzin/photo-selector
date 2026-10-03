@@ -105,7 +105,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
         <ReviewList
           acceptAll={active.id === "review" && !locked}
           groups={groups.map((g) => ({
-            id: g.id, root: run.root as "upload" | "dropoff", folder: segs, status: g.status, reason: g.reason, error: g.error, locked,
+            id: g.id, root: run.root as "upload" | "dropoff", rootDir: rootPath(run.root as "upload" | "dropoff"), folder: segs, status: g.status, reason: g.reason, error: g.error, locked,
             photos: g.photos.map((p): ReviewPhoto => {
               const st = stats.get(p.name)
               const same = versions.get(p.name) === p.version

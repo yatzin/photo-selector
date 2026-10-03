@@ -45,6 +45,15 @@ function failPath(key: string): string {
   return path.join(cacheRoot(), "failed", key.slice(0, 2), key)
 }
 
+// Bump when the decoders get better (e.g. a newer libheif): failure markers
+// from an older generation are ignored, so those files are tried again once.
+export const DECODERS = "decoders-2"
+
+async function knownFailure(key: string): Promise<boolean> {
+  const marker = await fs.readFile(failPath(key), "utf8").catch(() => null)
+  return marker !== null && marker.split("\n", 1)[0] === DECODERS
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p)
@@ -82,20 +91,40 @@ async function videoFrame(file: string): Promise<Buffer> {
 }
 
 /**
- * HEIC from iPhones uses HEVC, which sharp's bundled libvips can't decode.
- * heif-convert (libheif, installed in the container) handles it; ffmpeg 7+
- * is a fallback for local development.
+ * HEIC from phones uses HEVC, which sharp's bundled libvips can't decode.
+ * libheif's heif-dec (heif-convert in older releases; installed in the
+ * container) handles it, including recent HDR "gain map" files; ffmpeg 7.1+
+ * is the last resort. Every failure is reported, not just the last one.
  */
 async function decodeHeif(file: string): Promise<Buffer> {
   const tmp = path.join(os.tmpdir(), `ps-${randomBytes(6).toString("hex")}.jpg`)
+  const errors: string[] = []
   try {
-    await run("heif-convert", ["-q", "92", file, tmp])
-    return await fs.readFile(tmp)
-  } catch {
-    return await run(ffmpeg(), ["-v", "error", "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "2", "-"])
+    for (const tool of ["heif-dec", "heif-convert"]) {
+      try {
+        await run(tool, ["-q", "92", file, tmp])
+        return await fs.readFile(tmp)
+      } catch (error) {
+        errors.push(`${tool}: ${shortError(error)}`)
+      }
+    }
+    try {
+      return await run(ffmpeg(), ["-v", "error", "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "2", "-"])
+    } catch (error) {
+      errors.push(`ffmpeg: ${shortError(error)}`)
+    }
+    throw new Error(`could not decode HEIC (${errors.join("; ")})`)
   } finally {
     await fs.rm(tmp, { force: true })
   }
+}
+
+/** The useful part of a failed command: its last line of output, not the command line. */
+function shortError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error)
+  if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "not installed"
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean)
+  return (lines.length > 1 ? lines[lines.length - 1] : lines[0] ?? "failed").slice(0, 200)
 }
 
 async function toWebp(input: string | Buffer, variant: Variant, out: string): Promise<void> {
@@ -144,7 +173,7 @@ export async function ensureVariant(
   const key = cacheKey(rootKey, relPath, st)
   const out = cachePath(key, variant)
   if (await exists(out)) return { path: out }
-  if (await exists(failPath(key))) return { failed: true }
+  if (await knownFailure(key)) return { failed: true }
 
   return thumbQueue.run(`${key}:${variant}`, async () => {
     if (await exists(out)) return { path: out }
@@ -154,7 +183,7 @@ export async function ensureVariant(
     } catch (error) {
       console.warn(`[thumbs] could not render ${relPath}:`, error instanceof Error ? error.message : error)
       await fs.mkdir(path.dirname(failPath(key)), { recursive: true })
-      await fs.writeFile(failPath(key), String(error instanceof Error ? error.message : error))
+      await fs.writeFile(failPath(key), `${DECODERS}\n${error instanceof Error ? error.message : error}`)
       return { failed: true }
     }
   }, priority, signal)
@@ -162,7 +191,7 @@ export async function ensureVariant(
 
 /** Whether every variant for this version of the file is already cached (or known to fail). */
 export async function isCached(key: string, variants: Variant[]): Promise<boolean> {
-  if (await exists(failPath(key))) return true
+  if (await knownFailure(key)) return true
   for (const v of variants) if (!(await exists(cachePath(key, v)))) return false
   return true
 }

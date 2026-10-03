@@ -19,6 +19,8 @@ type Options = {
   /** The photo index at (x, y) from the grid's top-left, or -1 (e.g. over a month header). */
   hit: (x: number, y: number) => number
   names: string[]
+  /** Photos a range should skip (in a collapsed month). */
+  hidden?: (index: number) => boolean
   selected: Set<string>
   /** Called with the new selection, the photo under the pointer, and the one the drag started on. */
   apply: (next: Set<string>, current: string, start: string) => void
@@ -64,8 +66,8 @@ export function useDragSelect(options: Options) {
     const index = indexAtPointer(d)
     if (index < 0 || index === d.last) return
     d.last = index
-    const { names, apply } = opts.current
-    apply(dragSelection(d.base, names, d.start, index, d.mode), names[index], names[d.start])
+    const { names, apply, hidden } = opts.current
+    apply(dragSelection(d.base, names, d.start, index, d.mode, hidden), names[index], names[d.start])
   }
 
   function autoScroll() {

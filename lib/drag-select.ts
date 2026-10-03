@@ -6,9 +6,10 @@
  * selected when the drag began (`base`), plus — or minus, when the drag
  * started on a selected photo — the photos in between.
  */
-export function dragSelection(base: Set<string>, names: string[], from: number, to: number, mode: "add" | "remove"): Set<string> {
+export function dragSelection(base: Set<string>, names: string[], from: number, to: number, mode: "add" | "remove", hidden?: (index: number) => boolean): Set<string> {
   const next = new Set(base)
   for (let i = Math.min(from, to); i <= Math.max(from, to); i++) {
+    if (hidden?.(i)) continue // photos in a collapsed month aren't touched
     if (mode === "add") next.add(names[i])
     else next.delete(names[i])
   }

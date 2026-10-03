@@ -9,8 +9,12 @@ export type GridRow =
 const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
 const monthLabel = (d: Date) => d.toLocaleString("en-US", { month: "long", year: "numeric" })
 
-/** Header + photo rows (`start`/`end` are item indices, end exclusive). Without grouping, just photo rows. */
-export function buildRows(items: { modified: number }[], columns: number, grouped: boolean): GridRow[] {
+/**
+ * Header + photo rows (`start`/`end` are item indices, end exclusive). Without
+ * grouping, just photo rows. Months in `collapsed` (keys like "2026-07") keep
+ * their header but not their photos.
+ */
+export function buildRows(items: { modified: number }[], columns: number, grouped: boolean, collapsed: ReadonlySet<string> = new Set()): GridRow[] {
   const rows: GridRow[] = []
   const tiles = (start: number, end: number) => {
     for (let i = start; i < end; i += columns) rows.push({ kind: "tiles", start: i, end: Math.min(i + columns, end) })
@@ -26,7 +30,7 @@ export function buildRows(items: { modified: number }[], columns: number, groupe
     let end = start + 1
     while (end < items.length && monthKey(new Date(items[end].modified)) === key) end++
     rows.push({ kind: "header", key, label: monthLabel(first), start, end })
-    tiles(start, end)
+    if (!collapsed.has(key)) tiles(start, end)
     start = end
   }
   return rows
