@@ -4,7 +4,7 @@ import path from "path"
 import sharp from "sharp"
 import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
-import { fileVersion, isRootKey, mediaKind, type RootKey } from "@/lib/media"
+import { fileVersion, isRootKey, type RootKey } from "@/lib/media"
 import { ensureVariant } from "@/lib/thumbs-server"
 import { clientConfig, loadAiConfig, type AiConfig } from "@/lib/ai/config"
 import { isAiReady } from "@/lib/ai/settings-schema"
@@ -13,9 +13,12 @@ import { fingerprintImage } from "@/lib/ai/fingerprint"
 import { groupPhotos, type GroupInput } from "@/lib/ai/grouping"
 import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
-import { folderKey, MIN_SCAN_IMAGES, scanFolderSegments } from "@/lib/ai/review"
+import { folderKey, minScanImages, scanFolderSegments } from "@/lib/ai/review"
 import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
-import { coveredByMonthScan, dayFolderNames, monthScanDays } from "@/lib/ai/month-scan"
+import { coveredByMonthScan, monthScanDays } from "@/lib/ai/month-scan"
+import { listImageVersions, readEntries } from "@/lib/ai/folder-images-server"
+import { analyzeShotRun, listShots } from "@/lib/ai/shot-runner-server"
+import type { ScanKind } from "@/lib/ai/review"
 import type { AiRun } from "@/app/generated/prisma/client"
 
 // Runs AI review scans in the background, one at a time. All state lives in
@@ -52,8 +55,9 @@ export function drainRunner(): Promise<void> {
   return tick()
 }
 
-/** Queues a scan, unless that folder already has one queued or running. */
-export async function createRun(input: { root: string; folder: string; fresh: boolean; userId: string | null }): Promise<{ error: string } | { runId: string }> {
+/** Queues a scan, unless that folder already has one of the same kind queued or running. */
+export async function createRun(input: { root: string; folder: string; fresh: boolean; userId: string | null; kind?: ScanKind }): Promise<{ error: string } | { runId: string }> {
+  const kind = input.kind ?? "similar"
   if (!isRootKey(input.root)) return { error: "Unknown library folder." }
   const segs = scanFolderSegments(input.folder)
   if (!segs) return { error: "Invalid folder." }
@@ -72,9 +76,9 @@ export async function createRun(input: { root: string; folder: string; fresh: bo
   const includeDays = monthScanDays(segs, await readEntries(path.join(base, ...segs))) !== null
   const folder = folderKey(segs)
   // A second scan would replace the first one's unreviewed results.
-  const busy = await prisma.aiRun.findFirst({ where: { root: input.root, folder, status: { in: [...ACTIVE] } }, select: { id: true } })
+  const busy = await prisma.aiRun.findFirst({ where: { kind, root: input.root, folder, status: { in: [...ACTIVE] } }, select: { id: true } })
   if (busy) return { error: "A scan of this folder is already running or waiting." }
-  const run = await prisma.aiRun.create({ data: { root: input.root, folder, fresh: input.fresh, includeDays, createdById: input.userId } })
+  const run = await prisma.aiRun.create({ data: { kind, root: input.root, folder, fresh: input.fresh, includeDays, createdById: input.userId } })
   kickRunner()
   return { runId: run.id }
 }
@@ -85,13 +89,14 @@ export async function createRun(input: { root: string; folder: string; fresh: bo
  */
 export async function queueUnscanned(
   folders: { root: string; folder: string; imageCount: number }[],
-  userId: string | null
+  userId: string | null,
+  kind: ScanKind = "similar"
 ): Promise<{ queued: number }> {
-  const known = new Set((await prisma.aiRun.findMany({ select: { root: true, folder: true } })).map((r) => `${r.root}|${r.folder}`))
+  const known = new Set((await prisma.aiRun.findMany({ where: { kind }, select: { root: true, folder: true } })).map((r) => `${r.root}|${r.folder}`))
   let queued = 0
   for (const f of folders) {
-    if (f.imageCount < MIN_SCAN_IMAGES || known.has(`${f.root}|${f.folder}`)) continue
-    const r = await createRun({ root: f.root, folder: f.folder, fresh: false, userId })
+    if (f.imageCount < minScanImages(kind) || known.has(`${f.root}|${f.folder}`)) continue
+    const r = await createRun({ root: f.root, folder: f.folder, fresh: false, userId, kind })
     if ("runId" in r) queued++
   }
   return { queued }
@@ -102,10 +107,10 @@ export async function queueUnscanned(
  * deleted; one put back in the queue by Retry keeps its results and returns
  * to Cancelled. Running and finished scans stay.
  */
-export async function clearQueue(): Promise<{ removed: number }> {
+export async function clearQueue(kind: ScanKind = "similar"): Promise<{ removed: number }> {
   const [fresh, retried] = await prisma.$transaction([
-    prisma.aiRun.deleteMany({ where: { status: "QUEUED", startedAt: null } }),
-    prisma.aiRun.updateMany({ where: { status: "QUEUED" }, data: { status: "CANCELLED", finishedAt: new Date() } }),
+    prisma.aiRun.deleteMany({ where: { kind, status: "QUEUED", startedAt: null } }),
+    prisma.aiRun.updateMany({ where: { kind, status: "QUEUED" }, data: { status: "CANCELLED", finishedAt: new Date() } }),
   ])
   return { removed: fresh.count + retried.count }
 }
@@ -115,10 +120,11 @@ export async function requeueRun(runId: string): Promise<{ error: string } | { o
   const run = await prisma.aiRun.findUnique({ where: { id: runId } })
   if (!run) return { error: "That scan no longer exists." }
   if ((ACTIVE as readonly string[]).includes(run.status)) return { error: "That scan is still running." }
-  const newer = await prisma.aiRun.findFirst({ where: { root: run.root, folder: run.folder, status: { in: [...ACTIVE] } }, select: { id: true } })
+  const newer = await prisma.aiRun.findFirst({ where: { kind: run.kind, root: run.root, folder: run.folder, status: { in: [...ACTIVE] } }, select: { id: true } })
   if (newer) return { error: "Another scan of this folder is running or waiting. Try again when it's done." }
   await prisma.$transaction([
     prisma.aiGroup.updateMany({ where: { runId, status: "FAILED" }, data: { status: "PENDING", error: null } }),
+    prisma.aiShot.updateMany({ where: { runId, status: "FAILED" }, data: { status: "PENDING", error: null } }),
     prisma.aiRun.update({ where: { id: runId }, data: { status: "QUEUED", error: null, finishedAt: null } }),
   ])
   kickRunner()
@@ -160,13 +166,16 @@ async function stopped(runId: string): Promise<boolean> {
  * that arrived while we were working is never overwritten.
  */
 async function finish(runId: string, data: { status: "DONE" | "FAILED" | "CANCELLED"; error?: string }, from: readonly AiRun["status"][] = WORKING) {
-  const [analyzed, failed] = await Promise.all([
+  // A run has groups (Find Similar) or shots (Find Screenshots), never both.
+  const [analyzed, failed, shotsAnalyzed, shotsFailed] = await Promise.all([
     prisma.aiGroup.count({ where: { runId, status: { in: ["ANALYZED", "RESOLVED", "DISMISSED"] } } }),
     prisma.aiGroup.count({ where: { runId, status: "FAILED" } }),
+    prisma.aiShot.count({ where: { runId, status: { in: ["SCREENSHOT", "CLEAR", "KEPT", "REMOVED"] } } }),
+    prisma.aiShot.count({ where: { runId, status: "FAILED" } }),
   ])
   await prisma.aiRun.updateMany({
     where: { id: runId, status: { in: [...from] } },
-    data: { status: data.status, error: data.error ?? null, analyzedCount: analyzed, failedCount: failed, finishedAt: new Date() },
+    data: { status: data.status, error: data.error ?? null, analyzedCount: analyzed + shotsAnalyzed, failedCount: failed + shotsFailed, finishedAt: new Date() },
   })
 }
 
@@ -186,10 +195,14 @@ async function processRun(run: AiRun) {
   if (!run.groupedAt) {
     if (!(await claim({ status: "GROUPING", startedAt: run.startedAt ?? new Date(), model: config.model, error: null }))) return
     try {
-      await groupRun(run, run.root, segs, config)
+      if (run.kind === "screenshots") await listShots(run, run.root, segs, () => stopped(run.id))
+      else await groupRun(run, run.root, segs, config)
     } catch (error) {
       return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) })
     }
+  } else if (run.kind === "screenshots") {
+    // Each image is checked against its own version when its turn comes.
+    if (!(await claim({ status: "ANALYZING", model: config.model, error: null, finishedAt: null }))) return
   } else {
     // Resuming (retry, resume, restart): the folder may have changed while the
     // run sat idle and unlocked — resolved groups moved files out — so compare
@@ -201,6 +214,19 @@ async function processRun(run: AiRun) {
       return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) }, picked)
     }
     if (!(await claim({ status: "ANALYZING", model: config.model, error: null, finishedAt: null, snapshot: snapshotNow }))) return
+  }
+
+  if (run.kind === "screenshots") {
+    const controller = new AbortController()
+    state.current = { runId: run.id, controller }
+    try {
+      const outcome = await analyzeShotRun(run, run.root as RootKey, segs, config, controller.signal, () => stopped(run.id))
+      if (outcome.status === "failed") await finish(run.id, { status: "FAILED", error: outcome.error })
+      else await finish(run.id, { status: outcome.status === "cancelled" ? "CANCELLED" : "DONE" })
+    } finally {
+      state.current = null
+    }
+    return
   }
 
   const pending = await prisma.aiGroup.findMany({
@@ -264,38 +290,6 @@ async function processRun(run: AiRun) {
   } finally {
     state.current = null
   }
-}
-
-async function readEntries(dir: string) {
-  return fs.readdir(dir, { withFileTypes: true }).catch(() => [])
-}
-
-/**
- * Every image directly in `dir` with its current version — and, for a month
- * scan, every image in its day folders too, keyed "18/IMG_1.jpg".
- */
-async function listImageVersions(dir: string, includeDays = false): Promise<Map<string, string>> {
-  let entries
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    throw new Error("The folder no longer exists.")
-  }
-  const out = new Map<string, string>()
-  const add = async (rel: string) => {
-    try {
-      out.set(rel, fileVersion(await fs.stat(path.join(dir, rel))))
-    } catch {
-      // removed between readdir and stat
-    }
-  }
-  for (const e of entries) if (e.isFile() && mediaKind(e.name) === "image") await add(e.name)
-  if (includeDays) {
-    for (const day of dayFolderNames(entries)) {
-      for (const e of await readEntries(path.join(dir, day))) if (e.isFile() && mediaKind(e.name) === "image") await add(`${day}/${e.name}`)
-    }
-  }
-  return out
 }
 
 async function folderChange(dir: string, snapshot: Snapshot, includeDays: boolean): Promise<string | null> {

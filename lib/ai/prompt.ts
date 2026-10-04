@@ -24,9 +24,9 @@ export const MAX_INSTRUCTIONS_LENGTH = 4000
 const normalise = (text: string) => text.replace(/\r\n?/g, "\n").trim()
 
 /** What to save for an instructions box: null (use the default) when blank or unedited. */
-export function storedInstructions(text: string): string | null {
+export function storedInstructions(text: string, defaultText = DEFAULT_INSTRUCTIONS): string | null {
   const t = normalise(text)
-  return t === "" || t === normalise(DEFAULT_INSTRUCTIONS) ? null : t
+  return t === "" || t === normalise(defaultText) ? null : t
 }
 
 export function buildMessages(images: string[], instructions: string | null, previousError?: string): ChatMessage[] {
@@ -48,7 +48,7 @@ const replySchema = z.object({
   reason: z.string().optional().nullable(),
 })
 
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const start = text.indexOf("{")
   const end = text.lastIndexOf("}")
   if (start < 0 || end <= start) throw new Error("no JSON object in the reply")

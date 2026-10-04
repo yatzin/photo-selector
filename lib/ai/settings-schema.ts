@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { MAX_INSTRUCTIONS_LENGTH, storedInstructions } from "@/lib/ai/prompt"
+import { DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/screenshot-prompt"
 
 // Pure validation for Settings → AI. Shared by the server actions and the
 // runner's readiness check; no database access here.
@@ -36,6 +37,7 @@ const schema = z.object({
   timeoutSeconds: z.string().trim().optional(),
   extraBody: z.string().trim().max(2000).optional(),
   instructions: z.string().optional(),
+  screenshotInstructions: z.string().optional(),
   groupWindowSeconds: z.string().trim(),
   similarity: z.string().trim(),
   imageMaxPx: z.string().trim(),
@@ -54,6 +56,8 @@ export type ParsedAiSettings = {
   extraBody: string | null
   /** Replaces the default AI instructions; null = use the default. */
   instructions: string | null
+  /** Replaces the default screenshot-finder instructions; null = use the default. */
+  screenshotInstructions: string | null
   groupWindowSeconds: number
   similarity: Similarity
   imageMaxPx: number
@@ -114,6 +118,8 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
 
   const instructions = storedInstructions(v.instructions ?? "")
   if ((instructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `AI instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
+  const screenshotInstructions = storedInstructions(v.screenshotInstructions ?? "", DEFAULT_SCREENSHOT_INSTRUCTIONS)
+  if ((screenshotInstructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `Screenshot instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
 
   const groupWindowSeconds = intIn(v.groupWindowSeconds, 5, 600)
   if (groupWindowSeconds === null) return { ok: false, error: "Time window must be 5 to 600 seconds." }
@@ -132,7 +138,7 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
     ok: true,
     value: {
       enabled: v.enabled, baseUrl, model, temperature, maxTokens, timeoutSeconds, extraBody,
-      instructions, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
+      instructions, screenshotInstructions, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
     },
   }
 }

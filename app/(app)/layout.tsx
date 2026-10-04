@@ -9,7 +9,12 @@ import packageJson from "@/package.json"
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth()
   if (!session) redirect("/login")
-  const aiPending = await prisma.aiGroup.count({ where: { status: "ANALYZED" } })
+  // Groups to review plus screenshots waiting for a decision.
+  const [groupsPending, shotsPending] = await Promise.all([
+    prisma.aiGroup.count({ where: { status: "ANALYZED" } }),
+    prisma.aiShot.count({ where: { status: "SCREENSHOT" } }),
+  ])
+  const aiPending = groupsPending + shotsPending
 
   return (
     <div className="flex h-svh overflow-hidden">

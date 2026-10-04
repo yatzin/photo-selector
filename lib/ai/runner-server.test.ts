@@ -77,12 +77,16 @@ beforeAll(async () => {
       const b = behaviours.shift() ?? {}
       calls++
       await b.onStart?.()
-      const parts = JSON.parse(raw).messages[1].content as { type: string }[]
+      const body = JSON.parse(raw)
+      const parts = body.messages[1].content as { type: string }[]
       const n = parts.filter((p) => p.type === "image_url").length
       const ranking = Array.from({ length: n }, (_, i) => ({ photo: n - i, note: "" }))
+      // Find Screenshots: odd-numbered images in each request are screenshots.
+      const results = Array.from({ length: n }, (_, i) => ({ photo: i + 1, screenshot: i % 2 === 0, note: i % 2 === 0 ? "chat" : "photo" }))
+      const reply = String(body.messages[0].content).includes('"results"') ? { results } : { ranking, best: [n], reason: "ok" }
       setTimeout(() => {
         res.writeHead(b.status ?? 200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify(b.status && b.status >= 400 ? { error: { message: "nope" } } : { choices: [{ message: { content: JSON.stringify({ ranking, best: [n], reason: "ok" }) } }] }))
+        res.end(JSON.stringify(b.status && b.status >= 400 ? { error: { message: "nope" } } : { choices: [{ message: { content: JSON.stringify(reply) } }] }))
       }, b.delayMs ?? 0)
     })
   })
@@ -106,6 +110,18 @@ beforeEach(async () => {
   await prisma.aiRun.deleteMany({})
   await makePhotos()
 })
+
+/** shots: five PNG screenshots (no EXIF), a camera JPEG and a HEIC. */
+const shotsDir = path.join(upload, "shots")
+async function makeShots() {
+  await fs.rm(shotsDir, { recursive: true, force: true })
+  await fs.mkdir(shotsDir, { recursive: true })
+  for (let i = 1; i <= 5; i++) await sharp(scene(i % 2 ? "a" : "b", i * 7)).png().toFile(path.join(shotsDir, `shot${i}.png`))
+  await sharp(scene("a", 0)).withExif({ IFD0: { Make: "Apple", Model: "iPhone 15" } }).jpeg().toFile(path.join(shotsDir, "camera.jpg"))
+  await fs.writeFile(path.join(shotsDir, "IMG_1.heic"), "not decoded")
+}
+const shotsOf = async (runId: string) =>
+  Object.fromEntries((await prisma.aiShot.findMany({ where: { runId }, orderBy: { name: "asc" } })).map((s) => [s.name, s.status]))
 
 const groupsOf = (runId: string) => prisma.aiGroup.findMany({ where: { runId }, orderBy: { takenAt: "asc" }, include: { photos: true } })
 
@@ -397,6 +413,69 @@ describe("AI runner", () => {
     await prisma.aiRun.create({ data: { root: "upload", folder: "busy", status: "ANALYZING" } })
     expect(await folderLocked("upload", ["waiting"])).toBe(false)
     expect(await folderLocked("upload", ["busy"])).toBe(true)
+  }, 60_000)
+})
+
+describe("Find Screenshots", () => {
+  beforeEach(makeShots)
+
+  const scan = async (fresh = false) => {
+    const run = await runner.createRun({ root: "upload", folder: "shots", fresh, userId: null, kind: "screenshots" })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    return run.runId
+  }
+
+  it("skips camera photos and HEIC, and asks the AI about the rest a few at a time", async () => {
+    const runId = await scan()
+    const run = await prisma.aiRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run).toMatchObject({ status: "DONE", kind: "screenshots", photoCount: 7, groupCount: 5, analyzedCount: 5, failedCount: 0 })
+    expect(calls).toBe(2)
+    expect(await shotsOf(runId)).toEqual({ "shot1.png": "SCREENSHOT", "shot2.png": "CLEAR", "shot3.png": "SCREENSHOT", "shot4.png": "CLEAR", "shot5.png": "SCREENSHOT" })
+  }, 60_000)
+
+  it("a re-scan skips images already answered; start fresh asks again", async () => {
+    const first = await scan()
+    calls = 0
+    const second = await scan()
+    expect(calls).toBe(0)
+    expect(await prisma.aiRun.findUniqueOrThrow({ where: { id: second } })).toMatchObject({ status: "DONE", groupCount: 0 })
+    expect(await prisma.aiShot.count({ where: { runId: first, status: "SCREENSHOT" } })).toBe(3)
+    await scan(true)
+    expect(calls).toBe(2)
+    // The first scan's waiting screenshots were taken over; its camera-photo answers stay.
+    expect(await prisma.aiShot.count({ where: { runId: first, status: "SCREENSHOT" } })).toBe(0)
+  }, 60_000)
+
+  it("deletes screenshots with undo, moves them to Dropoff, and marks them as not screenshots", async () => {
+    const { markShots, moveShots, trashShots, undoTrashShots } = await import("./shot-review-server")
+    const runId = await scan()
+    const byName = Object.fromEntries((await prisma.aiShot.findMany({ where: { runId } })).map((s) => [s.name, s.id]))
+
+    const del = await trashShots(runId, [byName["shot1.png"]])
+    if ("error" in del) throw new Error(del.error)
+    expect(del.ids).toEqual([byName["shot1.png"]])
+    await expect(fs.stat(path.join(shotsDir, "shot1.png"))).rejects.toThrow()
+    expect(await undoTrashShots(runId, del.batchId!, del.ids)).toEqual({ restored: 1 })
+    expect((await shotsOf(runId))["shot1.png"]).toBe("SCREENSHOT")
+
+    const moved = await moveShots(runId, [byName["shot3.png"]])
+    expect("ids" in moved && moved.ids).toEqual([byName["shot3.png"]])
+    await fs.stat(path.join(tmp, "dropoff", "shot3.png"))
+    await fs.rm(path.join(tmp, "dropoff", "shot3.png"))
+
+    await markShots(runId, [byName["shot5.png"]], "KEPT")
+    expect(await shotsOf(runId)).toMatchObject({ "shot1.png": "SCREENSHOT", "shot3.png": "REMOVED", "shot5.png": "KEPT" })
+    // Only images the AI flagged can be acted on.
+    expect(await trashShots(runId, [byName["shot2.png"]])).toEqual({ error: expect.stringMatching(/no longer|still here/i) })
+  }, 60_000)
+
+  it("doesn't lock the folder, and can run alongside a Find Similar scan of it", async () => {
+    const { folderLocked } = await import("./lock-server")
+    await prisma.aiRun.create({ data: { kind: "screenshots", root: "upload", folder: "shots", status: "ANALYZING" } })
+    expect(await folderLocked("upload", ["shots"])).toBe(false)
+    expect(await runner.createRun({ root: "upload", folder: "shots", fresh: false, userId: null })).toEqual({ runId: expect.any(String) })
+    expect(await runner.createRun({ root: "upload", folder: "shots", fresh: false, userId: null, kind: "screenshots" })).toEqual({ error: expect.stringMatching(/already/i) })
   }, 60_000)
 })
 

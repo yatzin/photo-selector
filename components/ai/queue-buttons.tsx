@@ -6,16 +6,17 @@ import { toast } from "sonner"
 import { ListPlus, ListX, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { clearQueueAction, queueUnscannedAction } from "@/lib/actions/ai"
+import type { ScanKind } from "@/lib/ai/review"
 
 /** "Scan all unscanned" queues one scan per never-scanned folder; "Clear queue" takes waiting scans back out. */
-export function QueueButtons({ unscanned, queued, ready }: { unscanned: number; queued: number; ready: boolean }) {
+export function QueueButtons({ kind, unscanned, queued, ready }: { kind: ScanKind; unscanned: number; queued: number; ready: boolean }) {
   const router = useRouter()
   const [busy, setBusy] = useState<"scan" | "clear" | null>(null)
 
   async function scanAll() {
     if (!confirm(`Queue ${unscanned} scan${unscanned === 1 ? "" : "s"}, one for each folder that hasn't been scanned yet? They run one at a time.`)) return
     setBusy("scan")
-    const r = await queueUnscannedAction()
+    const r = await queueUnscannedAction(kind)
     setBusy(null)
     if ("error" in r) toast.error(r.error)
     else toast.success(r.queued ? `Queued ${r.queued} scan${r.queued === 1 ? "" : "s"}.` : "Nothing new to scan.")
@@ -25,7 +26,7 @@ export function QueueButtons({ unscanned, queued, ready }: { unscanned: number; 
   async function clear() {
     if (!confirm(`Remove ${queued} waiting scan${queued === 1 ? "" : "s"} from the queue? A scan that's already running keeps going.`)) return
     setBusy("clear")
-    const r = await clearQueueAction()
+    const r = await clearQueueAction(kind)
     setBusy(null)
     toast.success(`Removed ${r.removed} from the queue.`)
     router.refresh()

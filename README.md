@@ -30,7 +30,11 @@ take of each, using any OpenAI-compatible vision model you host yourself.
 - Year/month/day upload folders (`2026/07/04`) are scanned a month at a time.
 - **Scan all unscanned** queues every folder; the folder being scanned is locked
   so nothing changes under it.
-- Editable AI instructions (Settings → AI); the reply format stays fixed.
+- **Find Screenshots** tab: finds screenshots and saved images (memes,
+  downloads, forwarded pictures) in a folder, to delete or move to Sort Dropoff
+  in bulk. Photos with camera details and HEIC files skip the AI; the rest are
+  sent four to a request. These scans don't lock the folder.
+- Editable AI instructions for each scan type (Settings → AI); the reply format stays fixed.
 
 **Everything else**
 - Accounts with admin and user roles, light and dark themes.
@@ -116,6 +120,10 @@ Open `http://<nas>:3200` and sign in with the admin account. Check
 docker compose pull && docker compose up -d
 ```
 
+Each image is tagged `latest`, its version (e.g. `1.1.0`, the same version shown
+at the bottom of every page) and `sha-<commit>`. To stay on a version, use
+`ghcr.io/yatzin/photo-selector:1.1.0` instead of `latest`.
+
 Database changes apply themselves on start.
 
 ### Folders
@@ -181,7 +189,7 @@ for example:
 **Test connection** sends a small red image and checks the model can see it.
 Each group is sent as one request with every photo in it (resized to
 "Image size sent", 768 px by default). Bursts larger than "Largest group" are
-split. If the server sits behind a proxy, make sure its read timeout is longer
+split. Find Screenshots sends four images per request. If the server sits behind a proxy, make sure its read timeout is longer
 than a group takes. Eight photos can take 80–90 seconds on a mid-size local model.
 
 ## Local development

@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { testAiConnection, updateAiSettings, type AiTestResult } from "@/lib/actions/ai-settings"
 import { AI_PRESETS, type AiSettingsInput } from "@/lib/ai/settings-schema"
 import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTIONS_LENGTH, REPLY_FORMAT, storedInstructions } from "@/lib/ai/prompt"
+import { DEFAULT_SCREENSHOT_INSTRUCTIONS, SCREENSHOT_REPLY_FORMAT, SHOTS_PER_REQUEST } from "@/lib/ai/screenshot-prompt"
 
 export type AiSettingsInitial = Omit<AiSettingsInput, "apiKey" | "clearApiKey">
 
@@ -125,7 +126,7 @@ export function AiSettings({ initial, hasStoredKey, keyUnreadable }: { initial: 
 
       <section className="space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">AI instructions</h2>
+          <h2 className="text-lg font-semibold">Find Similar instructions</h2>
           <Button type="button" variant="outline" size="sm" disabled={storedInstructions(form.instructions ?? "") === null} onClick={() => set("instructions", DEFAULT_INSTRUCTIONS)}>
             Reset to default
           </Button>
@@ -137,6 +138,34 @@ export function AiSettings({ initial, hasStoredKey, keyUnreadable }: { initial: 
           <div className="space-y-1.5">
             <p className="text-sm font-medium">Reply format (always added, can&apos;t be changed)</p>
             <pre className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">{REPLY_FORMAT}</pre>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Screenshot instructions</h2>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={storedInstructions(form.screenshotInstructions ?? "", DEFAULT_SCREENSHOT_INSTRUCTIONS) === null}
+            onClick={() => set("screenshotInstructions", DEFAULT_SCREENSHOT_INSTRUCTIONS)}
+          >
+            Reset to default
+          </Button>
+        </div>
+        <div className="rounded-lg border bg-card p-4 space-y-3">
+          <Field
+            id="ai-shot-prompt"
+            label="What counts as a screenshot"
+            hint={`Used by Find Screenshots, sent with each batch of ${SHOTS_PER_REQUEST} images. Photos with camera details (make, model, exposure) and HEIC files skip the AI.`}
+          >
+            <Textarea id="ai-shot-prompt" rows={9} maxLength={MAX_INSTRUCTIONS_LENGTH} value={form.screenshotInstructions ?? ""} onChange={(e) => set("screenshotInstructions", e.target.value)} />
+          </Field>
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium">Reply format (always added, can&apos;t be changed)</p>
+            <pre className="whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">{SCREENSHOT_REPLY_FORMAT}</pre>
           </div>
         </div>
       </section>

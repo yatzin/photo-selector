@@ -15,6 +15,7 @@ import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { type ReviewPhoto } from "@/components/ai/review-group"
 import { ReviewList } from "@/components/ai/review-list"
 import { Pager } from "@/components/ai/pager"
+import { ScreenshotResults } from "./screenshot-results"
 
 const TABS = [
   { id: "review", label: "To review", statuses: ["ANALYZED"] },
@@ -34,6 +35,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
   if (!run || !isRootKey(run.root)) notFound()
   const segs = scanFolderSegments(run.folder)
   if (!segs) notFound()
+  if (run.kind === "screenshots") return <ScreenshotResults run={run} root={run.root} segs={segs} tab={tab} pageParam={pageParam} />
   const active = TABS.find((t) => t.id === tab) ?? TABS[0]
 
   const counts = await prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true })

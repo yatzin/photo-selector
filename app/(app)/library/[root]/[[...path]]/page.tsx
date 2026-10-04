@@ -1,12 +1,14 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
-import { isRootKey, ROOT_LABELS } from "@/lib/media"
+import { isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
 import { MediaGrid } from "@/components/library/media-grid"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
-import { folderLocked } from "@/lib/ai/lock-server"
+import { activeScans, folderLocked } from "@/lib/ai/lock-server"
+import { isFolderLocked } from "@/lib/ai/lock"
+import { pruneEmptyFolders } from "@/lib/empty-folders"
 
 // A library folder: subfolders as cards, then its photos and videos as a
 // sortable thumbnail grid.
@@ -33,6 +35,14 @@ export default async function LibraryPage({
         </p>
       </div>
     )
+  }
+
+  // Mobile Upload: subfolders left empty by sorting (apart from OS clutter) are
+  // removed as you browse, except ones a running AI scan is reading.
+  if (root === "upload" && status.writable) {
+    const dir = resolveInside(status.path, segments)
+    const scans = await activeScans()
+    if (dir && !isFolderLocked(scans, root, segments)) await pruneEmptyFolders(dir, (name) => isFolderLocked(scans, root, [...segments, name]))
   }
 
   const [listing, locked] = await Promise.all([listDirectory(root, segments), folderLocked(root, segments)])

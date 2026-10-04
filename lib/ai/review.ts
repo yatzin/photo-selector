@@ -2,6 +2,14 @@ import { safeSegments } from "@/lib/media"
 
 // Pure rules for acting on a reviewed group.
 
+/** Find Similar compares photos; Find Screenshots checks each one. */
+export const SCAN_KINDS = ["similar", "screenshots"] as const
+export type ScanKind = (typeof SCAN_KINDS)[number]
+export const isScanKind = (v: unknown): v is ScanKind => (SCAN_KINDS as readonly unknown[]).includes(v)
+
+/** Fewest photos a folder needs for a scan: two to compare, or one to check. */
+export const minScanImages = (kind: ScanKind) => (kind === "screenshots" ? 1 : MIN_SCAN_IMAGES)
+
 /** A folder needs at least this many photos to have anything to compare. */
 export const MIN_SCAN_IMAGES = 2
 

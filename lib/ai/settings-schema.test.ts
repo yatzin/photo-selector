@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { DEFAULT_INSTRUCTIONS } from "./prompt"
+import { DEFAULT_SCREENSHOT_INSTRUCTIONS } from "./screenshot-prompt"
 import { isAiReady, keyMayFollow, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "./settings-schema"
 
 const base: AiSettingsInput = {
@@ -68,6 +69,14 @@ describe("parseAiSettings", () => {
     expect(unedited.ok && unedited.value.instructions).toBeNull()
     const blank = parseAiSettings({ ...base, instructions: "" })
     expect(blank.ok && blank.value.instructions).toBeNull()
+  })
+
+  it("keeps the screenshot instructions separately, with their own default", () => {
+    const edited = parseAiSettings({ ...base, screenshotInstructions: " Only chat screenshots. " })
+    expect(edited.ok && edited.value).toMatchObject({ screenshotInstructions: "Only chat screenshots.", instructions: null })
+    const unedited = parseAiSettings({ ...base, screenshotInstructions: DEFAULT_SCREENSHOT_INSTRUCTIONS })
+    expect(unedited.ok && unedited.value.screenshotInstructions).toBeNull()
+    expect(parseAiSettings({ ...base, screenshotInstructions: "x".repeat(4001) }).ok).toBe(false)
   })
 })
 

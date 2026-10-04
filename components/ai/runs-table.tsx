@@ -6,13 +6,16 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { cancelRunAction, removeRunAction, retryRunAction } from "@/lib/actions/ai"
 import { ROOT_LABELS, type RootKey } from "@/lib/media"
+import type { ScanKind } from "@/lib/ai/review"
 
 export type RunRow = {
   id: string
+  kind: ScanKind
   root: RootKey
   folder: string
   includeDays: boolean
   status: "QUEUED" | "GROUPING" | "ANALYZING" | "DONE" | "FAILED" | "CANCELLED"
+  photoCount: number
   groupCount: number
   analyzedCount: number
   failedCount: number
@@ -25,6 +28,10 @@ export type RunRow = {
 const LABEL: Record<RunRow["status"], string> = {
   QUEUED: "Waiting", GROUPING: "Grouping photos", ANALYZING: "Asking the AI", DONE: "Done", FAILED: "Stopped", CANCELLED: "Cancelled",
 }
+const label = (r: RunRow) => (r.kind === "screenshots" && r.status === "GROUPING" ? "Reading photo details" : LABEL[r.status])
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
+// Find Similar counts groups; Find Screenshots counts the images it asked the AI about.
+const unit = (r: RunRow) => (r.kind === "screenshots" ? "image" : "group")
 
 const folderLabel = (r: { root: keyof typeof ROOT_LABELS; folder: string; includeDays: boolean }) =>
   `${ROOT_LABELS[r.root]}${r.folder ? ` / ${r.folder.split("/").join(" / ")}` : ""}${r.includeDays ? " — all days" : ""}`
@@ -63,16 +70,21 @@ export function RunsTable({ runs }: { runs: RunRow[] }) {
                   ) : (
                     <div className="font-medium">{folderLabel(r)}</div>
                   )}
-                  {r.toReview > 0 && <div className="text-xs text-link">{r.toReview} group{r.toReview === 1 ? "" : "s"} to review</div>}
+                  {r.toReview > 0 && <div className="text-xs text-link">{plural(r.toReview, r.kind === "screenshots" ? "screenshot" : "group")} to review</div>}
                 </td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                   {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
                   {r.createdBy && <span> · {r.createdBy}</span>}
                 </td>
                 <td className="px-4 py-3">
-                  <div>{LABEL[r.status]}{r.status === "ANALYZING" && r.groupCount > 0 && <> — {r.analyzedCount + r.failedCount} of {r.groupCount}</>}</div>
+                  <div>{label(r)}{r.status === "ANALYZING" && r.groupCount > 0 && <> — {r.analyzedCount + r.failedCount} of {r.groupCount}</>}</div>
                   {r.status === "ANALYZING" && <div className="mt-1 h-1.5 w-40 rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} /></div>}
-                  {r.status === "DONE" && <div className="text-xs text-muted-foreground">{r.groupCount} group{r.groupCount === 1 ? "" : "s"}{r.failedCount > 0 && `, ${r.failedCount} failed`}</div>}
+                  {r.status === "DONE" && (
+                    <div className="text-xs text-muted-foreground">
+                      {r.kind === "screenshots" ? `${plural(r.photoCount, "photo")} checked, ${r.groupCount} asked the AI` : plural(r.groupCount, unit(r))}
+                      {r.failedCount > 0 && `, ${r.failedCount} failed`}
+                    </div>
+                  )}
                   {r.error && <div className="text-xs text-destructive">{r.error}</div>}
                 </td>
                 <td className="px-4 py-3">

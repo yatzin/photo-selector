@@ -43,6 +43,20 @@ enum AiGroupStatus {
   DISMISSED
 }
 
+enum AiShotStatus {
+  /// Waiting for the AI.
+  PENDING
+  /// The AI says it's a screenshot or saved image; waiting for the user.
+  SCREENSHOT
+  /// The AI says it's a camera photo.
+  CLEAR
+  FAILED
+  /// The user said it isn't a screenshot.
+  KEPT
+  /// Deleted, moved or changed since; no longer shown.
+  REMOVED
+}
+
 enum AiDecision {
   KEEP
   TRASH
@@ -66,6 +80,8 @@ model AiSettings {
   /// Replaces the default AI instructions (null = default). The reply
   /// format is never stored here: it is always appended by lib/ai/prompt.ts.
   instructions       String?
+  /// Replaces the default screenshot-finder instructions (null = default).
+  screenshotInstructions String?
   groupWindowSeconds Int      @default(60)
   /// strict | similar | loose
   similarity         String   @default("similar")
@@ -77,6 +93,8 @@ model AiSettings {
 model AiRun {
   id            String      @id @default(cuid())
   /// upload | dropoff
+  /// similar (Find Similar) | screenshots (Find Screenshots)
+  kind          String      @default("similar")
   root          String
   /// Path inside the root, "/"-separated; "" = the root itself.
   folder        String
@@ -101,6 +119,7 @@ model AiRun {
   snapshot      String?
   finishedAt    DateTime?
   groups        AiGroup[]
+  shots         AiShot[]
 
   @@index([status, createdAt])
 }
@@ -138,4 +157,24 @@ model AiGroupPhoto {
   decision  AiDecision?
 
   @@unique([groupId, name])
+}
+
+/// One image a Find Screenshots scan sent to the AI (camera photos are skipped).
+model AiShot {
+  id      String       @id @default(cuid())
+  runId   String
+  run     AiRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  root    String
+  folder  String
+  /// Inside `folder`; "18/IMG_1.png" for a day folder of a month scan.
+  name    String
+  version String
+  takenAt DateTime
+  status  AiShotStatus @default(PENDING)
+  note    String?
+  error   String?
+
+  @@unique([runId, name])
+  @@index([root, folder, status])
+  @@index([runId, status])
 }

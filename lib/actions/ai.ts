@@ -6,7 +6,8 @@ import { z } from "zod"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { aiReady } from "@/lib/ai/config"
-import { scanFolderSegments } from "@/lib/ai/review"
+import { isScanKind, scanFolderSegments } from "@/lib/ai/review"
+import { markShots, moveShots, trashShots, undoTrashShots } from "@/lib/ai/shot-review-server"
 import { abortRun, clearQueue, createRun, queueUnscanned, requeueRun } from "@/lib/ai/runner-server"
 import { listScanFolders } from "@/lib/library-server"
 import { dismissGroup, resolveGroup, resolveGroups, undoGroup, trashGroup } from "@/lib/ai/review-server"
@@ -33,28 +34,30 @@ async function groupLocked(groupId: string): Promise<boolean> {
   return !!group && !!segs && (await folderLocked(group.root, segs))
 }
 
-export async function startRunAction(input: { root: string; folder: string; fresh: boolean }): Promise<{ error: string } | { runId: string }> {
+export async function startRunAction(input: { root: string; folder: string; fresh: boolean; kind?: string }): Promise<{ error: string } | { runId: string }> {
   const session = await requireUser()
-  const parsed = z.object({ root: z.string(), folder: z.string().max(1024), fresh: z.boolean() }).safeParse(input)
+  const parsed = z.object({ root: z.string(), folder: z.string().max(1024), fresh: z.boolean(), kind: z.string().refine(isScanKind).optional() }).safeParse(input)
   if (!parsed.success) return { error: "Invalid request." }
   if (!(await aiReady())) return { error: "AI is not set up. Ask an admin to configure Settings → AI." }
-  const result = await createRun({ ...parsed.data, userId: session.user.id })
+  const { kind, ...rest } = parsed.data
+  const result = await createRun({ ...rest, kind: isScanKind(kind) ? kind : "similar", userId: session.user.id })
   refresh()
   return result
 }
 
 /** Queues a separate scan for every folder in the picker that has never been scanned. */
-export async function queueUnscannedAction(): Promise<{ error: string } | { queued: number }> {
+export async function queueUnscannedAction(kind: string = "similar"): Promise<{ error: string } | { queued: number }> {
   const session = await requireUser()
+  if (!isScanKind(kind)) return { error: "Invalid request." }
   if (!(await aiReady())) return { error: "AI is not set up. Ask an admin to configure Settings → AI." }
-  const result = await queueUnscanned(await listScanFolders(), session.user.id)
+  const result = await queueUnscanned(await listScanFolders(), session.user.id, kind)
   refresh()
   return result
 }
 
-export async function clearQueueAction(): Promise<{ removed: number }> {
+export async function clearQueueAction(kind: string = "similar"): Promise<{ removed: number }> {
   await requireUser()
-  const result = await clearQueue()
+  const result = await clearQueue(isScanKind(kind) ? kind : "similar")
   refresh()
   return result
 }
@@ -125,6 +128,31 @@ export async function undoGroupAction(groupId: string) {
   await requireUser()
   if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await undoGroup(groupId)
+  refresh()
+  return result
+}
+
+const shotIds = z.object({ runId: z.string().min(1), ids: z.array(z.string().min(1)).min(1).max(2000) })
+
+/** Find Screenshots results: delete, move to Sort Dropoff, or mark "not a screenshot" (and back). */
+export async function shotAction(input: { runId: string; ids: string[]; action: "delete" | "move" | "keep" | "unkeep" }) {
+  await requireUser()
+  const parsed = shotIds.extend({ action: z.enum(["delete", "move", "keep", "unkeep"]) }).safeParse(input)
+  if (!parsed.success) return { error: "Invalid request." }
+  const { runId, ids, action } = parsed.data
+  const result =
+    action === "delete" ? await trashShots(runId, ids)
+    : action === "move" ? await moveShots(runId, ids)
+    : await markShots(runId, ids, action === "keep" ? "KEPT" : "SCREENSHOT")
+  refresh()
+  return result
+}
+
+export async function undoShotDeleteAction(input: { runId: string; batchId: string; ids: string[] }) {
+  await requireUser()
+  const parsed = shotIds.extend({ batchId: z.string().min(1) }).safeParse(input)
+  if (!parsed.success) return { error: "Invalid request." }
+  const result = await undoTrashShots(parsed.data.runId, parsed.data.batchId, parsed.data.ids)
   refresh()
   return result
 }
