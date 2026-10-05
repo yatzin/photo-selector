@@ -27,6 +27,8 @@ take of each, using any OpenAI-compatible vision model you host yourself.
 - Review page with the AI's picks pre-selected: **Move picks to Dropoff, trash
   the rest**, **Not duplicates**, **Delete all**, or **Accept all selections**
   for a whole page. Everything is undoable.
+- Handling the last result closes the scan: it leaves the AI page and you're
+  taken back to the list. Undo brings it back.
 - Year/month/day upload folders (`2026/07/04`) are scanned a month at a time.
 - **Scan all unscanned** queues every folder; the folder being scanned is locked
   so nothing changes under it.

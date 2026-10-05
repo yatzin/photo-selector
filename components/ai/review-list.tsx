@@ -45,6 +45,11 @@ export function ReviewList({ groups, acceptAll }: { groups: ReviewGroupProps[]; 
       if (plan.skipped) toast.info(`${plan.skipped} group${plan.skipped === 1 ? "" : "s"} with nothing picked were left for you.`)
     }
     setPicked({})
+    if (!("error" in r) && r.closed) {
+      toast.success("Review finished.")
+      startRefresh(() => router.push("/ai"))
+      return
+    }
     document.querySelector("main")?.scrollTo({ top: 0 })
     startRefresh(() => router.refresh())
   }

@@ -120,6 +120,9 @@ model AiRun {
   /// is checked against it before each AI request.
   snapshot      String?
   finishedAt    DateTime?
+  /// Set once every result has been handled; the scan then drops off the AI
+  /// page but stays on record, so re-scans still skip what it answered.
+  closedAt      DateTime?
   groups        AiGroup[]
   shots         AiShot[]
 

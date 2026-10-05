@@ -150,6 +150,24 @@ describe("AI runner", () => {
     expect((await groupsOf(run.runId)).map((g) => g.status)).toEqual(["DISMISSED", "ANALYZED"])
   }, 60_000)
 
+  it("closes a finished scan once every group is handled, and reopens it on undo", async () => {
+    const { resolveGroup, dismissGroup, undoGroup } = await import("./review-server")
+    const { syncRunClosed } = await import("./close-run-server")
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const user = await prisma.user.upsert({ where: { email: "close@test" }, create: { email: "close@test", name: "T", passwordHash: "x" }, update: {} })
+    const [a, b] = await groupsOf(run.runId)
+    await dismissGroup(a.id, user.id)
+    expect(await syncRunClosed(run.runId)).toBe(false)
+    expect(await resolveGroup(b.id, [b.photos[0].name], user.id)).not.toHaveProperty("error")
+    expect(await syncRunClosed(run.runId)).toBe(true)
+    expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })).closedAt).not.toBeNull()
+    await undoGroup(a.id)
+    expect(await syncRunClosed(run.runId)).toBe(false)
+    expect((await prisma.aiRun.findUniqueOrThrow({ where: { id: run.runId } })).closedAt).toBeNull()
+  }, 60_000)
+
   it("refuses a second scan of a folder that is already being scanned", async () => {
     const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
     expect("runId" in first).toBe(true)
@@ -525,6 +543,20 @@ describe("Quality Checks", () => {
     await scan("screenshots")
     expect(calls).toBe(0)
     expect(await prisma.aiShot.count({ where: { runId: quality, status: { in: ["FLAGGED", "CLEAR"] } } })).toBe(6)
+  }, 60_000)
+
+  it("closes the scan once every flagged photo is handled", async () => {
+    const { markShots, trashShots } = await import("./shot-review-server")
+    const { syncRunClosed } = await import("./close-run-server")
+    await fs.rm(path.join(shotsDir, "IMG_1.heic")) // would fail and stay open
+    const runId = await scan()
+    const flagged = (await prisma.aiShot.findMany({ where: { runId, status: "FLAGGED" } })).map((s) => s.id)
+    await trashShots(runId, flagged.slice(1))
+    expect(await syncRunClosed(runId)).toBe(false)
+    await markShots(runId, flagged.slice(0, 1), "KEPT")
+    expect(await syncRunClosed(runId)).toBe(true)
+    await markShots(runId, flagged.slice(0, 1), "FLAGGED")
+    expect(await syncRunClosed(runId)).toBe(false)
   }, 60_000)
 
   it("deletes bad photos and marks them as not bad, but never moves them", async () => {

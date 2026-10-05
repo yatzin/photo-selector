@@ -71,12 +71,14 @@ export function ShotGrid({
     const ids = chosen.map((i) => i.id)
     if (!ids.length || busy) return
     setBusy(action)
+    let closed = false
     try {
       const r = await shotAction({ runId, ids, action })
       if ("error" in r) {
         toast.error(r.error)
         return
       }
+      closed = r.closed
       setHidden((prev) => new Set([...prev, ...r.ids]))
       setSelected((prev) => new Set([...prev].filter((id) => !r.ids.includes(id))))
       if (r.failed.length) toast.error(`Couldn't change ${r.failed.length} image${r.failed.length === 1 ? "" : "s"}`, { description: `${r.failed[0].name}: ${r.failed[0].error}` })
@@ -104,7 +106,9 @@ export function ShotGrid({
       toast.error("Something went wrong. Check that the NAS is reachable.")
     } finally {
       setBusy(null)
-      startTransition(() => router.refresh())
+      // That was the last image to handle: the scan is closed, back to the list.
+      if (closed) toast.success("Review finished.")
+      startTransition(() => (closed ? router.push(`/ai?tab=${kind}`) : router.refresh()))
     }
   }
 

@@ -13,6 +13,7 @@ import { listScanFolders } from "@/lib/library-server"
 import { dismissGroup, resolveGroup, resolveGroups, undoGroup, trashGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
+import { syncRunClosed } from "@/lib/ai/close-run-server"
 
 async function requireUser() {
   const session = await auth()
@@ -26,6 +27,18 @@ function refresh() {
 }
 
 const ACTIVE = ["QUEUED", "GROUPING", "ANALYZING"] as const
+
+const runOfGroup = async (groupId: string) => (await prisma.aiGroup.findUnique({ where: { id: groupId }, select: { runId: true } }))?.runId ?? null
+
+/**
+ * After a review action: `closed` is true when that was the last thing to
+ * handle in the scan, which is then closed (see close-run-server.ts) so the
+ * page can head back to the scan list.
+ */
+async function withClosed<T extends object>(runId: string | null, result: T): Promise<T & { closed: boolean }> {
+  const closed = !("error" in result) && !!runId && (await syncRunClosed(runId))
+  return { ...result, closed }
+}
 
 /** Review actions change files in the group's folder, so they wait while that folder is being scanned. */
 async function groupLocked(groupId: string): Promise<boolean> {
@@ -91,7 +104,7 @@ export async function resolveGroupAction(groupId: string, keep: string[]) {
   const parsed = z.object({ groupId: z.string().min(1), keep: z.array(z.string()).max(50) }).safeParse({ groupId, keep })
   if (!parsed.success) return { error: "Invalid request." }
   if (await groupLocked(parsed.data.groupId)) return { error: SCAN_LOCK_MESSAGE }
-  const result = await resolveGroup(parsed.data.groupId, parsed.data.keep, session.user.id)
+  const result = await withClosed(await runOfGroup(parsed.data.groupId), await resolveGroup(parsed.data.groupId, parsed.data.keep, session.user.id))
   refresh()
   return result
 }
@@ -104,14 +117,15 @@ export async function resolveGroupsAction(items: { groupId: string; keep: string
   const open: typeof parsed.data = []
   for (const item of parsed.data) if (!(await groupLocked(item.groupId))) open.push(item)
   const result = await resolveGroups(open, session.user.id)
+  const closed = parsed.data.length > 0 && (await withClosed(await runOfGroup(parsed.data[0].groupId), result)).closed
   refresh()
-  return { ...result, failed: result.failed + (parsed.data.length - open.length) }
+  return { ...result, failed: result.failed + (parsed.data.length - open.length), closed }
 }
 
 export async function trashGroupAction(groupId: string) {
   const session = await requireUser()
   if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
-  const result = await trashGroup(groupId, session.user.id)
+  const result = await withClosed(await runOfGroup(groupId), await trashGroup(groupId, session.user.id))
   refresh()
   return result
 }
@@ -119,7 +133,7 @@ export async function trashGroupAction(groupId: string) {
 export async function dismissGroupAction(groupId: string) {
   const session = await requireUser()
   if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
-  const result = await dismissGroup(groupId, session.user.id)
+  const result = await withClosed(await runOfGroup(groupId), await dismissGroup(groupId, session.user.id))
   refresh()
   return result
 }
@@ -128,6 +142,8 @@ export async function undoGroupAction(groupId: string) {
   await requireUser()
   if (await groupLocked(groupId)) return { error: SCAN_LOCK_MESSAGE }
   const result = await undoGroup(groupId)
+  const runId = await runOfGroup(groupId)
+  if (!("error" in result) && runId) await syncRunClosed(runId)
   refresh()
   return result
 }
@@ -144,8 +160,9 @@ export async function shotAction(input: { runId: string; ids: string[]; action: 
     action === "delete" ? await trashShots(runId, ids)
     : action === "move" ? await moveShots(runId, ids)
     : await markShots(runId, ids, action === "keep" ? "KEPT" : "FLAGGED")
+  const closed = await withClosed(runId, result)
   refresh()
-  return result
+  return closed
 }
 
 export async function undoShotDeleteAction(input: { runId: string; batchId: string; ids: string[] }) {
@@ -153,6 +170,7 @@ export async function undoShotDeleteAction(input: { runId: string; batchId: stri
   const parsed = shotIds.extend({ batchId: z.string().min(1) }).safeParse(input)
   if (!parsed.success) return { error: "Invalid request." }
   const result = await undoTrashShots(parsed.data.runId, parsed.data.batchId, parsed.data.ids)
+  if (!("error" in result)) await syncRunClosed(parsed.data.runId)
   refresh()
   return result
 }

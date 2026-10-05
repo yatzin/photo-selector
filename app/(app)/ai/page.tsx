@@ -36,12 +36,13 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
   }
 
   // Filter buttons: everyone, then each person who has started a scan of this kind (you first).
-  const starters = await prisma.user.findMany({ where: { aiRuns: { some: { kind: kind.id } } }, select: { id: true, name: true }, orderBy: { name: "asc" } })
+  const starters = await prisma.user.findMany({ where: { aiRuns: { some: { kind: kind.id, closedAt: null } } }, select: { id: true, name: true }, orderBy: { name: "asc" } })
   starters.sort((a, b) => Number(b.id === session.user.id) - Number(a.id === session.user.id))
   const filterBy = starters.some((u) => u.id === by) ? by : undefined
 
   // Oldest first, the order the queue runs in, so the next scan up is on top.
-  const runFilter = { kind: kind.id, ...(filterBy ? { createdById: filterBy } : {}) }
+  // Closed scans (every result handled) are left out.
+  const runFilter = { kind: kind.id, closedAt: null, ...(filterBy ? { createdById: filterBy } : {}) }
   const { page, pages, skip, take } = pageWindow(await prisma.aiRun.count({ where: runFilter }), pageParam, RUNS_PER_PAGE)
 
   const [ready, folders, runs, anyActive, scanned, queued] = await Promise.all([

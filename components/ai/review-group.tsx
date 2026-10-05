@@ -79,7 +79,7 @@ export function ReviewGroup({
   async function act(fn: () => Promise<unknown>, success: (r: Record<string, number>) => string, undoable = true) {
     setBusy(true)
     setLeaving(true)
-    const r = (await fn()) as { error?: string } & Record<string, number>
+    const r = (await fn()) as { error?: string; closed?: boolean } & Record<string, number>
     setBusy(false)
     if (r.error) {
       setLeaving(false)
@@ -87,7 +87,11 @@ export function ReviewGroup({
     } else {
       toast.success(success(r), undoable ? { action: { label: "Undo", onClick: () => void undoGroupAction(id).then(() => router.refresh()) } } : undefined)
     }
-    router.refresh()
+    // That was the last group to handle: the scan is closed, back to the list.
+    if (r.closed) {
+      toast.success("Review finished.")
+      router.push("/ai")
+    } else router.refresh()
   }
 
   const off = busy || locked || disabled
