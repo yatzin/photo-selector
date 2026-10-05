@@ -124,9 +124,9 @@ Open `http://<nas>:3200` and sign in with the admin account. Check
 docker compose pull && docker compose up -d
 ```
 
-Each image is tagged `latest`, its version (e.g. `1.1.0`, the same version shown
+Each image is tagged `latest`, its version (e.g. `1.2.0`, the same version shown
 at the bottom of every page) and `sha-<commit>`. To stay on a version, use
-`ghcr.io/yatzin/photo-selector:1.1.0` instead of `latest`.
+`ghcr.io/yatzin/photo-selector:1.2.0` instead of `latest`.
 
 Database changes apply themselves on start.
 
