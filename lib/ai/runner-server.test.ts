@@ -81,8 +81,8 @@ beforeAll(async () => {
       const parts = body.messages[1].content as { type: string }[]
       const n = parts.filter((p) => p.type === "image_url").length
       const ranking = Array.from({ length: n }, (_, i) => ({ photo: n - i, note: "" }))
-      // Find Screenshots: odd-numbered images in each request are screenshots.
-      const results = Array.from({ length: n }, (_, i) => ({ photo: i + 1, screenshot: i % 2 === 0, note: i % 2 === 0 ? "chat" : "photo" }))
+      // Find Screenshots / Quality Checks: odd-numbered images in each request are flagged.
+      const results = Array.from({ length: n }, (_, i) => ({ photo: i + 1, screenshot: i % 2 === 0, bad: i % 2 === 0, note: i % 2 === 0 ? "chat" : "photo" }))
       const reply = String(body.messages[0].content).includes('"results"') ? { results } : { ranking, best: [n], reason: "ok" }
       setTimeout(() => {
         res.writeHead(b.status ?? 200, { "Content-Type": "application/json" })
@@ -431,7 +431,7 @@ describe("Find Screenshots", () => {
     const run = await prisma.aiRun.findUniqueOrThrow({ where: { id: runId } })
     expect(run).toMatchObject({ status: "DONE", kind: "screenshots", photoCount: 7, groupCount: 5, analyzedCount: 5, failedCount: 0 })
     expect(calls).toBe(2)
-    expect(await shotsOf(runId)).toEqual({ "shot1.png": "SCREENSHOT", "shot2.png": "CLEAR", "shot3.png": "SCREENSHOT", "shot4.png": "CLEAR", "shot5.png": "SCREENSHOT" })
+    expect(await shotsOf(runId)).toEqual({ "shot1.png": "FLAGGED", "shot2.png": "CLEAR", "shot3.png": "FLAGGED", "shot4.png": "CLEAR", "shot5.png": "FLAGGED" })
   }, 60_000)
 
   it("a re-scan skips images already answered; start fresh asks again", async () => {
@@ -440,11 +440,11 @@ describe("Find Screenshots", () => {
     const second = await scan()
     expect(calls).toBe(0)
     expect(await prisma.aiRun.findUniqueOrThrow({ where: { id: second } })).toMatchObject({ status: "DONE", groupCount: 0 })
-    expect(await prisma.aiShot.count({ where: { runId: first, status: "SCREENSHOT" } })).toBe(3)
+    expect(await prisma.aiShot.count({ where: { runId: first, status: "FLAGGED" } })).toBe(3)
     await scan(true)
     expect(calls).toBe(2)
     // The first scan's waiting screenshots were taken over; its camera-photo answers stay.
-    expect(await prisma.aiShot.count({ where: { runId: first, status: "SCREENSHOT" } })).toBe(0)
+    expect(await prisma.aiShot.count({ where: { runId: first, status: "FLAGGED" } })).toBe(0)
   }, 60_000)
 
   it("deletes screenshots with undo, moves them to Dropoff, and marks them as not screenshots", async () => {
@@ -457,7 +457,7 @@ describe("Find Screenshots", () => {
     expect(del.ids).toEqual([byName["shot1.png"]])
     await expect(fs.stat(path.join(shotsDir, "shot1.png"))).rejects.toThrow()
     expect(await undoTrashShots(runId, del.batchId!, del.ids)).toEqual({ restored: 1 })
-    expect((await shotsOf(runId))["shot1.png"]).toBe("SCREENSHOT")
+    expect((await shotsOf(runId))["shot1.png"]).toBe("FLAGGED")
 
     const moved = await moveShots(runId, [byName["shot3.png"]])
     expect("ids" in moved && moved.ids).toEqual([byName["shot3.png"]])
@@ -465,7 +465,7 @@ describe("Find Screenshots", () => {
     await fs.rm(path.join(tmp, "dropoff", "shot3.png"))
 
     await markShots(runId, [byName["shot5.png"]], "KEPT")
-    expect(await shotsOf(runId)).toMatchObject({ "shot1.png": "SCREENSHOT", "shot3.png": "REMOVED", "shot5.png": "KEPT" })
+    expect(await shotsOf(runId)).toMatchObject({ "shot1.png": "FLAGGED", "shot3.png": "REMOVED", "shot5.png": "KEPT" })
     // Only images the AI flagged can be acted on.
     expect(await trashShots(runId, [byName["shot2.png"]])).toEqual({ error: expect.stringMatching(/no longer|still here/i) })
   }, 60_000)
@@ -479,3 +479,50 @@ describe("Find Screenshots", () => {
   }, 60_000)
 })
 
+
+describe("Quality Checks", () => {
+  beforeEach(makeShots)
+
+  const scan = async (kind: "quality" | "screenshots" = "quality", fresh = false) => {
+    const run = await runner.createRun({ root: "upload", folder: "shots", fresh, userId: null, kind })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    return run.runId
+  }
+
+  it("asks the AI about every image, camera photos included", async () => {
+    const runId = await scan()
+    const run = await prisma.aiRun.findUniqueOrThrow({ where: { id: runId } })
+    // The fake HEIC can't be decoded, so it fails on its own.
+    expect(run).toMatchObject({ status: "DONE", kind: "quality", photoCount: 7, groupCount: 7, analyzedCount: 6, failedCount: 1 })
+    expect(calls).toBe(2)
+    const statuses = Object.values(await shotsOf(runId))
+    expect(statuses.filter((s) => s === "FLAGGED" || s === "CLEAR")).toHaveLength(6)
+    expect(statuses.filter((s) => s === "FLAGGED").length).toBeGreaterThan(0)
+    expect((await shotsOf(runId))["IMG_1.heic"]).toBe("FAILED")
+  }, 60_000)
+
+  it("is kept apart from Find Screenshots: neither skips nor takes over the other's results", async () => {
+    const shots = await scan("screenshots")
+    calls = 0
+    const quality = await scan("quality")
+    expect(calls).toBe(2)
+    expect(await prisma.aiShot.count({ where: { runId: shots, status: "FLAGGED" } })).toBe(3)
+    calls = 0
+    await scan("screenshots")
+    expect(calls).toBe(0)
+    expect(await prisma.aiShot.count({ where: { runId: quality, status: { in: ["FLAGGED", "CLEAR"] } } })).toBe(6)
+  }, 60_000)
+
+  it("deletes bad photos and marks them as not bad, but never moves them", async () => {
+    const { markShots, moveShots, trashShots } = await import("./shot-review-server")
+    const runId = await scan()
+    const flagged = await prisma.aiShot.findMany({ where: { runId, status: "FLAGGED" }, orderBy: { name: "asc" } })
+    expect(await moveShots(runId, [flagged[0].id])).toEqual({ error: expect.stringMatching(/only screenshots/i) })
+    const del = await trashShots(runId, [flagged[0].id])
+    expect("ids" in del && del.ids).toEqual([flagged[0].id])
+    await expect(fs.stat(path.join(shotsDir, flagged[0].name))).rejects.toThrow()
+    await markShots(runId, [flagged[1].id], "KEPT")
+    expect(await shotsOf(runId)).toMatchObject({ [flagged[0].name]: "REMOVED", [flagged[1].name]: "KEPT" })
+  }, 60_000)
+})

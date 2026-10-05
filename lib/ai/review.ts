@@ -2,13 +2,17 @@ import { safeSegments } from "@/lib/media"
 
 // Pure rules for acting on a reviewed group.
 
-/** Find Similar compares photos; Find Screenshots checks each one. */
-export const SCAN_KINDS = ["similar", "screenshots"] as const
+/** Find Similar compares photos; Find Screenshots and Quality Checks look at each one on its own. */
+export const SCAN_KINDS = ["similar", "screenshots", "quality"] as const
 export type ScanKind = (typeof SCAN_KINDS)[number]
 export const isScanKind = (v: unknown): v is ScanKind => (SCAN_KINDS as readonly unknown[]).includes(v)
 
+/** Scans that judge images one by one (AiShot rows) rather than in groups. */
+export type ShotKind = Exclude<ScanKind, "similar">
+export const isShotKind = (v: unknown): v is ShotKind => isScanKind(v) && v !== "similar"
+
 /** Fewest photos a folder needs for a scan: two to compare, or one to check. */
-export const minScanImages = (kind: ScanKind) => (kind === "screenshots" ? 1 : MIN_SCAN_IMAGES)
+export const minScanImages = (kind: ScanKind) => (isShotKind(kind) ? 1 : MIN_SCAN_IMAGES)
 
 /** A folder needs at least this many photos to have anything to compare. */
 export const MIN_SCAN_IMAGES = 2

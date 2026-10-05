@@ -5,7 +5,7 @@ import { UserManagement } from "@/components/settings/user-management"
 import { AccountSettings } from "@/components/settings/account-settings"
 import { StorageStatus } from "@/components/settings/storage-status"
 import { AiSettings } from "@/components/settings/ai-settings"
-import { DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/screenshot-prompt"
+import { DEFAULT_QUALITY_INSTRUCTIONS, DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/shot-prompt"
 import { loadAiConfig } from "@/lib/ai/config"
 import { DEFAULT_INSTRUCTIONS } from "@/lib/ai/prompt"
 import { SettingsNav } from "@/components/settings/settings-nav"
@@ -76,6 +76,7 @@ export default async function SettingsPage({
                 extraBody: ai.extraBody ? JSON.stringify(JSON.parse(ai.extraBody), null, 2) : "",
                 instructions: ai.instructions ?? DEFAULT_INSTRUCTIONS,
                 screenshotInstructions: ai.screenshotInstructions ?? DEFAULT_SCREENSHOT_INSTRUCTIONS,
+                qualityInstructions: ai.qualityInstructions ?? DEFAULT_QUALITY_INSTRUCTIONS,
                 groupWindowSeconds: String(ai.groupWindowSeconds),
                 similarity: ai.similarity,
                 imageMaxPx: String(ai.imageMaxPx),

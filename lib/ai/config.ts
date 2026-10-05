@@ -26,6 +26,7 @@ export async function loadAiConfig(): Promise<AiConfig> {
     extraBody: row?.extraBody ?? null,
     instructions: row?.instructions ?? null,
     screenshotInstructions: row?.screenshotInstructions ?? null,
+    qualityInstructions: row?.qualityInstructions ?? null,
     groupWindowSeconds: row?.groupWindowSeconds ?? AI_DEFAULTS.groupWindowSeconds,
     similarity: (row?.similarity as Similarity | undefined) ?? AI_DEFAULTS.similarity,
     imageMaxPx: row?.imageMaxPx ?? AI_DEFAULTS.imageMaxPx,

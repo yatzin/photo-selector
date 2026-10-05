@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { DEFAULT_INSTRUCTIONS } from "./prompt"
-import { DEFAULT_SCREENSHOT_INSTRUCTIONS } from "./screenshot-prompt"
+import { DEFAULT_QUALITY_INSTRUCTIONS, DEFAULT_SCREENSHOT_INSTRUCTIONS } from "./shot-prompt"
 import { isAiReady, keyMayFollow, originChanged, parseAiSettings, parseExtraBody, type AiSettingsInput } from "./settings-schema"
 
 const base: AiSettingsInput = {
@@ -77,6 +77,13 @@ describe("parseAiSettings", () => {
     const unedited = parseAiSettings({ ...base, screenshotInstructions: DEFAULT_SCREENSHOT_INSTRUCTIONS })
     expect(unedited.ok && unedited.value.screenshotInstructions).toBeNull()
     expect(parseAiSettings({ ...base, screenshotInstructions: "x".repeat(4001) }).ok).toBe(false)
+  })
+
+  it("keeps the quality check instructions separately, with their own default", () => {
+    const edited = parseAiSettings({ ...base, qualityInstructions: "Only blurry ones." })
+    expect(edited.ok && edited.value).toMatchObject({ qualityInstructions: "Only blurry ones.", screenshotInstructions: null })
+    const unedited = parseAiSettings({ ...base, qualityInstructions: DEFAULT_QUALITY_INSTRUCTIONS })
+    expect(unedited.ok && unedited.value.qualityInstructions).toBeNull()
   })
 })
 

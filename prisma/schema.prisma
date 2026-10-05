@@ -46,12 +46,12 @@ enum AiGroupStatus {
 enum AiShotStatus {
   /// Waiting for the AI.
   PENDING
-  /// The AI says it's a screenshot or saved image; waiting for the user.
-  SCREENSHOT
-  /// The AI says it's a camera photo.
+  /// The AI flagged it (a screenshot, or a technically bad photo); waiting for the user.
+  FLAGGED
+  /// The AI found nothing wrong.
   CLEAR
   FAILED
-  /// The user said it isn't a screenshot.
+  /// The user disagreed with the AI (not a screenshot, not a bad photo).
   KEPT
   /// Deleted, moved or changed since; no longer shown.
   REMOVED
@@ -82,6 +82,8 @@ model AiSettings {
   instructions       String?
   /// Replaces the default screenshot-finder instructions (null = default).
   screenshotInstructions String?
+  /// Replaces the default quality-check instructions (null = default).
+  qualityInstructions String?
   groupWindowSeconds Int      @default(60)
   /// strict | similar | loose
   similarity         String   @default("similar")
@@ -92,9 +94,9 @@ model AiSettings {
 
 model AiRun {
   id            String      @id @default(cuid())
-  /// upload | dropoff
-  /// similar (Find Similar) | screenshots (Find Screenshots)
+  /// similar (Find Similar) | screenshots (Find Screenshots) | quality (Quality Checks)
   kind          String      @default("similar")
+  /// upload | dropoff
   root          String
   /// Path inside the root, "/"-separated; "" = the root itself.
   folder        String

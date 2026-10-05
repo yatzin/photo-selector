@@ -13,7 +13,7 @@ import { fingerprintImage } from "@/lib/ai/fingerprint"
 import { groupPhotos, type GroupInput } from "@/lib/ai/grouping"
 import { readCaptureTime } from "@/lib/ai/capture-time"
 import { analyzeGroups } from "@/lib/ai/analysis-loop"
-import { folderKey, minScanImages, scanFolderSegments } from "@/lib/ai/review"
+import { folderKey, isShotKind, minScanImages, scanFolderSegments } from "@/lib/ai/review"
 import { describeChange, diffSnapshot, type Snapshot } from "@/lib/ai/snapshot"
 import { coveredByMonthScan, monthScanDays } from "@/lib/ai/month-scan"
 import { listImageVersions, readEntries } from "@/lib/ai/folder-images-server"
@@ -166,11 +166,11 @@ async function stopped(runId: string): Promise<boolean> {
  * that arrived while we were working is never overwritten.
  */
 async function finish(runId: string, data: { status: "DONE" | "FAILED" | "CANCELLED"; error?: string }, from: readonly AiRun["status"][] = WORKING) {
-  // A run has groups (Find Similar) or shots (Find Screenshots), never both.
+  // A run has groups (Find Similar) or shots (Find Screenshots, Quality Checks), never both.
   const [analyzed, failed, shotsAnalyzed, shotsFailed] = await Promise.all([
     prisma.aiGroup.count({ where: { runId, status: { in: ["ANALYZED", "RESOLVED", "DISMISSED"] } } }),
     prisma.aiGroup.count({ where: { runId, status: "FAILED" } }),
-    prisma.aiShot.count({ where: { runId, status: { in: ["SCREENSHOT", "CLEAR", "KEPT", "REMOVED"] } } }),
+    prisma.aiShot.count({ where: { runId, status: { in: ["FLAGGED", "CLEAR", "KEPT", "REMOVED"] } } }),
     prisma.aiShot.count({ where: { runId, status: "FAILED" } }),
   ])
   await prisma.aiRun.updateMany({
@@ -195,12 +195,12 @@ async function processRun(run: AiRun) {
   if (!run.groupedAt) {
     if (!(await claim({ status: "GROUPING", startedAt: run.startedAt ?? new Date(), model: config.model, error: null }))) return
     try {
-      if (run.kind === "screenshots") await listShots(run, run.root, segs, () => stopped(run.id))
+      if (isShotKind(run.kind)) await listShots(run, run.root, segs, () => stopped(run.id))
       else await groupRun(run, run.root, segs, config)
     } catch (error) {
       return finish(run.id, { status: "FAILED", error: error instanceof Error ? error.message : String(error) })
     }
-  } else if (run.kind === "screenshots") {
+  } else if (isShotKind(run.kind)) {
     // Each image is checked against its own version when its turn comes.
     if (!(await claim({ status: "ANALYZING", model: config.model, error: null, finishedAt: null }))) return
   } else {
@@ -216,7 +216,7 @@ async function processRun(run: AiRun) {
     if (!(await claim({ status: "ANALYZING", model: config.model, error: null, finishedAt: null, snapshot: snapshotNow }))) return
   }
 
-  if (run.kind === "screenshots") {
+  if (isShotKind(run.kind)) {
     const controller = new AbortController()
     state.current = { runId: run.id, controller }
     try {

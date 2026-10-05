@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { MAX_INSTRUCTIONS_LENGTH, storedInstructions } from "@/lib/ai/prompt"
-import { DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/screenshot-prompt"
+import { DEFAULT_QUALITY_INSTRUCTIONS, DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/shot-prompt"
 
 // Pure validation for Settings → AI. Shared by the server actions and the
 // runner's readiness check; no database access here.
@@ -38,6 +38,7 @@ const schema = z.object({
   extraBody: z.string().trim().max(2000).optional(),
   instructions: z.string().optional(),
   screenshotInstructions: z.string().optional(),
+  qualityInstructions: z.string().optional(),
   groupWindowSeconds: z.string().trim(),
   similarity: z.string().trim(),
   imageMaxPx: z.string().trim(),
@@ -58,6 +59,8 @@ export type ParsedAiSettings = {
   instructions: string | null
   /** Replaces the default screenshot-finder instructions; null = use the default. */
   screenshotInstructions: string | null
+  /** Replaces the default quality-check instructions; null = use the default. */
+  qualityInstructions: string | null
   groupWindowSeconds: number
   similarity: Similarity
   imageMaxPx: number
@@ -120,6 +123,8 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
   if ((instructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `AI instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
   const screenshotInstructions = storedInstructions(v.screenshotInstructions ?? "", DEFAULT_SCREENSHOT_INSTRUCTIONS)
   if ((screenshotInstructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `Screenshot instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
+  const qualityInstructions = storedInstructions(v.qualityInstructions ?? "", DEFAULT_QUALITY_INSTRUCTIONS)
+  if ((qualityInstructions ?? "").length > MAX_INSTRUCTIONS_LENGTH) return { ok: false, error: `Quality check instructions are limited to ${MAX_INSTRUCTIONS_LENGTH} characters.` }
 
   const groupWindowSeconds = intIn(v.groupWindowSeconds, 5, 600)
   if (groupWindowSeconds === null) return { ok: false, error: "Time window must be 5 to 600 seconds." }
@@ -138,7 +143,7 @@ export function parseAiSettings(input: AiSettingsInput, opts: { requireComplete?
     ok: true,
     value: {
       enabled: v.enabled, baseUrl, model, temperature, maxTokens, timeoutSeconds, extraBody,
-      instructions, screenshotInstructions, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
+      instructions, screenshotInstructions, qualityInstructions, groupWindowSeconds, similarity: v.similarity as Similarity, imageMaxPx, maxGroupSize,
     },
   }
 }

@@ -6,26 +6,30 @@ import { cn } from "@/lib/utils"
 import { mediaKind, ROOT_LABELS, type RootKey } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
 import { currentVersions } from "@/lib/ai/review-server"
-import { pageWindow } from "@/lib/ai/review"
+import { pageWindow, type ShotKind } from "@/lib/ai/review"
+import { SHOT_TEXT } from "@/lib/ai/shot-text"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { Pager } from "@/components/ai/pager"
 import { ShotGrid, type ShotItem } from "@/components/ai/shot-grid"
 import type { AiRun } from "@/app/generated/prisma/client"
 
-// Results of a Find Screenshots scan: what the AI flagged, what you said
-// isn't a screenshot, and what failed. Images deleted, moved or changed
-// elsewhere drop out of the lists as they're found.
+// Results of a Find Screenshots or Quality Checks scan: what the AI flagged,
+// what you said it got wrong, and what failed. Images deleted, moved or
+// changed elsewhere drop out of the lists as they're found.
 
-const TABS = [
-  { id: "found", label: "Screenshots", statuses: ["SCREENSHOT"] },
-  { id: "kept", label: "Not screenshots", statuses: ["KEPT"] },
-  { id: "failed", label: "Failed", statuses: ["FAILED"] },
-] as const
+const tabs = (kind: ShotKind) =>
+  [
+    { id: "found", label: SHOT_TEXT[kind].flagged, statuses: ["FLAGGED"] },
+    { id: "kept", label: SHOT_TEXT[kind].kept, statuses: ["KEPT"] },
+    { id: "failed", label: "Failed", statuses: ["FAILED"] },
+  ] as const
 
 const PAGE_SIZE = 120
 
-export async function ScreenshotResults({ run, root, segs, tab, pageParam }: { run: AiRun; root: RootKey; segs: string[]; tab?: string; pageParam?: string }) {
+export async function ShotResults({ run, kind, root, segs, tab, pageParam }: { run: AiRun; kind: ShotKind; root: RootKey; segs: string[]; tab?: string; pageParam?: string }) {
+  const text = SHOT_TEXT[kind]
+  const TABS = tabs(kind)
   const active = TABS.find((t) => t.id === tab) ?? TABS[0]
   const dir = path.join(rootPath(root), ...segs)
   const where = { runId: run.id, status: { in: [...active.statuses] } }
@@ -61,7 +65,7 @@ export async function ScreenshotResults({ run, root, segs, tab, pageParam }: { r
   const locked = await folderLocked(root, segs)
   const title = `${ROOT_LABELS[root]}${segs.length ? ` / ${segs.join(" / ")}` : ""}${run.includeDays ? " — all days" : ""}`
   const progress =
-    run.status === "GROUPING" ? "Reading photo details…"
+    run.status === "GROUPING" ? (kind === "quality" ? "Listing photos…" : "Reading photo details…")
     : run.status === "QUEUED" ? "Waiting its turn…"
     : run.status === "ANALYZING" ? `Asking the AI — ${run.analyzedCount + run.failedCount} of ${run.groupCount} images`
     : null
@@ -69,10 +73,12 @@ export async function ScreenshotResults({ run, root, segs, tab, pageParam }: { r
   return (
     <div className="max-w-6xl space-y-5">
       <div>
-        <Link href="/ai?tab=screenshots" className="text-sm text-muted-foreground hover:text-foreground">← Find Screenshots</Link>
+        <Link href={`/ai?tab=${kind}`} className="text-sm text-muted-foreground hover:text-foreground">← {text.scan}</Link>
         <h1 className="mt-1 font-heading text-2xl font-semibold">{title}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          {run.photoCount} photo{run.photoCount === 1 ? "" : "s"} checked, {run.groupCount} without camera details asked the AI
+          {kind === "quality"
+            ? `${run.groupCount} photo${run.groupCount === 1 ? "" : "s"} asked the AI`
+            : `${run.photoCount} photo${run.photoCount === 1 ? "" : "s"} checked, ${run.groupCount} without camera details asked the AI`}
           {run.model && ` · ${run.model}`}
         </p>
         {progress && <p className="mt-1 text-sm font-medium text-link">{progress} New results appear as they come in.</p>}
@@ -92,18 +98,19 @@ export async function ScreenshotResults({ run, root, segs, tab, pageParam }: { r
 
       {items.length === 0 ? (
         <p className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-          {active.id === "found" ? (running ? "Waiting for the AI…" : "No screenshots left to review.") : "Nothing here."}
+          {active.id === "found" ? (running ? "Waiting for the AI…" : `No ${text.one}s left to review.`) : "Nothing here."}
         </p>
       ) : (
         <ShotGrid
           key={`${active.id}-${win.page}`}
           runId={run.id}
+          kind={kind}
           root={root}
           rootDir={rootPath(root)}
           folder={segs}
           mode={active.id}
           items={items}
-          canMove={root === "upload"}
+          canMove={text.canMove && root === "upload"}
           locked={locked}
         />
       )}

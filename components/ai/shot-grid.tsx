@@ -9,13 +9,15 @@ import { cn } from "@/lib/utils"
 import { mediaUrl } from "@/lib/format"
 import { shotAction, undoShotDeleteAction } from "@/lib/actions/ai"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
+import type { ShotKind } from "@/lib/ai/review"
+import { SHOT_TEXT } from "@/lib/ai/shot-text"
 import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
 
-// Find Screenshots results. Click (tap) images to select them, then delete
-// them, move them to Sort Dropoff, or say they aren't screenshots. The
-// magnifier opens one full size.
+// Find Screenshots and Quality Checks results. Click (tap) images to select
+// them, then delete them, move them to Sort Dropoff (screenshots), or say the
+// AI got them wrong. The magnifier opens one full size.
 
 export type ShotItem = { id: string; name: string; note: string | null; error: string | null; file: FileEntry | null }
 
@@ -23,9 +25,10 @@ type Mode = "found" | "kept" | "failed"
 type Action = "delete" | "move" | "keep" | "unkeep"
 
 export function ShotGrid({
-  runId, root, rootDir, folder, mode, items, canMove, locked,
+  runId, kind, root, rootDir, folder, mode, items, canMove, locked,
 }: {
   runId: string
+  kind: ShotKind
   root: string
   rootDir: string
   folder: string[]
@@ -36,6 +39,7 @@ export function ShotGrid({
   locked: boolean
 }) {
   const router = useRouter()
+  const text = SHOT_TEXT[kind]
   const [, startTransition] = useTransition()
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
@@ -94,8 +98,8 @@ export function ShotGrid({
           },
         })
       } else if (action === "move") toast.success(`Moved ${what} to Sort Dropoff`)
-      else if (action === "keep") toast.success(`Marked ${what} as not screenshots`)
-      else toast.success(`Moved ${what} back to Screenshots`)
+      else if (action === "keep") toast.success(`Moved ${what} to ${text.kept}`)
+      else toast.success(`Moved ${what} back to ${text.flagged}`)
     } catch {
       toast.error("Something went wrong. Check that the NAS is reachable.")
     } finally {
@@ -118,12 +122,12 @@ export function ShotGrid({
           <div className="ml-auto flex flex-wrap gap-2">
             {mode === "found" && (
               <Button variant="outline" size="sm" disabled={!chosen.length || !!busy} onClick={() => act("keep")}>
-                {spin("keep", <ShieldCheck className="h-4 w-4" />)} Not a screenshot
+                {spin("keep", <ShieldCheck className="h-4 w-4" />)} {text.keep}
               </Button>
             )}
             {mode === "kept" && (
               <Button variant="outline" size="sm" disabled={!chosen.length || !!busy} onClick={() => act("unkeep")}>
-                {spin("unkeep", <ScanEye className="h-4 w-4" />)} Is a screenshot
+                {spin("unkeep", <ScanEye className="h-4 w-4" />)} {text.unkeep}
               </Button>
             )}
             {canMove && (

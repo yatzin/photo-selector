@@ -134,7 +134,7 @@ export async function undoGroupAction(groupId: string) {
 
 const shotIds = z.object({ runId: z.string().min(1), ids: z.array(z.string().min(1)).min(1).max(2000) })
 
-/** Find Screenshots results: delete, move to Sort Dropoff, or mark "not a screenshot" (and back). */
+/** Find Screenshots / Quality Checks results: delete, move to Sort Dropoff, or mark as not flagged (and back). */
 export async function shotAction(input: { runId: string; ids: string[]; action: "delete" | "move" | "keep" | "unkeep" }) {
   await requireUser()
   const parsed = shotIds.extend({ action: z.enum(["delete", "move", "keep", "unkeep"]) }).safeParse(input)
@@ -143,7 +143,7 @@ export async function shotAction(input: { runId: string; ids: string[]; action: 
   const result =
     action === "delete" ? await trashShots(runId, ids)
     : action === "move" ? await moveShots(runId, ids)
-    : await markShots(runId, ids, action === "keep" ? "KEPT" : "SCREENSHOT")
+    : await markShots(runId, ids, action === "keep" ? "KEPT" : "FLAGGED")
   refresh()
   return result
 }

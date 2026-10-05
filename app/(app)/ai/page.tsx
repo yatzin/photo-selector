@@ -18,6 +18,7 @@ const RUNS_PER_PAGE = 25
 const KINDS: { id: ScanKind; label: string; blurb: string }[] = [
   { id: "similar", label: "Find Similar", blurb: "Find bursts of similar photos and let AI suggest the best of each." },
   { id: "screenshots", label: "Find Screenshots", blurb: "Find screenshots and saved images mixed in with your photos." },
+  { id: "quality", label: "Quality Checks", blurb: "Find blurry, dark and accidental photos nobody wants to keep." },
 ]
 
 export default async function AiPage({ searchParams }: { searchParams: Promise<{ tab?: string; by?: string; page?: string }> }) {
@@ -53,7 +54,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
       take,
       include: {
         createdBy: { select: { name: true } },
-        _count: { select: { groups: { where: { status: "ANALYZED" } }, shots: { where: { status: "SCREENSHOT" } } } },
+        _count: { select: { groups: { where: { status: "ANALYZED" } }, shots: { where: { status: "FLAGGED" } } } },
       },
     }),
     // Keep refreshing while any scan runs, even one the filter hides.
@@ -69,7 +70,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<{
     .map((r) => ({
       id: r.id, kind: kind.id, root: r.root as RunRow["root"], folder: r.folder, includeDays: r.includeDays, status: r.status,
       photoCount: r.photoCount, groupCount: r.groupCount, analyzedCount: r.analyzedCount, failedCount: r.failedCount,
-      toReview: kind.id === "screenshots" ? r._count.shots : r._count.groups, error: r.error, createdAt: r.createdAt.toISOString(), createdBy: r.createdBy?.name ?? null,
+      toReview: kind.id === "similar" ? r._count.groups : r._count.shots, error: r.error, createdAt: r.createdAt.toISOString(), createdBy: r.createdBy?.name ?? null,
     }))
 
   return (

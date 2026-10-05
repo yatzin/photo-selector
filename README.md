@@ -34,6 +34,10 @@ take of each, using any OpenAI-compatible vision model you host yourself.
   downloads, forwarded pictures) in a folder, to delete or move to Sort Dropoff
   in bulk. Photos with camera details and HEIC files skip the AI; the rest are
   sent four to a request. These scans don't lock the folder.
+- **Quality Checks** tab: finds technically bad photos (motion blur, out of
+  focus, closed eyes, far too dark or bright, pocket and other accidental shots,
+  a finger over the lens) to delete in bulk. Every photo is sent, four to a
+  request, and the AI says what's wrong with each one it flags.
 - Editable AI instructions for each scan type (Settings → AI); the reply format stays fixed.
 
 **Everything else**
@@ -189,7 +193,7 @@ for example:
 **Test connection** sends a small red image and checks the model can see it.
 Each group is sent as one request with every photo in it (resized to
 "Image size sent", 768 px by default). Bursts larger than "Largest group" are
-split. Find Screenshots sends four images per request. If the server sits behind a proxy, make sure its read timeout is longer
+split. Find Screenshots and Quality Checks send four images per request. If the server sits behind a proxy, make sure its read timeout is longer
 than a group takes. Eight photos can take 80–90 seconds on a mid-size local model.
 
 ## Local development

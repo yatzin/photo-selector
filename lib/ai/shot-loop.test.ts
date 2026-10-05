@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { AiError } from "./client"
 import { analyzeShots, type ShotDeps } from "./shot-loop"
+import { SHOT_PROMPTS } from "./shot-prompt"
 
 function deps(over: Partial<ShotDeps> = {}) {
-  const log = { results: [] as { id: string; screenshot: boolean }[], failed: [] as string[], gone: [] as string[], calls: 0 }
+  const log = { results: [] as { id: string; flagged: boolean }[], failed: [] as string[], gone: [] as string[], calls: 0 }
   const d: ShotDeps = {
     batchSize: 2,
+    prompt: SHOT_PROMPTS.screenshots,
     instructions: null,
     prepareImage: async (id) => `data:${id}`,
     callAi: async (messages) => {
@@ -13,7 +15,7 @@ function deps(over: Partial<ShotDeps> = {}) {
       const n = (messages[1].content as { type: string }[]).filter((p) => p.type === "image_url").length
       return JSON.stringify({ results: Array.from({ length: n }, (_, i) => ({ photo: i + 1, screenshot: i === 0 })) })
     },
-    onResults: async (r) => void log.results.push(...r.map(({ id, screenshot }) => ({ id, screenshot }))),
+    onResults: async (r) => void log.results.push(...r.map(({ id, flagged }) => ({ id, flagged }))),
     onFailed: async (ids) => void log.failed.push(...ids),
     onGone: async (ids) => void log.gone.push(...ids),
     isCancelled: async () => false,
@@ -27,7 +29,7 @@ describe("analyzeShots", () => {
     const { d, log } = deps()
     expect(await analyzeShots(["a", "b", "c"], d)).toEqual({ status: "done" })
     expect(log.calls).toBe(2)
-    expect(log.results).toEqual([{ id: "a", screenshot: true }, { id: "b", screenshot: false }, { id: "c", screenshot: true }])
+    expect(log.results).toEqual([{ id: "a", flagged: true }, { id: "b", flagged: false }, { id: "c", flagged: true }])
   })
 
   it("drops gone images and fails unreadable ones alone, keeping the numbering right", async () => {
@@ -39,7 +41,7 @@ describe("analyzeShots", () => {
       },
     })
     await analyzeShots(["a", "b", "c"], d)
-    expect(log).toMatchObject({ gone: ["a"], failed: ["b"], results: [{ id: "c", screenshot: true }] })
+    expect(log).toMatchObject({ gone: ["a"], failed: ["b"], results: [{ id: "c", flagged: true }] })
   })
 
   it("retries once on a bad reply, then fails the batch", async () => {

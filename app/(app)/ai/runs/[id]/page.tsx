@@ -9,13 +9,13 @@ import { cn } from "@/lib/utils"
 import { isRootKey, mediaKind, ROOT_LABELS } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
 import { currentVersions } from "@/lib/ai/review-server"
-import { pageWindow, scanFolderSegments } from "@/lib/ai/review"
+import { isShotKind, pageWindow, scanFolderSegments } from "@/lib/ai/review"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { type ReviewPhoto } from "@/components/ai/review-group"
 import { ReviewList } from "@/components/ai/review-list"
 import { Pager } from "@/components/ai/pager"
-import { ScreenshotResults } from "./screenshot-results"
+import { ShotResults } from "./shot-results"
 
 const TABS = [
   { id: "review", label: "To review", statuses: ["ANALYZED"] },
@@ -35,7 +35,7 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
   if (!run || !isRootKey(run.root)) notFound()
   const segs = scanFolderSegments(run.folder)
   if (!segs) notFound()
-  if (run.kind === "screenshots") return <ScreenshotResults run={run} root={run.root} segs={segs} tab={tab} pageParam={pageParam} />
+  if (isShotKind(run.kind)) return <ShotResults run={run} kind={run.kind} root={run.root} segs={segs} tab={tab} pageParam={pageParam} />
   const active = TABS.find((t) => t.id === tab) ?? TABS[0]
 
   const counts = await prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true })

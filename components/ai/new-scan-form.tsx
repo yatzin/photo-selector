@@ -34,7 +34,7 @@ export function NewScanForm({ kind, folders, ready, isAdmin }: { kind: ScanKind;
 
   return (
     <div className="rounded-lg border bg-card p-4 space-y-3">
-      <h2 className="font-semibold">{kind === "screenshots" ? "Find screenshots" : "Find similar"}</h2>
+      <h2 className="font-semibold">{kind === "screenshots" ? "Find screenshots" : kind === "quality" ? "Check photo quality" : "Find similar"}</h2>
       {!ready && (
         <p className="text-sm text-muted-foreground">
           AI isn&apos;t set up yet.{" "}
@@ -61,7 +61,18 @@ export function NewScanForm({ kind, folders, ready, isAdmin }: { kind: ScanKind;
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Run
         </Button>
       </div>
-      {kind === "screenshots" ? (
+      {kind === "quality" ? (
+        <div className="space-y-1 text-xs text-muted-foreground">
+          <p>
+            Finds technically bad photos — motion blur, out of focus, closed eyes, far too dark or bright, pocket and
+            other accidental shots, a finger over the lens — so you can delete them. Every photo goes to the AI, a few at a time.
+          </p>
+          <p>
+            Scans one folder, not its subfolders; a year/month folder of day folders (&ldquo;all days&rdquo;) scans every
+            day in it. The folder stays unlocked while it runs. Photos already checked are skipped unless you start fresh.
+          </p>
+        </div>
+      ) : kind === "screenshots" ? (
         <div className="space-y-1 text-xs text-muted-foreground">
           <p>
             Finds screenshots and saved images (memes, downloads, forwarded pictures) so you can delete them or move
