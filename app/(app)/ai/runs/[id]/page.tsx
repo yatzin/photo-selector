@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma"
 import { cn } from "@/lib/utils"
 import { isRootKey, mediaKind, ROOT_LABELS } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
-import { currentVersions } from "@/lib/ai/review-server"
+import { closeStaleGroups, currentVersions } from "@/lib/ai/review-server"
 import { isShotKind, pageWindow, scanFolderSegments } from "@/lib/ai/review"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
@@ -38,16 +38,24 @@ export default async function RunReviewPage({ params, searchParams }: { params: 
   if (isShotKind(run.kind)) return <ShotResults run={run} kind={run.kind} root={run.root} segs={segs} tab={tab} pageParam={pageParam} />
   const active = TABS.find((t) => t.id === tab) ?? TABS[0]
 
-  const counts = await prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true })
-  const count = (statuses: readonly string[]) => counts.filter((c) => statuses.includes(c.status)).reduce((n, c) => n + c._count, 0)
-  const { page, pages, skip, take } = pageWindow(count(active.statuses), pageParam, PAGE_SIZE)
-  const groups = await prisma.aiGroup.findMany({
-    where: { runId: id, status: { in: [...active.statuses] } },
-    orderBy: [{ takenAt: "asc" }, { id: "asc" }],
-    include: { photos: true },
-    skip,
-    take,
-  })
+  const load = async () => {
+    const counts = await prisma.aiGroup.groupBy({ by: ["status"], where: { runId: id }, _count: true })
+    const count = (statuses: readonly string[]) => counts.filter((c) => statuses.includes(c.status)).reduce((n, c) => n + c._count, 0)
+    const win = pageWindow(count(active.statuses), pageParam, PAGE_SIZE)
+    const groups = await prisma.aiGroup.findMany({
+      where: { runId: id, status: { in: [...active.statuses] } },
+      orderBy: [{ takenAt: "asc" }, { id: "asc" }],
+      include: { photos: true },
+      skip: win.skip,
+      take: win.take,
+    })
+    return { count, win, groups }
+  }
+  let { count, win, groups } = await load()
+  // Groups whose photos were moved or deleted elsewhere, down to fewer than
+  // two, have nothing left to choose between: close them (they move to Done).
+  if (active.id === "review" && (await closeStaleGroups(run.root, run.folder, groups)) > 0) ({ count, win, groups } = await load())
+  const { page, pages } = win
 
   const allNames = [...new Set(groups.flatMap((g) => g.photos.map((p) => p.name)))]
   const versions = await currentVersions(run.root, run.folder, allNames)

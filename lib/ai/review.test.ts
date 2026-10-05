@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { acceptAllPlan, classifyPhotos, folderKey, pageWindow, planResolution, scanFolderSegments } from "./review"
+import { acceptAllPlan, classifyPhotos, folderKey, pageWindow, planResolution, scanFolderSegments, staleGroups } from "./review"
 
 describe("scanFolderSegments", () => {
   it("accepts the root and nested folders with odd characters", () => {
@@ -76,3 +76,16 @@ describe("acceptAllPlan", () => {
   })
 })
 
+
+describe("staleGroups", () => {
+  it("picks groups with fewer than two photos still as scanned", () => {
+    const current = new Map([["a.jpg", "v1"], ["b.jpg", "v1"], ["c.jpg", "v2"]])
+    const groups = [
+      { id: "both-here", photos: [{ name: "a.jpg", version: "v1" }, { name: "b.jpg", version: "v1" }, { name: "gone.jpg", version: "v1" }] },
+      { id: "one-left", photos: [{ name: "a.jpg", version: "v1" }, { name: "gone.jpg", version: "v1" }] },
+      { id: "changed", photos: [{ name: "b.jpg", version: "v1" }, { name: "c.jpg", version: "v1" }] },
+      { id: "none-left", photos: [{ name: "x.jpg", version: "v1" }, { name: "y.jpg", version: "v1" }] },
+    ]
+    expect(staleGroups(groups, current)).toEqual(["one-left", "changed", "none-left"])
+  })
+})

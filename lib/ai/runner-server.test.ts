@@ -137,6 +137,19 @@ describe("AI runner", () => {
     expect(groups.map((g) => g.photos.find((p) => p.suggested)?.name)).toEqual(["a3.jpg", "b3.jpg"])
   }, 60_000)
 
+  it("closes a group left with fewer than two photos, and keeps one that still has a choice", async () => {
+    const { closeStaleGroups } = await import("./review-server")
+    const run = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
+    if ("error" in run) throw new Error(run.error)
+    await runner.drainRunner()
+    const [a, b] = await groupsOf(run.runId)
+    // Group a loses all but one photo; group b loses one but keeps a choice.
+    for (const p of a.photos.slice(1)) await fs.rm(path.join(folder, p.name))
+    await fs.rm(path.join(folder, b.photos[0].name))
+    expect(await closeStaleGroups("upload", "burst", await groupsOf(run.runId))).toBe(1)
+    expect((await groupsOf(run.runId)).map((g) => g.status)).toEqual(["DISMISSED", "ANALYZED"])
+  }, 60_000)
+
   it("refuses a second scan of a folder that is already being scanned", async () => {
     const first = await runner.createRun({ root: "upload", folder: "burst", fresh: false, userId: null })
     expect("runId" in first).toBe(true)

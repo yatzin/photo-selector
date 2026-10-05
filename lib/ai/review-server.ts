@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
 import { fileVersion, isRootKey, type RootKey } from "@/lib/media"
 import { moveToDropoff, restoreBatch, trashFiles } from "@/lib/file-ops-server"
-import { classifyPhotos, planResolution, scanFolderSegments } from "@/lib/ai/review"
+import { classifyPhotos, planResolution, scanFolderSegments, staleGroups } from "@/lib/ai/review"
 
 export async function currentVersions(root: RootKey, folder: string, names: string[]): Promise<Map<string, string>> {
   const segs = scanFolderSegments(folder)
@@ -98,6 +98,21 @@ async function settleGroup(
     prisma.aiGroup.update({ where: { id: groupId }, data: { trashBatchId } }),
   ])
   return { moved, kept: plan.keep.length, trashed: trashedNames.length, missing: missing.length }
+}
+
+/**
+ * Closes groups waiting for review that are down to fewer than two photos
+ * (moved, deleted or changed elsewhere): there's nothing left to choose
+ * between. Returns how many were closed.
+ */
+export async function closeStaleGroups(root: RootKey, folder: string, groups: { id: string; status: string; photos: { name: string; version: string }[] }[]): Promise<number> {
+  const open = groups.filter((g) => g.status === "ANALYZED")
+  if (!open.length) return 0
+  const versions = await currentVersions(root, folder, [...new Set(open.flatMap((g) => g.photos.map((p) => p.name)))])
+  const ids = staleGroups(open, versions)
+  if (!ids.length) return 0
+  const r = await prisma.aiGroup.updateMany({ where: { id: { in: ids }, status: "ANALYZED" }, data: { status: "DISMISSED", resolvedAt: new Date() } })
+  return r.count
 }
 
 export async function dismissGroup(groupId: string, userId: string): Promise<{ error: string } | { ok: true }> {

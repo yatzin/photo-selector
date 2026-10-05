@@ -60,3 +60,8 @@ export function acceptAllPlan(groups: { id: string; present: string[]; keep: str
   }
   return { items, skipped: groups.length - items.length }
 }
+
+/** Groups with fewer than two photos still as scanned: nothing left to choose between. */
+export function staleGroups(groups: { id: string; photos: { name: string; version: string }[] }[], current: Map<string, string>): string[] {
+  return groups.filter((g) => classifyPhotos(g.photos, current).valid.length < 2).map((g) => g.id)
+}
