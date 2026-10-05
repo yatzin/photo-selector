@@ -40,6 +40,8 @@ take of each, using any OpenAI-compatible vision model you host yourself.
   focus, closed eyes, far too dark or bright, pocket and other accidental shots,
   a finger over the lens) to delete in bulk. Every photo is sent, four to a
   request, and the AI says what's wrong with each one it flags.
+  Flagged photos get a red frame in the library; right-click one for
+  **See all bad images in this folder**.
 - Editable AI instructions for each scan type (Settings → AI); the reply format stays fixed.
 
 **Everything else**

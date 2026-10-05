@@ -559,6 +559,25 @@ describe("Quality Checks", () => {
     expect(await syncRunClosed(runId)).toBe(false)
   }, 60_000)
 
+  it("lists the folder's flagged photos for the library, still as scanned, including a month scan's day folders", async () => {
+    const { qualityFlags } = await import("./flags-server")
+    const runId = await scan()
+    const shots = await prisma.aiShot.findMany({ where: { runId } })
+    const files = shots.map((s) => ({ name: s.name, version: s.version }))
+    const flagged = shots.filter((s) => s.status === "FLAGGED")
+    const flags = await qualityFlags("upload", ["shots"], files)
+    expect(Object.keys(flags.photos).sort()).toEqual(flagged.map((s) => s.name).sort())
+    expect(flags.runs).toEqual([runId])
+    expect(flags.photos[flagged[0].name]).toEqual([0, flagged[0].note])
+    // Changed since the scan: no longer flagged.
+    expect(await qualityFlags("upload", ["shots"], files.map((f) => ({ ...f, version: "new" })))).toEqual({ runs: [], photos: {} })
+    // A month scan stores day photos as "04/name" under the month folder.
+    const month = await prisma.aiRun.create({ data: { kind: "quality", root: "upload", folder: "y/2026/07", status: "DONE" } })
+    await prisma.aiShot.create({ data: { runId: month.id, root: "upload", folder: "y/2026/07", name: "04/a.jpg", version: "v1", takenAt: new Date(), status: "FLAGGED" } })
+    expect(await qualityFlags("upload", ["y", "2026", "07", "04"], [{ name: "a.jpg", version: "v1" }])).toEqual({ runs: [month.id], photos: { "a.jpg": [0, null] } })
+    expect(await qualityFlags("upload", ["y", "2026", "07", "05"], [{ name: "a.jpg", version: "v1" }])).toEqual({ runs: [], photos: {} })
+  }, 60_000)
+
   it("deletes bad photos and marks them as not bad, but never moves them", async () => {
     const { markShots, moveShots, trashShots } = await import("./shot-review-server")
     const runId = await scan()

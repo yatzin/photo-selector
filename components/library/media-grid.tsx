@@ -4,13 +4,14 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, ChevronDown, FolderOutput, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, FolderOutput, ImageOff, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
+import type { QualityFlags } from "@/lib/ai/flags-server"
 import { gridLayout } from "@/lib/grid-layout"
 import { buildRows, itemAt, rowOfItem, rowTops, type GridRow } from "@/lib/month-groups"
 import { Lightbox } from "./lightbox"
@@ -49,7 +50,7 @@ type SizeKey = keyof typeof SIZES
 const ORDERS = ["newest", "oldest", "name"] as const
 type Order = (typeof ORDERS)[number]
 
-type Props = { root: string; rootDir?: string; folder: string[]; files: FileEntry[]; canMove: boolean; canEdit: boolean }
+type Props = { root: string; rootDir?: string; folder: string[]; files: FileEntry[]; flags?: QualityFlags; canMove: boolean; canEdit: boolean }
 
 type ActionResult = { ok: string[]; failed: { name: string; error: string }[] } | { error: string }
 
@@ -59,11 +60,14 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function Tile({
-  root, folder, item, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu,
+  root, folder, item, flagged, note, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu,
 }: {
   root: string
   folder: string[]
   item: FileEntry
+  /** Quality Checks flagged it as a bad photo; `note` says why. */
+  flagged: boolean
+  note?: string | null
   selected: boolean
   focused: boolean
   onClick: (e: React.MouseEvent) => void
@@ -85,7 +89,7 @@ function Tile({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      title={item.name}
+      title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : item.name}
     >
       <PhotoImage
         src={mediaUrl(root, folder, item.name, "thumb", item.version)}
@@ -100,6 +104,18 @@ function Tile({
             <Play className="h-1/2 w-1/2 translate-x-[6%] fill-current" />
           </span>
         </span>
+      )}
+      {flagged && (
+        <>
+          <span aria-hidden className="pointer-events-none absolute inset-0 rounded-md border-[3px] border-red-600" />
+          <span
+            role="img"
+            aria-label="Bad photo"
+            className="pointer-events-none absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-white shadow"
+          >
+            <ImageOff className="h-3.5 w-3.5" strokeWidth={2.5} />
+          </span>
+        </>
       )}
       <button
         type="button"
@@ -131,7 +147,9 @@ function SkeletonGrid({ tile }: { tile: number }) {
   )
 }
 
-export function MediaGrid({ root, rootDir, folder, files, canMove, canEdit }: Props) {
+const NO_FLAGS: QualityFlags = { runs: [], photos: {} }
+
+export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canMove, canEdit }: Props) {
   const router = useRouter()
   const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l"])
   const [order, setOrder] = useStoredState<Order>("ps.order", "newest", ORDERS)
@@ -334,16 +352,25 @@ export function MediaGrid({ root, rootDir, folder, files, canMove, canEdit }: Pr
 
   // Right-click menu (mouse only: on touch a long press starts drag-select).
   const lastPointer = useRef<string>("mouse")
-  const [menu, setMenu] = useState<{ x: number; y: number; names: string[] } | null>(null)
+  // Quality Checks: the scan that flagged a photo as bad, if any.
+  const flagRun = (name: string) => {
+    const f = flags.photos[name]
+    return f ? flags.runs[f[0]] : undefined
+  }
+  const [menu, setMenu] = useState<{ x: number; y: number; names: string[]; flagged?: string } | null>(null)
   const openMenu = (e: React.MouseEvent, name: string) => {
     e.preventDefault()
     if (lastPointer.current !== "mouse") return
-    setMenu({ x: e.clientX, y: e.clientY, names: selected.has(name) ? chosen.map((f) => f.name) : [name] })
+    setMenu({ x: e.clientX, y: e.clientY, names: selected.has(name) ? chosen.map((f) => f.name) : [name], flagged: flagRun(name) })
   }
   const closeMenu = useCallback(() => setMenu(null), [])
   const menuImages = menu ? menu.names.filter((n) => items[indexOf.get(n) ?? -1]?.kind === "image") : []
   const onMenu = (action: PhotoMenuAction) => {
     if (!menu) return
+    if (action === "bad-photos") {
+      if (menu.flagged) router.push(`/ai/runs/${menu.flagged}?tab=found`)
+      return
+    }
     void run(action, action.startsWith("rotate") ? menuImages : menu.names)
   }
   const dragSelect = useDragSelect({
@@ -581,6 +608,8 @@ export function MediaGrid({ root, rootDir, folder, files, canMove, canEdit }: Pr
                   root={root}
                   folder={folder}
                   item={item}
+                  note={flags.photos[item.name]?.[1]}
+                  flagged={item.name in flags.photos}
                   selected={selected.has(item.name)}
                   focused={focus === item.name}
                   onClick={(e) => onTileClick(e, item.name)}
@@ -604,6 +633,7 @@ export function MediaGrid({ root, rootDir, folder, files, canMove, canEdit }: Pr
           showMove={root === "upload"}
           canMove={canMove && !busy}
           canEdit={canEdit && !busy}
+          showBadPhotos={!!menu.flagged}
           onAction={onMenu}
           onClose={closeMenu}
         />

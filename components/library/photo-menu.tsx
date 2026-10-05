@@ -1,16 +1,16 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { FolderOutput, RotateCcw, RotateCw, Trash2 } from "lucide-react"
+import { FolderOutput, ImageOff, RotateCcw, RotateCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Right-click menu for photos in the grid. It acts on the selection when the
 // clicked photo is part of it, otherwise on just that photo.
 
-export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete"
+export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos"
 
 export function PhotoMenu({
-  x, y, count, canRotate, showMove, canMove, canEdit, onAction, onClose,
+  x, y, count, canRotate, showMove, canMove, canEdit, showBadPhotos = false, onAction, onClose,
 }: {
   x: number
   y: number
@@ -21,6 +21,8 @@ export function PhotoMenu({
   showMove: boolean
   canMove: boolean
   canEdit: boolean
+  /** The clicked photo was flagged by Quality Checks: link to that review. */
+  showBadPhotos?: boolean
   onAction: (action: PhotoMenuAction) => void
   onClose: () => void
 }) {
@@ -46,8 +48,8 @@ export function PhotoMenu({
   }, [onClose])
 
   // Keep the menu on screen near the pointer.
-  const W = 210
-  const H = 180
+  const W = showBadPhotos ? 260 : 210
+  const H = showBadPhotos ? 220 : 180
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const n = count > 1 ? ` ${count}` : ""
@@ -86,6 +88,12 @@ export function PhotoMenu({
       {showMove && item("move", `Move${n} to Dropoff`, <FolderOutput className="h-4 w-4" />, canMove)}
       <div className="my-1 h-px bg-border" />
       {item("delete", `Delete${n}`, <Trash2 className="h-4 w-4" />, canEdit, true)}
+      {showBadPhotos && (
+        <>
+          <div className="my-1 h-px bg-border" />
+          {item("bad-photos", "See all bad images in this folder", <ImageOff className="h-4 w-4 text-red-600 dark:text-red-400" />, true)}
+        </>
+      )}
     </div>
   )
 }

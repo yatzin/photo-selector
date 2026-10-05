@@ -9,6 +9,7 @@ import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { activeScans, folderLocked } from "@/lib/ai/lock-server"
 import { isFolderLocked } from "@/lib/ai/lock"
 import { pruneEmptyFolders } from "@/lib/empty-folders"
+import { qualityFlags } from "@/lib/ai/flags-server"
 
 // A library folder: subfolders as cards, then its photos and videos as a
 // sortable thumbnail grid.
@@ -47,6 +48,8 @@ export default async function LibraryPage({
 
   const [listing, locked] = await Promise.all([listDirectory(root, segments), folderLocked(root, segments)])
   if (!listing) notFound()
+  // Photos a Quality Checks scan flagged as bad get a red frame.
+  const flags = await qualityFlags(root, segments, listing.files)
 
   const totalBytes = listing.files.reduce((sum, f) => sum + f.size, 0)
 
@@ -105,6 +108,7 @@ export default async function LibraryPage({
           rootDir={status.path}
           folder={segments}
           files={listing.files}
+          flags={flags}
           canMove={root === "upload" && status.writable && !locked}
           canEdit={status.writable && !locked}
         />
