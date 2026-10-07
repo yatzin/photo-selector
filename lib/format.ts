@@ -10,6 +10,12 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[i]}`
 }
 
+/** The first `max` characters of `text` on one line, with "…" when there was more. */
+export function preview(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat
+}
+
 /** Library URL for a root and folder path, each segment encoded once. */
 export function libraryHref(root: string, segments: string[]): string {
   return ["/library", root, ...segments.map(encodeURIComponent)].join("/")

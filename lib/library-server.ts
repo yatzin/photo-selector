@@ -4,13 +4,14 @@ import { constants, type Dirent } from "fs"
 import path from "path"
 import { createTtlCache } from "@/lib/ttl-cache"
 import { monthScanDays } from "@/lib/ai/month-scan"
-import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, type MediaKind, type RootKey } from "@/lib/media"
+import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, SCAN_ROOT_KEYS, type MediaKind, type RootKey } from "@/lib/media"
 
 // Reads the photo library from the mounted folders. In the container these are
 // /photos/upload and /photos/dropoff (see docker-compose.yml); for local
 // development PHOTOS_UPLOAD_DIR / PHOTOS_DROPOFF_DIR can point at the share.
+// User Temp Storage lives in the app's own data volume, next to the cache.
 
-const DEFAULT_ROOTS: Record<RootKey, string> = {
+const DEFAULT_ROOTS: Record<Exclude<RootKey, "temp">, string> = {
   upload: "/photos/upload",
   dropoff: "/photos/dropoff",
 }
@@ -18,10 +19,26 @@ const DEFAULT_ROOTS: Record<RootKey, string> = {
 const ENV_NAMES: Record<RootKey, string> = {
   upload: "PHOTOS_UPLOAD_DIR",
   dropoff: "PHOTOS_DROPOFF_DIR",
+  temp: "PHOTOS_TEMP_DIR",
 }
 
+export const TEMP_DIR_NAME = "UserTempStorage"
+
 export function rootPath(key: RootKey): string {
-  return path.resolve(process.env[ENV_NAMES[key]] || DEFAULT_ROOTS[key])
+  const fromEnv = process.env[ENV_NAMES[key]]
+  if (fromEnv) return path.resolve(fromEnv)
+  // Beside the cache: /data/UserTempStorage in the container, ./.data/UserTempStorage locally.
+  if (key === "temp") return path.join(path.dirname(cacheDir()), TEMP_DIR_NAME)
+  return path.resolve(DEFAULT_ROOTS[key])
+}
+
+/** Creates User Temp Storage when it's missing (at startup; user folders are made as needed). */
+export async function ensureTempRoot(): Promise<void> {
+  try {
+    await fs.mkdir(rootPath("temp"), { recursive: true })
+  } catch (error) {
+    console.error(`[storage] could not create ${rootPath("temp")}:`, error)
+  }
 }
 
 export type RootStatus = {
@@ -89,6 +106,28 @@ async function countMedia(dir: string): Promise<number> {
   return count
 }
 
+export type RootCounts = Record<RootKey, number>
+
+// Survives dev hot reloads, so actions clear the same cache the layout reads.
+const g = globalThis as unknown as { __psRootCounts?: ReturnType<typeof createTtlCache> }
+const rootCountCache = (g.__psRootCounts ??= createTtlCache(30_000))
+
+/**
+ * How many photos and videos each root holds, all levels down (trash and
+ * hidden folders aside), for the sidebar. Cached briefly since every page
+ * shows it; file actions clear it so the numbers follow at once.
+ */
+export function rootMediaCounts(): Promise<RootCounts> {
+  return rootCountCache.get("all", async () => {
+    const counts = await Promise.all(ROOT_KEYS.map((k) => countMedia(rootPath(k))))
+    return Object.fromEntries(ROOT_KEYS.map((k, i) => [k, counts[i]])) as RootCounts
+  })
+}
+
+export function clearRootCounts(): void {
+  rootCountCache.clear()
+}
+
 /**
  * One level of a library folder: its subfolders (with how many media files
  * each holds, all levels down) and its own media files, newest first.
@@ -148,7 +187,7 @@ export function listScanFolders(): Promise<ScanFolder[]> {
 }
 
 /**
- * Every folder in both roots (depth ≤ 6) with the number of images directly
+ * Every folder in both library roots (depth ≤ 6) with the number of images directly
  * inside, for the AI scan picker. A month of day folders is one entry counting
  * all its days, and the days themselves aren't listed.
  */
@@ -168,6 +207,6 @@ async function walkScanFolders(): Promise<ScanFolder[]> {
     const skip = new Set(days ?? [])
     for (const e of entries) if (e.isDirectory() && !isSkippedDir(e.name) && !skip.has(e.name)) await walk(root, [...segments, e.name], depth + 1)
   }
-  for (const root of ROOT_KEYS) await walk(root, [], 0)
+  for (const root of SCAN_ROOT_KEYS) await walk(root, [], 0)
   return out
 }

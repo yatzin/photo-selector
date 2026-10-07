@@ -10,6 +10,12 @@ describe("gridLayout", () => {
     expect(l.rows).toBe(20)
   })
 
+  it("leaves room for a caption under each tile", () => {
+    const l = gridLayout({ width: 1000, minTile: 192, gap: 8, count: 10, caption: 36 })
+    expect(l.tileSize).toBeCloseTo((1000 - 4 * 8) / 5)
+    expect(l.rowHeight).toBeCloseTo(l.tileSize + 36 + 8)
+  })
+
   it("rounds a partial last row up", () => {
     expect(gridLayout({ width: 1000, minTile: 192, gap: 8, count: 101 }).rows).toBe(21)
   })

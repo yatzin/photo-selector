@@ -4,20 +4,22 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, ChevronDown, FolderOutput, ImageOff, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { formatBytes, mediaUrl } from "@/lib/format"
+import { formatBytes, mediaUrl, preview } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
 import type { QualityFlags } from "@/lib/ai/flags-server"
+import type { TempNoteView } from "@/lib/temp-notes-server"
 import { gridLayout } from "@/lib/grid-layout"
 import { buildRows, itemAt, rowOfItem, rowTops, type GridRow } from "@/lib/month-groups"
 import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
 import { useDragSelect } from "./use-drag-select"
 import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
+import { TempDialog } from "./temp-dialog"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
@@ -29,6 +31,7 @@ import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
 //
 // Keys: arrows move the focus, Space toggles it, Shift+arrows add a range,
 // Del deletes, M moves to Sort Dropoff, R / Shift+R rotate, Esc clears.
+// Right-click (or the toolbar) also moves or copies to User Temp Storage.
 //
 // Sorted by date, photos are grouped under month headers; the circle on a
 // header selects or deselects that whole month, and the chevron collapses it
@@ -40,6 +43,10 @@ import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
 
 const SIZES = { s: 128, m: 192, l: 288 } as const
 const GAP = 8
+// User Temp Storage: room under each tile for the start of its note (two
+// lines of text-xs), cut at NOTE_CHARS characters.
+const CAPTION_H = 36
+const NOTE_CHARS = 60
 // Height of a month header row ("July 2026  ○  42 photos").
 const HEADER_H = 48
 // Rows kept rendered above and below the visible ones.
@@ -50,7 +57,17 @@ type SizeKey = keyof typeof SIZES
 const ORDERS = ["newest", "oldest", "name"] as const
 type Order = (typeof ORDERS)[number]
 
-type Props = { root: string; rootDir?: string; folder: string[]; files: FileEntry[]; flags?: QualityFlags; canMove: boolean; canEdit: boolean }
+type Props = {
+  root: string
+  rootDir?: string
+  folder: string[]
+  files: FileEntry[]
+  flags?: QualityFlags
+  /** User Temp Storage: the notes left with these files, by name. */
+  notes?: Record<string, TempNoteView>
+  canMove: boolean
+  canEdit: boolean
+}
 
 type ActionResult = { ok: string[]; failed: { name: string; error: string }[] } | { error: string }
 
@@ -60,7 +77,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function Tile({
-  root, folder, item, flagged, note, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu,
+  root, folder, item, flagged, note, tempNote, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu, caption = false,
 }: {
   root: string
   folder: string[]
@@ -68,14 +85,18 @@ function Tile({
   /** Quality Checks flagged it as a bad photo; `note` says why. */
   flagged: boolean
   note?: string | null
+  /** The note left with it in User Temp Storage. */
+  tempNote?: string
   selected: boolean
   focused: boolean
   onClick: (e: React.MouseEvent) => void
   onDoubleClick: () => void
   onToggle: () => void
   onContextMenu: (e: React.MouseEvent) => void
+  /** Show the start of `tempNote` under the tile (User Temp Storage). */
+  caption?: boolean
 }) {
-  return (
+  const tile = (
     <div
       data-name={item.name}
       className={cn(
@@ -89,7 +110,7 @@ function Tile({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : item.name}
+      title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : tempNote ? `${item.name} — ${tempNote}` : item.name}
     >
       <PhotoImage
         src={mediaUrl(root, folder, item.name, "thumb", item.version)}
@@ -136,6 +157,21 @@ function Tile({
       </button>
     </div>
   )
+  if (!caption) return tile
+  return (
+    <div className="min-w-0">
+      {tile}
+      <p
+        className="mt-1 line-clamp-2 break-words text-xs leading-4 text-muted-foreground"
+        style={{ height: CAPTION_H - 4 }}
+        title={tempNote}
+        onDoubleClick={onDoubleClick}
+        onContextMenu={onContextMenu}
+      >
+        {tempNote ? preview(tempNote, NOTE_CHARS) : null}
+      </p>
+    </div>
+  )
 }
 
 /** Shown before the grid has measured its width (server render, first paint). */
@@ -149,7 +185,7 @@ function SkeletonGrid({ tile }: { tile: number }) {
 
 const NO_FLAGS: QualityFlags = { runs: [], photos: {} }
 
-export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canMove, canEdit }: Props) {
+export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, notes, canMove, canEdit }: Props) {
   const router = useRouter()
   const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l"])
   const [order, setOrder] = useStoredState<Order>("ps.order", "newest", ORDERS)
@@ -159,6 +195,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
   const [viewer, setViewer] = useState<number | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
+  // Names waiting in the "Send to User Temp Storage" dialog.
+  const [temp, setTemp] = useState<string[] | null>(null)
   const [, startTransition] = useTransition()
   // Measured on the client: the grid's width, the scrolling <main>, and how
   // far below the top of the scroll area the grid starts (folders, toolbar).
@@ -294,7 +332,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
 
   const tile = SIZES[sizeKey]
   // Phones get at least two columns, like the old 40vw rule.
-  const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length })
+  const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length, caption: notes ? CAPTION_H : 0 })
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const toggleCollapsed = (key: string) =>
@@ -371,6 +409,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
       if (menu.flagged) router.push(`/ai/runs/${menu.flagged}?tab=found`)
       return
     }
+    if (action === "temp") {
+      setTemp(menu.names)
+      return
+    }
     void run(action, action.startsWith("rotate") ? menuImages : menu.names)
   }
   const dragSelect = useDragSelect({
@@ -395,7 +437,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
 
   // One key handler for both the grid and the viewer, so shortcuts work the same in each.
   const onKey = useEffectEvent((e: KeyboardEvent) => {
-    if (isTyping(e.target) || e.altKey) return
+    // The dialog has the keyboard: Esc closes it, not the viewer.
+    if (temp || isTyping(e.target) || e.altKey) return
     const mod = e.ctrlKey || e.metaKey
     const key = e.key
 
@@ -487,6 +530,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
                   </Button>
                 </>
               )}
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => setTemp(names)} title="Move or copy to User Temp Storage">
+                <Inbox className="h-4 w-4" />
+                <span className="hidden lg:inline">Temp Storage</span>
+              </Button>
               {canMove && (
                 <Button size="sm" disabled={busy} onClick={() => run("move", names)} title="Move to Sort Dropoff (M)">
                   <FolderOutput className="h-4 w-4" />
@@ -609,6 +656,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
                   folder={folder}
                   item={item}
                   note={flags.photos[item.name]?.[1]}
+                  tempNote={notes?.[item.name]?.note}
+                  caption={!!notes}
                   flagged={item.name in flags.photos}
                   selected={selected.has(item.name)}
                   focused={focus === item.name}
@@ -630,9 +679,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
           y={menu.y}
           count={menu.names.length}
           canRotate={menuImages.length > 0}
-          showMove={root === "upload"}
+          showMove={root !== "dropoff"}
           canMove={canMove && !busy}
           canEdit={canEdit && !busy}
+          canTemp={!busy}
           showBadPhotos={!!menu.flagged}
           onAction={onMenu}
           onClose={closeMenu}
@@ -653,6 +703,19 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, canM
           onMove={(name) => run("move", [name])}
           onDelete={(name) => run("delete", [name])}
           onRotate={(name, dir) => run(dir === "cw" ? "rotate-cw" : "rotate-ccw", [name])}
+          notes={notes}
+          onTemp={(name) => setTemp([name])}
+        />
+      )}
+      {temp && (
+        <TempDialog
+          target={{ root, folder, names: temp }}
+          canMove={canEdit}
+          onDone={(ok, moved) => {
+            if (moved) hide(ok)
+            refresh()
+          }}
+          onClose={() => setTemp(null)}
         />
       )}
     </div>

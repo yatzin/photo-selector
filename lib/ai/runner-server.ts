@@ -4,7 +4,7 @@ import path from "path"
 import sharp from "sharp"
 import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
-import { fileVersion, isRootKey, type RootKey } from "@/lib/media"
+import { fileVersion, isRootKey, isScanRoot, type RootKey } from "@/lib/media"
 import { ensureVariant } from "@/lib/thumbs-server"
 import { clientConfig, loadAiConfig, type AiConfig } from "@/lib/ai/config"
 import { isAiReady } from "@/lib/ai/settings-schema"
@@ -58,7 +58,7 @@ export function drainRunner(): Promise<void> {
 /** Queues a scan, unless that folder already has one of the same kind queued or running. */
 export async function createRun(input: { root: string; folder: string; fresh: boolean; userId: string | null; kind?: ScanKind }): Promise<{ error: string } | { runId: string }> {
   const kind = input.kind ?? "similar"
-  if (!isRootKey(input.root)) return { error: "Unknown library folder." }
+  if (!isScanRoot(input.root)) return { error: "Unknown library folder." }
   const segs = scanFolderSegments(input.folder)
   if (!segs) return { error: "Invalid folder." }
   try {

@@ -1,10 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, Download, FolderOutput, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Download, FolderOutput, Inbox, MessageSquareText, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { FileEntry } from "@/lib/library-server"
+import type { TempNoteView } from "@/lib/temp-notes-server"
 
 // Full-screen viewer. The cached thumbnail shows at once and the large
 // preview replaces it when loaded; neighbours' previews are fetched ahead so
@@ -25,6 +26,10 @@ type Props = {
   onMove: (name: string) => void
   onDelete: (name: string) => void
   onRotate: (name: string, direction: "cw" | "ccw") => void
+  /** Notes left with photos in User Temp Storage, by name. */
+  notes?: Record<string, TempNoteView>
+  /** Opens "Send to User Temp Storage" for this photo. */
+  onTemp?: (name: string) => void
 }
 
 /** rootDir + folder + name, with the separator rootDir already uses. */
@@ -95,7 +100,7 @@ function Picture({ root, folder, item, onBackdrop }: { root: string; folder: str
   )
 }
 
-export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate }: Props) {
+export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate, notes, onTemp }: Props) {
   const item = items[index]
   const touchX = useRef<number | null>(null)
 
@@ -108,6 +113,7 @@ export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit
   }, [index, items, root, folder])
 
   if (!item) return null
+  const note = notes?.[item.name]
   const hasPrev = index > 0
   const hasNext = index < items.length - 1
 
@@ -146,6 +152,9 @@ export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit
             <IconButton label="Rotate right (R)" onClick={() => onRotate(item.name, "cw")} disabled={busy}><RotateCw className="h-4 w-4" /></IconButton>
           </>
         )}
+        {onTemp && (
+          <IconButton label="Move or copy to User Temp Storage" onClick={() => onTemp(item.name)} disabled={busy}><Inbox className="h-4 w-4" /></IconButton>
+        )}
         {canMove && (
           <IconButton label="Move to Sort Dropoff (M)" onClick={() => onMove(item.name)} disabled={busy}><FolderOutput className="h-4 w-4" /></IconButton>
         )}
@@ -163,6 +172,23 @@ export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit
         </a>
         <IconButton label="Close (Esc)" onClick={onClose}><X className="h-5 w-5" /></IconButton>
       </div>
+
+      {note && (
+        <div className="mx-3 mb-2 flex shrink-0 gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm">
+          <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-white/60" />
+          <div className="min-w-0">
+            <div className="text-xs text-white/60">
+              {note.by ? `From ${note.by}` : "Note"} &middot;{" "}
+              {new Date(note.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+            </div>
+            {note.note ? (
+              <p className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words">{note.note}</p>
+            ) : (
+              <p className="italic text-white/50">No details given.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         className="relative min-h-0 flex-1 px-2 pb-2 sm:px-14"

@@ -9,7 +9,7 @@ import { aiReady } from "@/lib/ai/config"
 import { isScanKind, scanFolderSegments } from "@/lib/ai/review"
 import { markShots, moveShots, trashShots, undoTrashShots } from "@/lib/ai/shot-review-server"
 import { abortRun, clearQueue, createRun, queueUnscanned, requeueRun } from "@/lib/ai/runner-server"
-import { listScanFolders } from "@/lib/library-server"
+import { clearRootCounts, listScanFolders } from "@/lib/library-server"
 import { dismissGroup, resolveGroup, resolveGroups, undoGroup, trashGroup } from "@/lib/ai/review-server"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
@@ -22,6 +22,7 @@ async function requireUser() {
 }
 
 function refresh() {
+  clearRootCounts() // review actions move and delete photos
   revalidatePath("/ai", "layout")
   revalidatePath("/library", "layout")
 }

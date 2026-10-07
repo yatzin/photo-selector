@@ -19,6 +19,11 @@ take of each, using any OpenAI-compatible vision model you host yourself.
   (to an in-app trash with Undo, purged after 30 days) or rotate (lossless for JPEG).
 - Full-screen viewer with keyboard navigation, videos and iPhone HEIC photos.
 - A background worker pre-makes thumbnails and watches for new uploads.
+- **User Temp Storage**: right-click photos anywhere (library or AI results) and
+  choose **Move to User Temp Storage…** to move or copy them into another
+  user's staging folder with a note. Opening one there shows the note; from
+  there it can be rotated, deleted, moved to Sort Dropoff or sent on to someone
+  else. Sending a file that's already in that folder replaces it and updates the note.
 
 **AI review** (optional)
 - Groups bursts locally, by capture time and visual similarity; nothing leaves
@@ -141,6 +146,7 @@ Database changes apply themselves on start.
 | `\\ugreen\Photo\Mobile Upload`  | `/photos/upload`   | `PHOTOS_UPLOAD_DIR`   |
 | `\\ugreen\Photo\Sort Dropoff`   | `/photos/dropoff`  | `PHOTOS_DROPOFF_DIR`  |
 | (app data)                      | `/data`            | `DATABASE_URL`, `PHOTOS_CACHE_DIR` |
+| (app data) User Temp Storage    | `/data/UserTempStorage` | `PHOTOS_TEMP_DIR` (created on start) |
 
 ## File share permissions
 
@@ -151,7 +157,7 @@ normal ownership on the share. That user needs:
 | --- | --- | --- |
 | Mobile Upload (`/photos/upload`) | **read + write**, including subfolders | Lists photos, moves picks out, moves deleted photos into its trash folder, writes rotations |
 | Sort Dropoff (`/photos/dropoff`) | **read + write** | Receives the photos you keep; deleting and rotating work there too |
-| App data (`/data`) | read + write | Database and thumbnail cache. The container makes it owned by `PUID:PGID` on start |
+| App data (`/data`) | read + write | Database, thumbnail cache and User Temp Storage. The container makes it owned by `PUID:PGID` on start |
 
 Deleted photos go to a hidden `.photo-selector-trash` folder inside each photo
 folder, so Undo can put them back. It's emptied after 30 days. Both photo

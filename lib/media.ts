@@ -28,16 +28,42 @@ export function isSkippedDir(name: string): boolean {
  * The library roots, chosen by the short key used in URLs. Mapped from the
  * NAS in docker-compose.yml; locally they can point at the UNC share.
  */
-export const ROOT_KEYS = ["upload", "dropoff"] as const
+export const ROOT_KEYS = ["upload", "dropoff", "temp"] as const
 export type RootKey = (typeof ROOT_KEYS)[number]
 
 export const ROOT_LABELS: Record<RootKey, string> = {
   upload: "Mobile Upload",
   dropoff: "Sort Dropoff",
+  temp: "User Temp Storage",
 }
 
 export function isRootKey(value: string): value is RootKey {
   return (ROOT_KEYS as readonly string[]).includes(value)
+}
+
+/** The roots AI scans can read. User Temp Storage is a staging area, not part of the library to sort. */
+export const SCAN_ROOT_KEYS = ["upload", "dropoff"] as const satisfies readonly RootKey[]
+
+export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[number] {
+  return (SCAN_ROOT_KEYS as readonly string[]).includes(value)
+}
+
+/**
+ * A user's folder inside User Temp Storage, named after them. Characters no
+ * file system accepts are dropped, as is a leading ".", "@" or "#" (folders
+ * starting with those are skipped in listings); the email's local part, then
+ * "user", stand in when nothing is left.
+ */
+export function tempFolderName(name: string, email: string): string {
+  const clean = (s: string) =>
+    s
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^[.@#\s]+/, "")
+      .replace(/[.\s]+$/, "")
+      .slice(0, 80)
+  return clean(name) || clean(email.split("@")[0] ?? "") || "user"
 }
 
 /**
@@ -103,4 +129,10 @@ export function trashBatchTime(batchId: string): number | null {
 export function isPlainName(name: string): boolean {
   const segs = safeSegments([name])
   return segs !== null && segs.length === 1 && segs[0] === name
+}
+
+/** A file name, or one inside a subfolder ("18/IMG_1.jpg", from a month scan), with nothing to step outside the folder. */
+export function isPlainPath(name: string): boolean {
+  const segs = safeSegments([name])
+  return segs !== null && segs.length > 0 && segs.length <= 8 && segs.join("/") === name
 }

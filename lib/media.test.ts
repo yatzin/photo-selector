@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect, it } from "vitest"
-import { fileVersion, isPlainName, isRootKey, isSkippedDir, mediaKind, numberedName, resolveInside, safeSegments, trashBatchId, trashBatchTime } from "./media"
+import { fileVersion, isPlainName, isPlainPath, isRootKey, isScanRoot, isSkippedDir, mediaKind, numberedName, resolveInside, safeSegments, tempFolderName, trashBatchId, trashBatchTime } from "./media"
 
 describe("mediaKind", () => {
   it("recognises photos and videos regardless of case", () => {
@@ -29,7 +29,48 @@ describe("isRootKey", () => {
   it("accepts only the configured roots", () => {
     expect(isRootKey("upload")).toBe(true)
     expect(isRootKey("dropoff")).toBe(true)
+    expect(isRootKey("temp")).toBe(true)
     expect(isRootKey("etc")).toBe(false)
+  })
+
+  it("keeps User Temp Storage out of AI scans", () => {
+    expect(isScanRoot("upload")).toBe(true)
+    expect(isScanRoot("dropoff")).toBe(true)
+    expect(isScanRoot("temp")).toBe(false)
+  })
+})
+
+describe("tempFolderName", () => {
+  it("uses the user's name", () => {
+    expect(tempFolderName("Jessi", "j@example.com")).toBe("Jessi")
+    expect(tempFolderName("  Mary  Ann ", "m@example.com")).toBe("Mary Ann")
+  })
+
+  it("drops characters folders can't hold, and ones that would hide the folder", () => {
+    expect(tempFolderName("a/b\\c:d*?", "x@example.com")).toBe("abcd")
+    expect(tempFolderName("../..", "x@example.com")).toBe("x")
+    expect(tempFolderName(".hidden", "x@example.com")).toBe("hidden")
+    expect(tempFolderName("@eaDir", "x@example.com")).toBe("eaDir")
+    expect(tempFolderName("Bob.", "x@example.com")).toBe("Bob")
+  })
+
+  it("falls back to the email, then a fixed name", () => {
+    expect(tempFolderName("???", "mike@example.com")).toBe("mike")
+    expect(tempFolderName("", "@example.com")).toBe("user")
+  })
+})
+
+describe("isPlainPath", () => {
+  it("accepts names and names in subfolders", () => {
+    expect(isPlainPath("IMG_1.jpg")).toBe(true)
+    expect(isPlainPath("18/IMG_1.jpg")).toBe(true)
+  })
+
+  it("refuses anything that climbs out or isn't normalised", () => {
+    expect(isPlainPath("../IMG_1.jpg")).toBe(false)
+    expect(isPlainPath("/IMG_1.jpg")).toBe(false)
+    expect(isPlainPath("18\\IMG_1.jpg")).toBe(false)
+    expect(isPlainPath("")).toBe(false)
   })
 })
 

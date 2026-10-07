@@ -99,16 +99,51 @@ async function eachFile(
   return result
 }
 
-/** Moves files from a Mobile Upload folder into the top of Sort Dropoff. */
-export async function moveToDropoff(folder: string[], names: string[]): Promise<ActionResult> {
+/** Moves files from a Mobile Upload (or User Temp Storage) folder into the top of Sort Dropoff. */
+export async function moveToDropoff(rootKey: "upload" | "temp", folder: string[], names: string[]): Promise<ActionResult> {
   const dropoff = rootPath("dropoff")
-  return eachFile("upload", folder, names, async (file, name) => {
+  return eachFile(rootKey, folder, names, async (file, name) => {
     const before = await fs.stat(file)
-    const fromKey = cacheKey("upload", relOf("upload", file), before)
+    const fromKey = cacheKey(rootKey, relOf(rootKey, file), before)
     // Straight into Dropoff, even from a day folder of a month scan ("18/IMG_1.jpg").
     const dest = await moveNoClobber(file, dropoff, path.basename(name))
     await moveCached(fromKey, cacheKey("dropoff", relOf("dropoff", dest), await fs.stat(dest)))
   })
+}
+
+/**
+ * Copies `src` to `dir/name`, replacing a file already there. The copy is
+ * written beside the target, checked, then renamed over it, so the old file
+ * stays intact until the new one is complete. With `move`, the source is
+ * removed once the copy is in place.
+ */
+async function placeReplacing(src: string, dir: string, name: string, move: boolean): Promise<void> {
+  const dest = path.join(dir, name)
+  if (path.resolve(src) === path.resolve(dest)) throw new Error("It's already there.")
+  const st = await fs.stat(src)
+  await fs.mkdir(dir, { recursive: true })
+  const tmp = path.join(dir, `.${name}.${randomBytes(4).toString("hex")}.tmp`)
+  try {
+    await fs.copyFile(src, tmp)
+    const copied = await fs.stat(tmp)
+    if (copied.size !== st.size) throw new Error(`Copy of ${name} is incomplete (${copied.size} of ${st.size} bytes).`)
+    await fs.utimes(tmp, st.atime, st.mtime)
+    await fs.rename(tmp, dest)
+  } finally {
+    await fs.rm(tmp, { force: true })
+  }
+  if (move) await fs.unlink(src)
+}
+
+/**
+ * Moves or copies files into a user's folder in User Temp Storage (created if
+ * needed). Unlike every other operation here this replaces a file of the same
+ * name: sending a photo again updates what's there.
+ */
+export async function sendToTemp(rootKey: RootKey, folder: string[], names: string[], userFolder: string, mode: "move" | "copy"): Promise<ActionResult> {
+  const dir = resolveInside(rootPath("temp"), [userFolder])
+  if (!dir) return { ok: [], failed: names.map((name) => ({ name, error: "Invalid destination." })) }
+  return eachFile(rootKey, folder, names, (file, name) => placeReplacing(file, dir, path.basename(name), mode === "move"))
 }
 
 /**

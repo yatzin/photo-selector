@@ -10,6 +10,7 @@ import { activeScans, folderLocked } from "@/lib/ai/lock-server"
 import { isFolderLocked } from "@/lib/ai/lock"
 import { pruneEmptyFolders } from "@/lib/empty-folders"
 import { qualityFlags } from "@/lib/ai/flags-server"
+import { tempNotes } from "@/lib/temp-notes-server"
 
 // A library folder: subfolders as cards, then its photos and videos as a
 // sortable thumbnail grid.
@@ -48,8 +49,12 @@ export default async function LibraryPage({
 
   const [listing, locked] = await Promise.all([listDirectory(root, segments), folderLocked(root, segments)])
   if (!listing) notFound()
-  // Photos a Quality Checks scan flagged as bad get a red frame.
-  const flags = await qualityFlags(root, segments, listing.files)
+  // Photos a Quality Checks scan flagged as bad get a red frame; ones in User
+  // Temp Storage carry the note they were sent with.
+  const [flags, notes] = await Promise.all([
+    qualityFlags(root, segments, listing.files),
+    root === "temp" ? tempNotes(segments, listing.files.map((f) => f.name)) : undefined,
+  ])
 
   const totalBytes = listing.files.reduce((sum, f) => sum + f.size, 0)
 
@@ -109,13 +114,16 @@ export default async function LibraryPage({
           folder={segments}
           files={listing.files}
           flags={flags}
-          canMove={root === "upload" && status.writable && !locked}
+          notes={notes}
+          canMove={root !== "dropoff" && status.writable && !locked}
           canEdit={status.writable && !locked}
         />
       ) : (
         listing.folders.length === 0 && (
           <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
-            Nothing here yet.
+            {root === "temp" && segments.length === 0
+              ? "Nothing here yet. Right-click photos anywhere in the library and choose Move to User Temp Storage to start a folder for someone."
+              : "Nothing here yet."}
           </div>
         )
       )}

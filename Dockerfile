@@ -58,4 +58,5 @@ ENV DATABASE_URL="file:/data/photo-selector.db"
 ENV PHOTOS_UPLOAD_DIR=/photos/upload
 ENV PHOTOS_DROPOFF_DIR=/photos/dropoff
 ENV PHOTOS_CACHE_DIR=/data/cache
+ENV PHOTOS_TEMP_DIR=/data/UserTempStorage
 ENTRYPOINT ["./docker-entrypoint.sh"]

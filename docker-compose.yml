@@ -7,7 +7,8 @@ services:
     ports:
       - "3200:3200"
     volumes:
-      # App database (users, and later the thumbnail cache). Not the photos.
+      # App data: database, thumbnail cache and User Temp Storage
+      # (/data/UserTempStorage, created on start). Not the photo library.
       - /volume1/docker/photo-selector:/data
       # The two photo folders, and nothing else from the share. The paths on
       # the left are the NAS's own paths for \ugreen\Photo\... — check yours

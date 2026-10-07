@@ -75,7 +75,7 @@ async function settleGroup(
   let trashBatchId: string | null = null
   let trashedNames: string[] = []
   try {
-    if (group.root === "upload" && plan.keep.length) moved = (await moveToDropoff(segs, plan.keep)).ok.length
+    if (group.root === "upload" && plan.keep.length) moved = (await moveToDropoff("upload", segs, plan.keep)).ok.length
     if (plan.trash.length) {
       const t = await trashFiles(group.root, segs, plan.trash)
       trashBatchId = t.batchId

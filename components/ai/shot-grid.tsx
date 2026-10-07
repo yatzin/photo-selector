@@ -14,10 +14,13 @@ import { SHOT_TEXT } from "@/lib/ai/shot-text"
 import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
+import { PhotoMenu } from "@/components/library/photo-menu"
+import { TempDialog } from "@/components/library/temp-dialog"
 
 // Find Screenshots and Quality Checks results. Click (tap) images to select
 // them, then delete them, move them to Sort Dropoff (screenshots), or say the
-// AI got them wrong. The magnifier opens one full size.
+// AI got them wrong. The magnifier opens one full size. Right-click moves or
+// copies to User Temp Storage.
 
 export type ShotItem = { id: string; name: string; note: string | null; error: string | null; file: FileEntry | null }
 
@@ -45,6 +48,8 @@ export function ShotGrid({
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState<Action | null>(null)
   const [viewer, setViewer] = useState<number | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; names: string[] } | null>(null)
+  const [temp, setTemp] = useState<string[] | null>(null)
 
   // Fresh data from the server: anything hidden optimistically is gone for real, or back (Undo).
   const [prevItems, setPrevItems] = useState(items)
@@ -112,6 +117,14 @@ export function ShotGrid({
     }
   }
 
+  // Right-click: the selection when the image is part of it, otherwise just that image.
+  const openMenu = (e: React.MouseEvent, item: ShotItem) => {
+    if (!item.file) return
+    e.preventDefault()
+    const names = selected.has(item.id) ? chosen.filter((i) => i.file).map((i) => i.name) : [item.name]
+    setMenu({ x: e.clientX, y: e.clientY, names })
+  }
+
   const spin = (a: Action, icon: React.ReactNode) => (busy === a ? <Loader2 className="h-4 w-4 animate-spin" /> : icon)
 
   return (
@@ -164,6 +177,7 @@ export function ShotGrid({
                   }
                 }}
                 onDoubleClick={() => fileIndex >= 0 && setViewer(fileIndex)}
+                onContextMenu={(e) => openMenu(e, item)}
                 style={{ touchAction: "manipulation" }}
                 className={cn(
                   "group relative aspect-square select-none overflow-hidden rounded-md bg-muted",
@@ -231,6 +245,37 @@ export function ShotGrid({
           onMove={() => {}}
           onDelete={() => {}}
           onRotate={() => {}}
+          onTemp={(name) => setTemp([name])}
+        />
+      )}
+      {menu && (
+        <PhotoMenu
+          x={menu.x}
+          y={menu.y}
+          count={menu.names.length}
+          canRotate={false}
+          showMove={false}
+          canMove={false}
+          canEdit={false}
+          showEdit={false}
+          canTemp={!busy}
+          onAction={() => setTemp(menu.names)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {temp && (
+        <TempDialog
+          target={{ root, folder, names: temp }}
+          canMove={!locked}
+          onDone={(ok, moved) => {
+            if (moved) {
+              const gone = shown.filter((i) => ok.includes(i.name)).map((i) => i.id)
+              setHidden((prev) => new Set([...prev, ...gone]))
+              setSelected((prev) => new Set([...prev].filter((id) => !gone.includes(id))))
+            }
+            startTransition(() => router.refresh())
+          }}
+          onClose={() => setTemp(null)}
         />
       )}
     </div>
