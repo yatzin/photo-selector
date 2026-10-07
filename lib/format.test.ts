@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatBytes, libraryHref, mediaUrl } from "./format"
+import { formatBytes, libraryHref, mediaUrl, preview } from "./format"
 
 describe("formatBytes", () => {
   it("picks a readable unit", () => {
@@ -25,5 +25,17 @@ describe("mediaUrl", () => {
   })
   it("keeps a month scan's day folder as its own path segment", () => {
     expect(mediaUrl("upload", ["2025", "10"], "18/IMG_1.jpg", "thumb", "k")).toBe("/api/media/upload/2025/10/18/IMG_1.jpg?v=thumb&k=k")
+  })
+})
+
+describe("preview", () => {
+  it("keeps short text as is, on one line", () => {
+    expect(preview("Crop this\n  one", 60)).toBe("Crop this one")
+  })
+
+  it("cuts long text and adds an ellipsis", () => {
+    expect(preview("abcdefghij", 5)).toBe("abcde…")
+    expect(preview("abcd efghij", 5)).toBe("abcd…")
+    expect(preview("abcde", 5)).toBe("abcde")
   })
 })

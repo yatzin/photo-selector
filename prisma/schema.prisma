@@ -24,6 +24,27 @@ model User {
   createdAt         DateTime @default(now())
   aiRuns            AiRun[]
   aiResolved        AiGroup[]
+  tempNotesFor      TempNote[] @relation("TempNoteFor")
+  tempNotesBy       TempNote[] @relation("TempNoteBy")
+}
+
+/// The note left with a photo or video put in someone's User Temp Storage
+/// folder. One per file: putting the same name there again replaces the file
+/// and updates the note.
+model TempNote {
+  id          String   @id @default(cuid())
+  /// The user's folder inside User Temp Storage (see tempFolderName in lib/media.ts).
+  folder      String
+  name        String
+  note        String
+  forUserId   String?
+  forUser     User?    @relation("TempNoteFor", fields: [forUserId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?    @relation("TempNoteBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([folder, name])
 }
 
 enum AiRunStatus {

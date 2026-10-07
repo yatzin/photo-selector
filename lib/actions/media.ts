@@ -8,6 +8,8 @@ import { moveToDropoff, restoreBatch, rotateFiles, trashFiles, type ActionResult
 import { isPlainName, isRootKey, safeSegments, type RootKey } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
+import { dropTempNotes } from "@/lib/temp-notes-server"
+import { clearRootCounts } from "@/lib/library-server"
 
 const MAX_BATCH = 2000
 
@@ -31,6 +33,7 @@ async function parse(input: unknown): Promise<Target | { error: string }> {
 }
 
 function done<T extends ActionResult>(result: T): T {
+  clearRootCounts()
   revalidatePath("/library", "layout")
   return result
 }
@@ -38,8 +41,10 @@ function done<T extends ActionResult>(result: T): T {
 export async function moveToDropoffAction(input: { root: string; folder: string[]; names: string[] }) {
   const t = await parse(input)
   if ("error" in t) return t
-  if (t.root !== "upload") return { error: "Only files in Mobile Upload can be moved to the drop-off." }
-  return done(await moveToDropoff(t.folder, t.names))
+  if (t.root === "dropoff") return { error: "Only files in Mobile Upload or User Temp Storage can be moved to the drop-off." }
+  const result = await moveToDropoff(t.root, t.folder, t.names)
+  if (t.root === "temp") await dropTempNotes(t.folder, result.ok)
+  return done(result)
 }
 
 export async function deleteAction(input: { root: string; folder: string[]; names: string[] }) {

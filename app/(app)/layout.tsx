@@ -1,6 +1,7 @@
 import { auth } from "@/auth"
 import { redirect } from "next/navigation"
 import { prisma } from "@/lib/prisma"
+import { rootMediaCounts } from "@/lib/library-server"
 import { Sidebar, MobileSidebarTrigger } from "@/components/sidebar"
 import { UserMenu } from "@/components/user-menu"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -10,18 +11,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await auth()
   if (!session) redirect("/login")
   // Groups to review plus flagged images (screenshots, bad photos) waiting for a decision.
-  const [groupsPending, shotsPending] = await Promise.all([
+  const [groupsPending, shotsPending, counts] = await Promise.all([
     prisma.aiGroup.count({ where: { status: "ANALYZED" } }),
     prisma.aiShot.count({ where: { status: "FLAGGED" } }),
+    rootMediaCounts(),
   ])
   const aiPending = groupsPending + shotsPending
 
   return (
     <div className="flex h-svh overflow-hidden">
-      <Sidebar aiPending={aiPending} />
+      <Sidebar aiPending={aiPending} counts={counts} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-card/80 backdrop-blur-sm px-4">
-          <MobileSidebarTrigger aiPending={aiPending} />
+          <MobileSidebarTrigger aiPending={aiPending} counts={counts} />
           <div className="flex-1" />
           <div className="flex shrink-0 items-center gap-2">
             <ThemeToggle />

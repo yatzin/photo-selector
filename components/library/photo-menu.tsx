@@ -1,16 +1,16 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { FolderOutput, ImageOff, RotateCcw, RotateCw, Trash2 } from "lucide-react"
+import { FolderOutput, ImageOff, Inbox, RotateCcw, RotateCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Right-click menu for photos in the grid. It acts on the selection when the
 // clicked photo is part of it, otherwise on just that photo.
 
-export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos"
+export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos" | "temp"
 
 export function PhotoMenu({
-  x, y, count, canRotate, showMove, canMove, canEdit, showBadPhotos = false, onAction, onClose,
+  x, y, count, canRotate, showMove, canMove, canEdit, showEdit = true, canTemp = true, showBadPhotos = false, onAction, onClose,
 }: {
   x: number
   y: number
@@ -21,6 +21,10 @@ export function PhotoMenu({
   showMove: boolean
   canMove: boolean
   canEdit: boolean
+  /** Rotate and delete; off where the menu only offers User Temp Storage (AI results). */
+  showEdit?: boolean
+  /** Move / copy to User Temp Storage. */
+  canTemp?: boolean
   /** The clicked photo was flagged by Quality Checks: link to that review. */
   showBadPhotos?: boolean
   onAction: (action: PhotoMenuAction) => void
@@ -48,8 +52,8 @@ export function PhotoMenu({
   }, [onClose])
 
   // Keep the menu on screen near the pointer.
-  const W = showBadPhotos ? 260 : 210
-  const H = showBadPhotos ? 220 : 180
+  const W = showBadPhotos ? 260 : 250
+  const H = (showEdit ? 180 : 40) + (showBadPhotos ? 40 : 0) + 36
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const n = count > 1 ? ` ${count}` : ""
@@ -83,11 +87,20 @@ export function PhotoMenu({
       style={{ left, top, width: W }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {item("rotate-ccw", `Rotate left${n}`, <RotateCcw className="h-4 w-4" />, canEdit && canRotate)}
-      {item("rotate-cw", `Rotate right${n}`, <RotateCw className="h-4 w-4" />, canEdit && canRotate)}
+      {showEdit && (
+        <>
+          {item("rotate-ccw", `Rotate left${n}`, <RotateCcw className="h-4 w-4" />, canEdit && canRotate)}
+          {item("rotate-cw", `Rotate right${n}`, <RotateCw className="h-4 w-4" />, canEdit && canRotate)}
+        </>
+      )}
       {showMove && item("move", `Move${n} to Dropoff`, <FolderOutput className="h-4 w-4" />, canMove)}
-      <div className="my-1 h-px bg-border" />
-      {item("delete", `Delete${n}`, <Trash2 className="h-4 w-4" />, canEdit, true)}
+      {item("temp", `Move${n} to User Temp Storage…`, <Inbox className="h-4 w-4" />, canTemp)}
+      {showEdit && (
+        <>
+          <div className="my-1 h-px bg-border" />
+          {item("delete", `Delete${n}`, <Trash2 className="h-4 w-4" />, canEdit, true)}
+        </>
+      )}
       {showBadPhotos && (
         <>
           <div className="my-1 h-px bg-border" />

@@ -5,18 +5,22 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { FolderInput, FolderOutput, Images, Menu, Settings, Sparkles } from "lucide-react"
+import { FolderInput, FolderOutput, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
+import type { RootCounts } from "@/lib/library-server"
 
-type NavItem = { href: string; label: string; icon: React.ElementType; badge?: number }
+type NavItem = { href: string; label: string; icon: React.ElementType; badge?: number; subtitle?: string }
 
-const navItems: NavItem[] = [
-  { href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
-  { href: "/library/dropoff", label: "Sort Dropoff", icon: FolderOutput },
+const navItems: (NavItem & { root: keyof RootCounts })[] = [
+  { root: "upload", href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
+  { root: "dropoff", href: "/library/dropoff", label: "Sort Dropoff", icon: FolderOutput },
+  { root: "temp", href: "/library/temp", label: "User Temp Storage", icon: Inbox },
 ]
+
+const itemCount = (n: number) => `${n.toLocaleString()} item${n === 1 ? "" : "s"}`
 
 const bottomItems: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings }]
 
-function NavLink({ href, label, icon: Icon, badge, onClick }: NavItem & { onClick?: () => void }) {
+function NavLink({ href, label, icon: Icon, badge, subtitle, onClick }: NavItem & { onClick?: () => void }) {
   const pathname = usePathname()
   const active = pathname === href || pathname.startsWith(href + "/")
   return (
@@ -38,13 +42,20 @@ function NavLink({ href, label, icon: Icon, badge, onClick }: NavItem & { onClic
         )}
       />
       <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />
-      {label}
+      {subtitle === undefined ? (
+        label
+      ) : (
+        <span className="flex min-w-0 flex-col leading-tight">
+          <span className="truncate">{label}</span>
+          <span className="text-[11px] font-normal text-muted-foreground tabular-nums">{subtitle}</span>
+        </span>
+      )}
       {badge ? <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground">{badge}</span> : null}
     </Link>
   )
 }
 
-function SidebarContent({ onNavClick, aiPending }: { onNavClick?: () => void; aiPending: number }) {
+function SidebarContent({ onNavClick, aiPending, counts }: { onNavClick?: () => void; aiPending: number; counts: RootCounts }) {
   return (
     <div className="flex flex-col h-full px-3 py-4">
       <div className="mb-6 flex items-center gap-2 px-3">
@@ -55,7 +66,7 @@ function SidebarContent({ onNavClick, aiPending }: { onNavClick?: () => void; ai
       </div>
       <nav className="flex flex-1 flex-col gap-1">
         <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Library</p>
-        {navItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} />)}
+        {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
         <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Review</p>
         <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} />
       </nav>
@@ -66,15 +77,15 @@ function SidebarContent({ onNavClick, aiPending }: { onNavClick?: () => void; ai
   )
 }
 
-export function Sidebar({ aiPending }: { aiPending: number }) {
+export function Sidebar({ aiPending, counts }: { aiPending: number; counts: RootCounts }) {
   return (
     <aside className="hidden md:flex w-56 shrink-0 flex-col border-r bg-card">
-      <SidebarContent aiPending={aiPending} />
+      <SidebarContent aiPending={aiPending} counts={counts} />
     </aside>
   )
 }
 
-export function MobileSidebarTrigger({ aiPending }: { aiPending: number }) {
+export function MobileSidebarTrigger({ aiPending, counts }: { aiPending: number; counts: RootCounts }) {
   const [open, setOpen] = useState(false)
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -83,7 +94,7 @@ export function MobileSidebarTrigger({ aiPending }: { aiPending: number }) {
         <span className="sr-only">Menu</span>
       </SheetTrigger>
       <SheetContent side="left" className="w-56 p-0">
-        <SidebarContent aiPending={aiPending} onNavClick={() => setOpen(false)} />
+        <SidebarContent aiPending={aiPending} counts={counts} onNavClick={() => setOpen(false)} />
       </SheetContent>
     </Sheet>
   )

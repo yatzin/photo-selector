@@ -13,5 +13,9 @@ export function createTtlCache(ttlMs: number, now: () => number = Date.now) {
       value.catch(() => entries.delete(key))
       return value
     },
+    /** Forgets everything, so the next get loads fresh (after the data changed). */
+    clear() {
+      entries.clear()
+    },
   }
 }

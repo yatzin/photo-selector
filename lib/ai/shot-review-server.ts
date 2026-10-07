@@ -50,7 +50,7 @@ export async function moveShots(runId: string, ids: string[]): Promise<ShotActio
   if (loaded.kind !== "screenshots") return { error: "Only screenshots can be moved to Sort Dropoff." }
   if (loaded.root !== "upload") return { error: "Only images in Mobile Upload can be moved to Sort Dropoff." }
   if (!loaded.shots.length) return { error: "None of these images are still here." }
-  const result = await moveToDropoff(loaded.segs, loaded.shots.map((s) => s.name))
+  const result = await moveToDropoff("upload", loaded.segs, loaded.shots.map((s) => s.name))
   return { ids: await settle(loaded, result.ok), failed: result.failed }
 }
 

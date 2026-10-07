@@ -12,6 +12,8 @@ import { dismissGroupAction, resolveGroupAction, trashGroupAction, undoGroupActi
 import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
+import { PhotoMenu } from "@/components/library/photo-menu"
+import { TempDialog } from "@/components/library/temp-dialog"
 
 export type ReviewPhoto = { name: string; rank: number | null; note: string | null; suggested: boolean; decision: "KEEP" | "TRASH" | null; current: FileEntry | null }
 
@@ -60,9 +62,12 @@ export function ReviewGroup({
   }, [confirmingDelete])
   const [viewer, setViewer] = useState<number | null>(null)
   const items = present.map((p) => p.current!)
+  // Right-click on a photo: move or copy it to User Temp Storage.
+  const [menu, setMenu] = useState<{ x: number; y: number; name: string } | null>(null)
+  const [temp, setTemp] = useState<string | null>(null)
 
   useEffect(() => {
-    if (viewer === null) return
+    if (viewer === null || temp !== null) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setViewer(null)
       else if (e.key === "ArrowRight") setViewer((v) => (v !== null && v < items.length - 1 ? v + 1 : v))
@@ -70,7 +75,7 @@ export function ReviewGroup({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [viewer, items.length])
+  }, [viewer, items.length, temp])
 
   const kept = present.filter((p) => keep.has(p.name)).length
   const trashed = present.length - kept
@@ -140,6 +145,10 @@ export function ReviewGroup({
                 type="button"
                 onClick={() => onToggle(p.name)}
                 onDoubleClick={() => setViewer(index)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenu({ x: e.clientX, y: e.clientY, name: p.name })
+                }}
                 title={`${p.name} — click to keep or trash, double-click to view`}
                 style={{ touchAction: "manipulation" }}
                 className={cn(
@@ -207,6 +216,30 @@ export function ReviewGroup({
           onMove={() => {}}
           onDelete={() => {}}
           onRotate={() => {}}
+          onTemp={setTemp}
+        />
+      )}
+      {menu && (
+        <PhotoMenu
+          x={menu.x}
+          y={menu.y}
+          count={1}
+          canRotate={false}
+          showMove={false}
+          canMove={false}
+          canEdit={false}
+          showEdit={false}
+          canTemp={!busy}
+          onAction={() => setTemp(menu.name)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {temp !== null && (
+        <TempDialog
+          target={{ root, folder, names: [temp] }}
+          canMove={!locked}
+          onDone={() => router.refresh()}
+          onClose={() => setTemp(null)}
         />
       )}
     </div>

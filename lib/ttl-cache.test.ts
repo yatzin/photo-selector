@@ -23,4 +23,13 @@ describe("createTtlCache", () => {
     await expect(failing.get("x", async () => { throw new Error("boom") })).rejects.toThrow("boom")
     expect(await failing.get("x", async () => 7)).toBe(7)
   })
+
+  it("loads fresh after clear", async () => {
+    const cache = createTtlCache(1000, () => 0)
+    let calls = 0
+    const load = async () => ++calls
+    expect(await cache.get("k", load)).toBe(1)
+    cache.clear()
+    expect(await cache.get("k", load)).toBe(2)
+  })
 })

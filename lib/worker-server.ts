@@ -11,8 +11,9 @@ import { purgeTrash } from "@/lib/file-ops-server"
 // Mobile Upload (a phone backup landing). New files are queued at low
 // priority, so someone browsing always goes first.
 //
-// Mobile Upload gets previews too (that's where sorting happens); Sort
-// Dropoff only thumbnails, with previews made when opened.
+// Mobile Upload and User Temp Storage get previews too (that's where photos
+// are looked at one by one); Sort Dropoff only thumbnails, with previews made
+// when opened.
 
 const SCAN_INTERVAL_MS = 15 * 60_000
 const CHANGE_DEBOUNCE_MS = 15_000
@@ -20,7 +21,7 @@ const FIRST_SCAN_DELAY_MS = 5_000
 // Cache files younger than this survive a sweep even if no scan saw them.
 const SWEEP_MIN_AGE_MS = 60 * 60_000
 
-const PREPARE: Record<RootKey, Variant[]> = { upload: ["thumb", "preview"], dropoff: ["thumb"] }
+const PREPARE: Record<RootKey, Variant[]> = { upload: ["thumb", "preview"], dropoff: ["thumb"], temp: ["thumb", "preview"] }
 
 export type WorkerStatus = {
   started: boolean
