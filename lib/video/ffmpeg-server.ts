@@ -28,22 +28,17 @@ export function probeMedia(file: string): Promise<{ duration: number; hasAudio: 
 
 const num = (n: number) => String(Number(n.toFixed(3)))
 
-/**
- * ffmpeg arguments for the whole timeline: every clip is trimmed, scaled into
- * the project frame with a letterbox pad (never stretched), then concatenated.
- * `files` maps asset id to absolute path; one input per clip keeps each
- * filter label used once. A clip from a silent asset gets generated silence.
- */
-export function buildExportArgs(p: Project, files: Record<string, string>, outFile: string): string[] {
+/** The filtergraph text for the whole timeline, plus the input files in clip order. */
+export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[] } {
   if (p.clips.length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
-  const args = ["-hide_banner", "-y", "-nostats", "-progress", "pipe:1"]
+  const inputs: string[] = []
   const parts: string[] = []
   const labels: string[] = []
   p.clips.forEach((c, i) => {
     const file = files[c.asset]
     if (!file) throw new Error("Missing asset file")
-    args.push("-i", file)
+    inputs.push(file)
     parts.push(
       `[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}[v${i}]`
     )
@@ -55,8 +50,25 @@ export function buildExportArgs(p: Project, files: Record<string, string>, outFi
     labels.push(`[v${i}][a${i}]`)
   })
   parts.push(`${labels.join("")}concat=n=${p.clips.length}:v=1:a=1[v][a]`)
+  return { graph: parts.join(";"), inputs }
+}
+
+/**
+ * ffmpeg arguments for the whole timeline: every clip is trimmed, scaled into
+ * the project frame with a letterbox pad (never stretched), then concatenated.
+ * `files` maps asset id to absolute path; one input per clip keeps each
+ * filter label used once. A clip from a silent asset gets generated silence.
+ * With `graphFile` the filtergraph is read from that file (the caller writes
+ * `buildExportGraph(...).graph` there) so a long timeline can't overflow the
+ * command line (`-/filter_complex <file>`, needs ffmpeg 7 or newer; the old
+ * `-filter_complex_script` is gone in 9); without it the graph is inline.
+ */
+export function buildExportArgs(p: Project, files: Record<string, string>, outFile: string, graphFile?: string): string[] {
+  const { graph, inputs } = buildExportGraph(p, files)
+  const args = ["-hide_banner", "-y", "-nostats", "-progress", "pipe:1"]
+  for (const file of inputs) args.push("-i", file)
   args.push(
-    "-filter_complex", parts.join(";"),
+    graphFile ? "-/filter_complex" : "-filter_complex", graphFile ?? graph,
     "-map", "[v]", "-map", "[a]",
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
     "-f", "mp4", outFile
@@ -71,8 +83,21 @@ export function parseProgressLine(line: string, totalSeconds: number): number | 
   return Math.max(0, Math.min(1, Number(m[1]) / 1_000_000 / totalSeconds))
 }
 
-/** Runs ffmpeg writing to `outFile`. On failure kills the process, removes `outFile` and rejects with ffmpeg's last stderr line. */
-export function runExport(args: string[], outFile: string, totalSeconds: number, onProgress: (fraction: number) => void): Promise<void> {
+/** Longest an export may run: four times the video's length plus five minutes. */
+export const exportTimeoutMs = (totalSeconds: number) => (4 * totalSeconds + 300) * 1000
+
+/**
+ * Runs ffmpeg writing to `outFile`. On failure (or timeout) kills the process,
+ * removes `outFile` once ffmpeg has let go of it, and rejects with ffmpeg's
+ * last stderr line. Always settles, even if removing the file fails.
+ */
+export function runExport(
+  args: string[],
+  outFile: string,
+  totalSeconds: number,
+  onProgress: (fraction: number) => void,
+  timeoutMs: number = exportTimeoutMs(totalSeconds)
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpeg(), args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
     let lastErr = ""
@@ -81,9 +106,20 @@ export function runExport(args: string[], outFile: string, totalSeconds: number,
     const fail = (message: string) => {
       if (settled) return
       settled = true
-      child.kill()
-      void fs.rm(outFile, { force: true }).then(() => reject(new Error(message)))
+      clearTimeout(timer)
+      const finish = () => {
+        fs.rm(outFile, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}).then(() => reject(new Error(message)))
+      }
+      // Windows won't delete a file ffmpeg still has open, so wait for it to exit.
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+        child.kill("SIGKILL")
+        finish()
+      } else {
+        child.once("exit", finish)
+        child.kill("SIGKILL")
+      }
     }
+    const timer = setTimeout(() => fail("The export timed out."), timeoutMs)
     child.stdout.on("data", (chunk: Buffer) => {
       buffered += chunk.toString()
       const lines = buffered.split(/\r?\n/)
@@ -102,6 +138,7 @@ export function runExport(args: string[], outFile: string, totalSeconds: number,
       if (code === 0) {
         if (settled) return
         settled = true
+        clearTimeout(timer)
         resolve()
       } else {
         fail(lastErr || `ffmpeg exited with code ${code}.`)

@@ -34,7 +34,7 @@ export function Editor({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
-  const save = useAutosave(folder, project)
+  const { state: save, flush } = useAutosave(folder, project)
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const exportTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -87,6 +87,12 @@ export function Editor({
       setExportProgress(null)
     }
     try {
+      // The server exports what's stored, so store any pending edit first.
+      if (!(await flush())) {
+        toast.error("Couldn't save the project, so it wasn't exported.")
+        stop()
+        return
+      }
       const started = await startExportAction(folder)
       if ("error" in started) {
         toast.error(started.error)
@@ -161,7 +167,7 @@ export function Editor({
           {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
         </span>
         <div className="flex-1" />
-        <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null || save === "saving"}>
+        <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
         </Button>

@@ -158,6 +158,12 @@ describe("parseProject", () => {
     expect(parseProject(JSON.parse(JSON.stringify(p)))).toEqual(p)
   })
 
+  it("rejects a size or frame rate that isn't a sane whole number", () => {
+    const bad = [{ width: "1920" }, { height: 1080.5 }, { width: 0 }, { height: -1 }, { width: 7681 }, { fps: 0 }, { fps: 121 }, { fps: 29.97 }, { fps: Infinity }, { fps: "30" }]
+    for (const patch of bad) expect(parseProject({ ...sample(), ...patch })).toBeNull()
+    expect(parseProject({ ...sample(), width: 7680, height: 4320, fps: 120 })).not.toBeNull()
+  })
+
   it("rejects the wrong version", () => {
     expect(parseProject({ version: 2 })).toBeNull()
   })

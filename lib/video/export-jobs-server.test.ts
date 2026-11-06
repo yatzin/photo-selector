@@ -1,3 +1,4 @@
+import fsSync from "fs"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -9,7 +10,7 @@ vi.mock("./ffmpeg-server", async () => {
   return { ...actual, probeMedia: vi.fn(async () => ({ duration: 5, hasAudio: true })), runExport: (...a: unknown[]) => runExport(...a) }
 })
 
-import { exportStatus, startExport } from "./export-jobs-server"
+import { exportStatus, sanitizeError, startExport } from "./export-jobs-server"
 import { createProject, readProject, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-export-${process.pid}-${Date.now()}`)
@@ -90,13 +91,19 @@ describe("startExport", () => {
     expect((await fs.readdir(outDir(folder))).sort()).toEqual([a.output, b.output].sort())
   })
 
-  it("passes the project size and total length to ffmpeg", async () => {
+  it("passes the project size and total length to ffmpeg, with the filtergraph in a script file", async () => {
     const folder = await makeProject()
+    let graph = ""
+    runExport.mockImplementation(async (args: string[], outFile: string) => {
+      graph = fsSync.readFileSync(args[args.indexOf("-/filter_complex") + 1], "utf8")
+      await fs.writeFile(outFile, "v")
+    })
     const r = await startExport("mike", folder)
     if ("error" in r) throw new Error(r.error)
     await waitDone("mike", r.jobId)
     const [args, , total] = runExport.mock.calls[0]
-    expect(args.join(" ")).toContain("scale=1920:1080")
+    expect(args).not.toContain("-filter_complex")
+    expect(graph).toContain("scale=1920:1080")
     expect(total).toBe(4)
   })
 
@@ -129,15 +136,74 @@ describe("startExport", () => {
     expect(await waitDone("mike", r.jobId)).toMatchObject({ state: "done", progress: 1 })
   })
 
-  it("marks the job failed with ffmpeg's message and leaves no output", async () => {
+  it("marks the job failed with ffmpeg's message and removes the partial .tmp and the script file", async () => {
     const folder = await makeProject()
-    runExport.mockRejectedValue(new Error("Invalid argument"))
+    let script = ""
+    runExport.mockImplementation(async (args: string[], outFile: string) => {
+      script = args[args.indexOf("-/filter_complex") + 1]
+      expect(fsSync.existsSync(script)).toBe(true)
+      await fs.writeFile(outFile, "partial")
+      throw new Error("Invalid argument")
+    })
     const r = await startExport("mike", folder)
     if ("error" in r) throw new Error(r.error)
     const s = await waitDone("mike", r.jobId)
     expect(s).toMatchObject({ state: "failed", error: "Invalid argument" })
     expect(s.output).toBeUndefined()
     expect(await fs.readdir(outDir(folder))).toEqual([])
+    expect(fsSync.existsSync(script)).toBe(false)
+  })
+
+  it("removes the script file after a successful export too", async () => {
+    const folder = await makeProject()
+    let script = ""
+    runExport.mockImplementation(async (args: string[], outFile: string) => {
+      script = args[args.indexOf("-/filter_complex") + 1]
+      await fs.writeFile(outFile, "v")
+    })
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    await waitDone("mike", r.jobId)
+    expect(script).not.toBe("")
+    expect(fsSync.existsSync(script)).toBe(false)
+  })
+
+  it("still fails the job when the .tmp can't be removed", async () => {
+    const folder = await makeProject()
+    runExport.mockImplementation(async (_a: string[], outFile: string) => {
+      await fs.mkdir(outFile) // a plain rm of a directory rejects
+      throw new Error("Invalid argument")
+    })
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    expect(await waitDone("mike", r.jobId)).toMatchObject({ state: "failed", error: "Invalid argument" })
+  })
+
+  it("keeps file system paths out of the error", async () => {
+    const folder = await makeProject()
+    runExport.mockRejectedValue(new Error("C:\\Users\\bob\\Projects\\mike\\x\\assets\\a.mp4: No such file or directory"))
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    const s = await waitDone("mike", r.jobId)
+    expect(s.error).toBe("file: No such file or directory")
+  })
+})
+
+describe("sanitizeError", () => {
+  it("strips drive, UNC, rooted and relative paths", () => {
+    expect(sanitizeError("C:\\a\\b.mp4: bad")).toBe("file: bad")
+    expect(sanitizeError("\\\\srv\\share\\b.mp4: bad")).toBe("file: bad")
+    expect(sanitizeError("/home/u/b.mp4: Permission denied")).toBe("file: Permission denied")
+    expect(sanitizeError("EBUSY: resource busy, rename '/tmp/x.tmp' -> '/data/y.mp4'")).toBe("EBUSY: resource busy, rename 'file' -> 'file'")
+    expect(sanitizeError("spawn ./.data/ffmpeg.exe ENOENT")).toBe("spawn file ENOENT")
+  })
+  it("falls back when nothing readable is left", () => {
+    expect(sanitizeError("")).toBe("The export failed.")
+    expect(sanitizeError("/only/a/path")).toBe("The export failed.")
+  })
+  it("leaves ordinary messages alone", () => {
+    expect(sanitizeError("a.mp4 is missing from the project's assets.")).toBe("a.mp4 is missing from the project's assets.")
+    expect(sanitizeError("The export timed out.")).toBe("The export timed out.")
   })
 })
 

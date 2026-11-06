@@ -99,10 +99,18 @@ function isNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v)
 }
 
+const MAX_SIZE = 7680
+const MAX_FPS = 120
+
+/** A whole number from 1 to `max`; these end up inside an ffmpeg filtergraph. */
+function isInt(v: unknown, max: number): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= max
+}
+
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || json.version !== 1) return null
   const { name, width, height, fps, assets, clips } = json
-  if (typeof name !== "string" || !isNum(width) || !isNum(height) || !isNum(fps)) return null
+  if (typeof name !== "string" || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
   if (!isRecord(assets) || !Array.isArray(clips)) return null
 
   const parsedAssets: Record<string, Asset> = {}

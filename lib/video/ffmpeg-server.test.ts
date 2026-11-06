@@ -3,7 +3,7 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { buildExportArgs, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
+import { buildExportArgs, buildExportGraph, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
 import { newProject, type Project } from "./project"
 
 describe("parseProbe", () => {
@@ -58,6 +58,19 @@ describe("buildExportArgs", () => {
     expect(g).toContain("fps=24")
   })
 
+  it("reads the graph from a script file, so 150 clips don't make a long command line", () => {
+    const clips = Array.from({ length: 150 }, (_, i) => ({ id: `c${i}`, asset: i % 2 ? "s" : "a", in: 0, out: 1 }))
+    const p = { ...twoClips(), clips }
+    const args = buildExportArgs(p, files, "/out/x.mp4.tmp", "/tmp/graph.txt")
+    expect(args).toContain("-/filter_complex")
+    expect(args).not.toContain("-filter_complex")
+    expect(args.every((a) => a.length < 1000)).toBe(true)
+    expect(args.filter((a) => a === "-i")).toHaveLength(150)
+    const { graph } = buildExportGraph(p, files)
+    expect(graph).toContain("concat=n=150:v=1:a=1")
+    expect(graph.length).toBeGreaterThan(32_767)
+  })
+
   it("throws when there is nothing to export", () => {
     expect(() => buildExportArgs({ ...twoClips(), clips: [] }, files, "o")).toThrow("Nothing to export")
   })
@@ -76,7 +89,7 @@ describe("parseProgressLine", () => {
   })
 })
 
-// Real ffmpeg: the project's .data/ffmpeg.exe and the dev sample videos; skipped when they aren't there.
+// Real ffmpeg: the project's .data/ffmpeg.exe and the dev sample videos. The suite's name says why when it's skipped.
 const FFMPEG = path.resolve(".data/ffmpeg.exe")
 const SAMPLES = path.resolve("dev-photos/upload/mjdazzo")
 const sample = (n: number) => path.join(SAMPLES, `VID_200${n}.mp4`)
@@ -88,7 +101,9 @@ function ffmpeg(args: string[]): Promise<{ stdout: Buffer; stderr: string }> {
   })
 }
 
-describe.skipIf(!canRun)("runExport with real ffmpeg", () => {
+if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and ${SAMPLES}${path.sep}VID_2001.mp4 and VID_2002.mp4`)
+
+;(canRun ? describe : describe.skip)(canRun ? "runExport with real ffmpeg" : "runExport with real ffmpeg (SKIPPED: .data/ffmpeg.exe or dev-photos samples not found)", () => {
   const dir = path.join(os.tmpdir(), `ps-ffmpeg-${process.pid}-${Date.now()}`)
   const silent = path.join(dir, "silent.mp4")
   const portrait = path.join(dir, "portrait.mp4")
@@ -105,7 +120,10 @@ describe.skipIf(!canRun)("runExport with real ffmpeg", () => {
     const out = path.join(dir, name)
     const progress: number[] = []
     const total = p.clips.reduce((t, c) => t + c.out - c.in, 0)
-    await runExport(buildExportArgs(p, files, out), out, total, (f) => progress.push(f))
+    // The filtergraph goes through a script file, as the app does.
+    const script = path.join(dir, `${name}.graph.txt`)
+    fs.writeFileSync(script, buildExportGraph(p, files).graph)
+    await runExport(buildExportArgs(p, files, out, script), out, total, (f) => progress.push(f))
     const info = (await ffmpeg(["-i", out])).stderr
     return { out, info, duration: (await probeMedia(out)).duration, progress, total }
   }
@@ -155,14 +173,28 @@ describe.skipIf(!canRun)("runExport with real ffmpeg", () => {
     expect(px.stdout[0]).toBeLessThanOrEqual(20)
   }, 60_000)
 
-  it("removes the output and rejects with ffmpeg's last line on failure", async () => {
+  it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {
     const p: Project = {
       ...newProject("Bad"),
       assets: { a: { file: "a", duration: 3, hasAudio: true } },
       clips: [{ id: "1", asset: "a", in: 0, out: 1 }],
     }
     const out = path.join(dir, "bad.mp4.tmp")
-    await expect(runExport(buildExportArgs(p, { a: path.join(dir, "nope.mp4") }, out), out, 1, () => {})).rejects.toThrow()
+    fs.writeFileSync(out, "partial") // would survive if runExport didn't clean up
+    await expect(runExport(buildExportArgs(p, { a: path.join(dir, "nope.mp4") }, out), out, 1, () => {})).rejects.toThrow(/No such file/)
+    expect(fs.existsSync(out)).toBe(false)
+  }, 60_000)
+
+  it("kills a hung export on timeout and removes the output ffmpeg had started", async () => {
+    const out = path.join(dir, "slow.mp4.tmp")
+    let existedWhileRunning = false
+    const args = ["-hide_banner", "-y", "-nostats", "-progress", "pipe:1", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=600", "-c:v", "libx264", "-f", "mp4", out]
+    await expect(
+      runExport(args, out, 600, () => {
+        existedWhileRunning ||= fs.existsSync(out)
+      }, 3000)
+    ).rejects.toThrow("The export timed out.")
+    expect(existedWhileRunning).toBe(true)
     expect(fs.existsSync(out)).toBe(false)
   }, 60_000)
 })
