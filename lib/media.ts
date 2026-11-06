@@ -58,6 +58,16 @@ export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[numb
   return (SCAN_ROOT_KEYS as readonly string[]).includes(value)
 }
 
+function cleanFolderName(s: string): string {
+  return s
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.@#\s]+/, "")
+    .replace(/[.\s]+$/, "")
+    .slice(0, 80)
+}
+
 /**
  * A user's folder inside User Temp Storage, named after them. Characters no
  * file system accepts are dropped, as is a leading ".", "@" or "#" (folders
@@ -65,15 +75,12 @@ export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[numb
  * "user", stand in when nothing is left.
  */
 export function tempFolderName(name: string, email: string): string {
-  const clean = (s: string) =>
-    s
-      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/^[.@#\s]+/, "")
-      .replace(/[.\s]+$/, "")
-      .slice(0, 80)
-  return clean(name) || clean(email.split("@")[0] ?? "") || "user"
+  return cleanFolderName(name) || cleanFolderName(email.split("@")[0] ?? "") || "user"
+}
+
+/** A video project's folder name: the same cleaning as tempFolderName, "Untitled" when nothing is left. */
+export function projectFolderName(name: string): string {
+  return cleanFolderName(name) || "Untitled"
 }
 
 /**
