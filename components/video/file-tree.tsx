@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { formatBytes } from "@/lib/format"
 import { formatTimecode } from "@/lib/video/time"
 import type { Project } from "@/lib/video/project"
+import { ASSET_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
 // Inbox, where files can be imported from.
@@ -34,7 +35,15 @@ export function FileTree({
       {assets.length === 0 && <p className="px-3 pb-2 text-xs text-muted-foreground">Import clips from the Inbox below.</p>}
       <ul className="px-2">
         {assets.map(([id, a]) => (
-          <li key={id} className="group flex items-center gap-2 rounded-md p-1 hover:bg-muted/60">
+          <li
+            key={id}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(ASSET_DRAG_TYPE, id)
+              e.dataTransfer.effectAllowed = "copy"
+            }}
+            className="group flex cursor-grab items-center gap-2 rounded-md p-1 hover:bg-muted/60 active:cursor-grabbing"
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={thumbUrl(id)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
             <span className="min-w-0 flex-1">

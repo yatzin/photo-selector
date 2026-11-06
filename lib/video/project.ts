@@ -34,6 +34,16 @@ export function totalLength(clips: Clip[]): number {
   return clips.reduce((sum, c) => sum + clipLength(c), 0)
 }
 
+/** The clip playing at `timelineTime` and the time inside its source file; null before 0 or at/after the end. */
+export function clipAt(clips: Clip[], timelineTime: number): { index: number; sourceTime: number } | null {
+  if (!(timelineTime >= 0)) return null
+  const starts = clipStarts(clips)
+  for (let i = 0; i < clips.length; i++) {
+    if (timelineTime < starts[i] + clipLength(clips[i])) return { index: i, sourceTime: clips[i].in + (timelineTime - starts[i]) }
+  }
+  return null
+}
+
 export function addClip(p: Project, assetId: string, at: number, id: string): Project {
   const asset = p.assets[assetId]
   if (!asset || p.clips.some((c) => c.id === id)) return p

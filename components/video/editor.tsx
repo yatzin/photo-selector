@@ -1,15 +1,18 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { ArrowLeft, Check, Download, Loader2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { importAssetAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
-import { addClip, totalLength, type Project } from "@/lib/video/project"
+import { addClip, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
+import { clipIdAt } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
+import { Preview } from "./preview"
+import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline } from "./timeline"
 import { useAutosave } from "./use-autosave"
 
@@ -29,8 +32,7 @@ export function Editor({
 }) {
   const [project, setProject] = useState(initial)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [playhead, setPlayhead] = useState(0)
-  const [zoom] = useState(DEFAULT_ZOOM)
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
   const save = useAutosave(folder, project)
 
@@ -41,6 +43,16 @@ export function Editor({
     },
     [project.assets, userFolder, folder]
   )
+
+  const videoUrl = useCallback(
+    (assetId: string) => {
+      const file = project.assets[assetId]?.file
+      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "original", "1") : ""
+    },
+    [project.assets, userFolder, folder]
+  )
+  const player = usePreviewPlayer(project, videoUrl)
+  const playhead = player.time
 
   async function importFile(inboxFolder: string, name: string) {
     if (importing) return
@@ -63,6 +75,30 @@ export function Editor({
   function addToTimeline(assetId: string) {
     setProject((p) => addClip(p, assetId, p.clips.length, crypto.randomUUID()))
   }
+
+  // Keyboard: S splits the clip under the playhead, Delete removes the selection.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (e.metaKey || e.ctrlKey || e.altKey || t?.closest("input, textarea, select, [contenteditable=true]")) return
+      if (e.key === " ") {
+        e.preventDefault()
+        player.toggle()
+      } else if (e.key === "s" || e.key === "S") {
+        const id = clipIdAt(project.clips, playhead)
+        if (!id) return
+        e.preventDefault()
+        const newId = crypto.randomUUID()
+        setProject((p) => splitClip(p, id, playhead, newId))
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+        e.preventDefault()
+        setProject((p) => removeClip(p, selectedId))
+        setSelectedId(null)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [project.clips, playhead, selectedId, player])
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
@@ -88,13 +124,18 @@ export function Editor({
           <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onImport={importFile} onAdd={addToTimeline} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 items-center justify-center bg-black/90 p-4">
-            <div className="flex aspect-video max-h-full max-w-full items-center justify-center rounded-md bg-black text-sm text-white/60" style={{ height: "100%" }}>
-              {project.clips.length ? `Preview · ${formatTimecode(playhead)} / ${formatTimecode(totalLength(project.clips))}` : "Preview"}
-            </div>
-          </div>
+          <Preview player={player} project={project} />
           <div className="shrink-0 border-t border-border/60 bg-card">
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={setPlayhead} />
+            <div className="flex h-9 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
+              <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project.clips))}</span>
+              <span className="hidden sm:inline">Space play · S split · Delete remove · drag edges to trim</span>
+              <div className="flex-1" />
+              <label className="flex items-center gap-2">
+                Zoom
+                <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
+              </label>
+            </div>
+            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onChange={setProject} />
           </div>
         </div>
       </div>
