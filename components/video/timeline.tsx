@@ -4,8 +4,10 @@ import { useRef, useState } from "react"
 import { Film } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { addClip, clipLength, clipStarts, moveClip, totalLength, trimClip, type Project } from "@/lib/video/project"
+import { newId } from "@/lib/video/ids"
 import { dropIndex, trimDelta } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
+import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and one video track. Clips sit end to end (the
 // track closes gaps). Drag a clip to reorder it, drag its edge handles to trim,
@@ -17,7 +19,7 @@ const TRACK_PAD = 16 // px of empty track after the last clip
 const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
 
 export function Timeline({
-  project, thumbUrl, selectedId, playhead, zoom, onSelect, onSeek, onChange,
+  project, thumbUrl, selectedId, playhead, zoom, onSelect, onSeek, onScrub, onChange,
 }: {
   project: Project
   /** Thumbnail URL for an asset id. */
@@ -28,17 +30,23 @@ export function Timeline({
   zoom: number
   onSelect: (id: string | null) => void
   onSeek: (t: number) => void
-  onChange: (p: Project) => void
+  /** Scrubbing on the ruler started (true) or ended (false). */
+  onScrub: (active: boolean) => void
+  /** Applies an edit to the current project (not the one this render saw, which may be stale by then). */
+  onChange: (edit: (p: Project) => Project) => void
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
-  const [draft, setDraft] = useState<Project | null>(null)
+  const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
   const [drag, setDrag] = useState<{ id: string; dx: number; to: number } | null>(null)
   const [dropTime, setDropTime] = useState<number | null>(null)
   const track = useRef<HTMLDivElement>(null)
 
-  const shown = draft ?? project
-  const starts = clipStarts(shown.clips)
-  const total = totalLength(shown.clips)
+  const shown = trim ? trimClip(project, trim.id, trim.edge, trim.seconds) : project
+  // An out-edge trim ripples as you drag. An in-edge trim keeps every clip where it
+  // was, so the left edge follows the pointer, and ripples on release.
+  const layout = trim?.edge === "in" ? project : shown
+  const starts = clipStarts(layout.clips)
+  const total = totalLength(layout.clips)
   const width = Math.max(total * zoom + TRACK_PAD * 2, 600)
   const tickEvery = zoom >= 80 ? 1 : zoom >= 30 ? 5 : 10
   const ticks = Array.from({ length: Math.floor(width / zoom / tickEvery) + 1 }, (_, i) => i * tickEvery)
@@ -69,19 +77,40 @@ export function Timeline({
     e.preventDefault()
     const clip = project.clips.find((c) => c.id === clipId)
     if (!clip) return
-    let latest = project
+    let seconds: number | null = null
     onSelect(clipId)
     track_(
       e,
       (dx) => {
-        latest = trimClip(project, clipId, edge, trimDelta(edge, clip, dx, zoom))
-        setDraft(latest)
+        const s = trimDelta(edge, clip, dx, zoom)
+        seconds = s
+        setTrim({ id: clipId, edge, seconds: s })
       },
       () => {
-        setDraft(null)
-        if (latest !== project) onChange(latest)
+        setTrim(null)
+        const s = seconds
+        if (s !== null) onChange((p) => trimClip(p, clipId, edge, s))
       }
     )
+  }
+
+  /** Click or drag on the ruler: the preview follows the pointer until release. */
+  function startScrub(e: React.PointerEvent) {
+    if (e.button !== 0) return
+    e.preventDefault()
+    onScrub(true)
+    const seekTo = (clientX: number) => onSeek(Math.min(total, timeAt(clientX)))
+    seekTo(e.clientX)
+    const onMove = (ev: PointerEvent) => seekTo(ev.clientX)
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+      onScrub(false)
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
   }
 
   function startReorder(e: React.PointerEvent, clipId: string, index: number) {
@@ -99,7 +128,7 @@ export function Timeline({
       (moved) => {
         setDrag(null)
         if (!moved) onSelect(clipId)
-        else if (to !== index) onChange(moveClip(project, clipId, to))
+        else if (to !== index) onChange((p) => moveClip(p, clipId, to))
       }
     )
   }
@@ -119,8 +148,8 @@ export function Timeline({
     <div className="relative overflow-x-auto overflow-y-hidden">
       <div className="relative" style={{ width }}>
         <div
-          className="relative h-6 cursor-pointer border-b border-border/60 text-[10px] text-muted-foreground"
-          onPointerDown={(e) => onSeek(Math.min(total, timeAt(e.clientX)))}
+          className="relative h-6 cursor-pointer touch-none border-b border-border/60 text-[10px] text-muted-foreground"
+          onPointerDown={startScrub}
         >
           {ticks.map((t) => (
             <span key={t} className="pointer-events-none absolute top-0 h-full border-l border-border/60 pl-1 leading-6" style={{ left: t * zoom }}>
@@ -130,6 +159,8 @@ export function Timeline({
         </div>
         <div
           ref={track}
+          role="group"
+          aria-label="Timeline"
           className="relative h-24"
           onPointerDown={(e) => e.target === e.currentTarget && onSelect(null)}
           onDragOver={(e) => {
@@ -144,7 +175,9 @@ export function Timeline({
             setDropTime(null)
             if (!assetId) return
             e.preventDefault()
-            onChange(addClip(project, assetId, dropIndex(project.clips, timeAt(e.clientX)), crypto.randomUUID()))
+            const index = dropIndex(project.clips, timeAt(e.clientX))
+            const id = newId()
+            onChange((p) => addClip(p, assetId, index, id))
           }}
         >
           {shown.clips.length === 0 && (
@@ -154,38 +187,41 @@ export function Timeline({
           )}
           {shown.clips.map((clip, i) => {
             const dragging = drag?.id === clip.id
+            const file = project.assets[clip.asset]?.file
+            // Zero except for the clip whose in edge is being dragged.
+            const inShift = clip.in - layout.clips[i].in
             return (
               <div
                 key={clip.id}
                 role="button"
                 tabIndex={0}
-                aria-label={project.assets[clip.asset]?.file ?? "Missing clip"}
+                aria-label={`Clip ${i + 1} of ${shown.clips.length}, ${file ?? "missing file"}, ${clipLength(clip).toFixed(1)} seconds`}
                 aria-pressed={selectedId === clip.id}
                 onPointerDown={(e) => startReorder(e, clip.id, i)}
                 onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
                 className={cn(
-                  "group absolute top-2 bottom-2 select-none overflow-hidden rounded-lg border bg-muted outline-none",
-                  !dragging && !draft && "transition-[left] duration-150 motion-reduce:transition-none",
+                  "group absolute top-2 bottom-2 touch-none select-none overflow-hidden rounded-lg border bg-muted outline-none",
+                  !dragging && !trim && "transition-[left] duration-150 motion-reduce:transition-none",
                   selectedId === clip.id ? "z-10 border-primary ring-2 ring-primary" : "border-border hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring",
                   dragging ? "z-20 cursor-grabbing opacity-90 shadow-lg" : "cursor-grab"
                 )}
                 style={{
-                  left: starts[i] * zoom + (dragging ? drag.dx : 0),
+                  left: (starts[i] + inShift) * zoom + (dragging ? drag.dx : 0),
                   width: Math.max(clipLength(clip) * zoom - 2, 8),
                 }}
-                title={project.assets[clip.asset]?.file}
+                title={file}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={thumbUrl(clip.asset)} alt="" draggable={false} className="pointer-events-none h-full w-full object-cover opacity-80" />
+                <Thumb src={thumbUrl(clip.asset)} className="pointer-events-none h-full w-full object-cover opacity-80" />
                 <span className="pointer-events-none absolute inset-x-3 bottom-0.5 truncate text-[10px] font-medium text-white drop-shadow">
-                  {project.assets[clip.asset]?.file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
+                  {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
                 </span>
                 {(["in", "out"] as const).map((edge) => (
                   <span
                     key={edge}
+                    aria-hidden
                     onPointerDown={(e) => startTrim(e, clip.id, edge)}
                     className={cn(
-                      "absolute inset-y-0 flex w-3 cursor-ew-resize items-center justify-center bg-primary/80 opacity-0 transition-opacity group-hover:opacity-100",
+                      "absolute inset-y-0 flex w-3 cursor-ew-resize touch-none items-center justify-center bg-primary/80 opacity-0 transition-opacity group-hover:opacity-100",
                       selectedId === clip.id && "opacity-100",
                       edge === "in" ? "left-0 rounded-l-lg" : "right-0 rounded-r-lg"
                     )}

@@ -5,7 +5,8 @@ import { clipAt, clipStarts, totalLength, type Project } from "@/lib/video/proje
 
 // Plays the timeline in the browser with no re-encoding: two <video> elements
 // take turns. One shows the current clip while the other waits on the next one
-// (already loaded and seeked), so a cut doesn't stall.
+// (already loaded and seeked), so a cut doesn't stall. A clip the browser can't
+// play still takes its time on the timeline: it runs on the clock instead.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
@@ -21,11 +22,16 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const clipsRef = useRef(project.clips)
   const urlRef = useRef(urlFor)
   const raf = useRef(0)
-  const tickRef = useRef<() => void>(() => {})
+  const tickRef = useRef<(now: number) => void>(() => {})
+  const failedRef = useRef<Set<string>>(new Set())
+  // For a clip that can't play: its source time at the frame time `at` (ms).
+  const clock = useRef<{ index: number; pos: number; at: number } | null>(null)
+  const primed = useRef(false)
   const [active, setActive] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
   const [failed, setFailed] = useState<Set<string>>(() => new Set())
+  const [missing, setMissing] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     clipsRef.current = project.clips
@@ -77,8 +83,47 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     setPlaying(false)
   }, [])
 
+  /** The browser can't play this asset: say so in the preview, and tell a missing file (404) from one it can't decode. */
+  const markFailed = useCallback((assetId: string) => {
+    if (failedRef.current.has(assetId)) return
+    failedRef.current = new Set(failedRef.current).add(assetId)
+    setFailed(failedRef.current)
+    const url = urlRef.current(assetId)
+    const markMissing = () => setMissing((m) => new Set(m).add(assetId))
+    if (!url) return markMissing()
+    fetch(url, { headers: { Range: "bytes=0-0" } }).then(
+      (r) => {
+        void r.body?.cancel()
+        if (r.status === 404) markMissing()
+      },
+      () => {}
+    )
+  }, [])
+
+  /** play() on a slot; a refusal (autoplay policy) stops playback so the button doesn't claim it's playing. */
+  const playSlot = useCallback(
+    (slot: number) => {
+      const v = el(slot)
+      if (!v) return
+      v.play().catch((error: unknown) => {
+        const name = error instanceof DOMException ? error.name : ""
+        // A newer load, seek or pause replaced this play: nothing is wrong.
+        if (name === "AbortError") return
+        // The file can't play here; the frame loop runs that clip on the clock.
+        if (name === "NotSupportedError") {
+          const id = loaded.current[slot]
+          if (id) markFailed(id)
+          return
+        }
+        if (playingRef.current && activeSlot.current === slot) pause()
+      })
+    },
+    [markFailed, pause]
+  )
+
   const seek = useCallback(
     (t: number) => {
+      clock.current = null
       const clips = clipsRef.current
       if (!clips.length) return setTimeline(0)
       const total = totalLength(clips)
@@ -92,46 +137,61 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         showClip(last, clips[last].out)
         setTimeline(total)
       }
-      if (playingRef.current) void el(activeSlot.current)?.play().catch(() => {})
+      if (playingRef.current) playSlot(activeSlot.current)
     },
-    [setTimeline, showClip]
+    [setTimeline, showClip, playSlot]
   )
 
-  const tick = useCallback(() => {
-    if (!playingRef.current) return
-    const clips = clipsRef.current
-    const idx = clipIndex.current
-    const clip = clips[idx]
-    const v = el(activeSlot.current)
-    if (clip && v) {
-      if (v.currentTime >= clip.out - END_MARGIN) {
-        const next = clips[idx + 1]
-        if (next) {
-          // Swap to the waiting slot.
-          const old = activeSlot.current
-          activeSlot.current = 1 - old
-          setActive(activeSlot.current)
-          clipIndex.current = idx + 1
-          const nv = el(activeSlot.current)
-          if (nv) {
-            nv.currentTime = next.in
-            void nv.play().catch(() => {})
-          }
-          v.pause()
-          const after = clips[idx + 2]
-          if (after) load(old, after.asset, after.in)
+  const tick = useCallback(
+    (now: number) => {
+      if (!playingRef.current) return
+      const clips = clipsRef.current
+      const idx = clipIndex.current
+      const clip = clips[idx]
+      const v = el(activeSlot.current)
+      if (clip && v) {
+        let pos: number
+        let done: boolean
+        if (failedRef.current.has(clip.asset)) {
+          // Run this clip on the clock and cut at its out point as usual.
+          if (clock.current?.index !== idx) clock.current = { index: idx, pos: clip.in + Math.max(0, timeRef.current - clipStarts(clips)[idx]), at: now }
+          pos = clock.current.pos + (now - clock.current.at) / 1000
+          done = pos >= clip.out - END_MARGIN
         } else {
-          pause()
-          setTimeline(totalLength(clips))
-          return
+          pos = v.currentTime
+          if (v.error) markFailed(clip.asset)
+          // A file that ends (or stalls at its real end) before the clip's out point would otherwise hang here.
+          done = pos >= clip.out - END_MARGIN || v.ended || (Number.isFinite(v.duration) && pos >= v.duration - END_MARGIN)
         }
-      } else {
-        const t = clipStarts(clips)[idx] + (v.currentTime - clip.in)
-        if (Math.abs(t - timeRef.current) >= TIME_STEP) setTimeline(t)
+        if (done) {
+          const next = clips[idx + 1]
+          if (next) {
+            // Swap to the waiting slot.
+            const old = activeSlot.current
+            activeSlot.current = 1 - old
+            setActive(activeSlot.current)
+            clipIndex.current = idx + 1
+            clock.current = null
+            load(activeSlot.current, next.asset, next.in)
+            playSlot(activeSlot.current)
+            v.pause()
+            setTimeline(clipStarts(clips)[idx + 1])
+            const after = clips[idx + 2]
+            if (after) load(old, after.asset, after.in)
+          } else {
+            pause()
+            setTimeline(totalLength(clips))
+            return
+          }
+        } else {
+          const t = clipStarts(clips)[idx] + (pos - clip.in)
+          if (Math.abs(t - timeRef.current) >= TIME_STEP) setTimeline(t)
+        }
       }
-    }
-    raf.current = requestAnimationFrame(() => tickRef.current())
-  }, [load, pause, setTimeline])
+      raf.current = requestAnimationFrame((n) => tickRef.current(n))
+    },
+    [load, markFailed, pause, playSlot, setTimeline]
+  )
 
   const play = useCallback(() => {
     const clips = clipsRef.current
@@ -140,10 +200,18 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     else seek(timeRef.current)
     playingRef.current = true
     setPlaying(true)
-    void el(activeSlot.current)?.play().catch(() => {})
+    playSlot(activeSlot.current)
+    // Safari lets a later play() from the frame loop (at a cut) through only on an
+    // element that was played inside a user gesture, so prime the waiting one now.
+    const other = el(1 - activeSlot.current)
+    if (!primed.current && other?.src) {
+      primed.current = true
+      void other.play().catch(() => {})
+      other.pause()
+    }
     cancelAnimationFrame(raf.current)
-    raf.current = requestAnimationFrame(() => tickRef.current())
-  }, [seek])
+    raf.current = requestAnimationFrame((n) => tickRef.current(n))
+  }, [seek, playSlot])
 
   useEffect(() => {
     tickRef.current = tick
@@ -154,7 +222,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   // An edit changed the clips: show the frame at the current time again.
   useEffect(() => {
     if (!project.clips.length) {
-      // Nothing to play: stop without touching state (the returned time/playing are derived below).
+      // Nothing to play: stop the media here; `playing` is reset during render below.
       playingRef.current = false
       timeRef.current = 0
       cancelAnimationFrame(raf.current)
@@ -163,19 +231,24 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       return
     }
     seek(Math.min(timeRef.current, totalLength(project.clips)))
-    // seek is stable; only an edit should re-run this
+    // seek and pause are stable; only an edit should re-run this
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.clips])
 
   useEffect(() => () => cancelAnimationFrame(raf.current), [])
 
-  const onVideoError = useCallback((slot: number) => {
-    const id = loaded.current[slot]
-    if (id) setFailed((f) => new Set(f).add(id))
-  }, [])
+  const onVideoError = useCallback(
+    (slot: number) => {
+      const id = loaded.current[slot]
+      if (id) markFailed(id)
+    },
+    [markFailed]
+  )
 
   const hasClips = project.clips.length > 0
-  return { slotA, slotB, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, play, pause, toggle, seek, onVideoError }
+  // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
+  if (!hasClips && playing) setPlaying(false)
+  return { slotA, slotB, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError }
 }
 
 export type PreviewPlayer = ReturnType<typeof usePreviewPlayer>

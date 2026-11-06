@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState, useTransition } from "react"
+import { useState, useSyncExternalStore, useTransition } from "react"
 import { Clapperboard, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -13,11 +13,14 @@ import { createProjectAction, deleteProjectAction, renameProjectAction } from "@
 type Project = { folder: string; name: string; clips: number; modified: number }
 type Dialogue = { kind: "new" } | { kind: "rename"; project: Project } | { kind: "delete"; project: Project }
 
+const subscribeNothing = () => () => {}
+
 export function ProjectList({ projects }: { projects: Project[] }) {
   const router = useRouter()
   const [dialog, setDialog] = useState<Dialogue | null>(null)
   const [name, setName] = useState("")
   const [pending, startTransition] = useTransition()
+  const mounted = useSyncExternalStore(subscribeNothing, () => true, () => false)
 
   function open(next: Dialogue) {
     setName(next.kind === "rename" ? next.project.name : "")
@@ -75,7 +78,9 @@ export function ProjectList({ projects }: { projects: Project[] }) {
                 <div className="min-w-0">
                   <div className="truncate font-medium">{p.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    {p.clips.toLocaleString()} clip{p.clips === 1 ? "" : "s"} &middot; {new Date(p.modified).toLocaleString()}
+                    {p.clips.toLocaleString()} clip{p.clips === 1 ? "" : "s"}
+                    {/* The server's locale and time zone differ from the browser's, so the date is filled in after mount. */}
+                    {mounted && <> &middot; <time dateTime={new Date(p.modified).toISOString()}>{new Date(p.modified).toLocaleString()}</time></>}
                   </div>
                 </div>
               </Link>
@@ -109,7 +114,7 @@ export function ProjectList({ projects }: { projects: Project[] }) {
               </DialogHeader>
               {dialog.kind === "delete" ? (
                 <p className="text-sm text-muted-foreground">
-                  Delete &ldquo;{dialog.project.name}&rdquo; and its project files? Source videos in the Inbox are not touched.
+                  Delete &ldquo;{dialog.project.name}&rdquo;? Its clips, settings and exported videos are deleted, and this can&apos;t be undone. Source videos in the Inbox are not touched.
                 </p>
               ) : (
                 <Input autoFocus aria-label="Project name" placeholder="Project name" value={name} maxLength={200} onChange={(e) => setName(e.target.value)} />

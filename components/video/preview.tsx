@@ -8,12 +8,13 @@ import type { PreviewPlayer } from "./use-preview-player"
 
 // The player above the timeline. Two stacked <video> elements take turns (see
 // use-preview-player); a clip the browser can't decode shows a message here and
-// still exports.
+// still exports, one whose file is missing says so (export fails on it).
 
 export function Preview({ player, project }: { player: PreviewPlayer; project: Project }) {
   const current = clipAt(project.clips, player.time)
   const currentAsset = (current ? project.clips[current.index] : project.clips.at(-1))?.asset
   const cantPlay = currentAsset !== undefined && player.failed.has(currentAsset)
+  const missing = currentAsset !== undefined && player.missing.has(currentAsset)
 
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black/90 p-4">
@@ -24,6 +25,7 @@ export function Preview({ player, project }: { player: PreviewPlayer; project: P
             ref={ref}
             playsInline
             preload="auto"
+            aria-hidden={player.active !== slot}
             onError={() => player.onVideoError(slot)}
             className={cn("absolute inset-0 h-full w-full object-contain", player.active === slot ? "opacity-100" : "opacity-0")}
           />
@@ -34,7 +36,9 @@ export function Preview({ player, project }: { player: PreviewPlayer; project: P
         {cantPlay && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center text-sm text-white/80">
             <TriangleAlert className="h-5 w-5" />
-            Can&apos;t preview this clip in your browser. It will still export.
+            {missing
+              ? "This clip's file is missing from the project, so it can't play or export. Remove it from the timeline."
+              : "Can't preview this clip in your browser. It will still export."}
           </div>
         )}
         {project.clips.length > 0 && (

@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
-import { isNoteRoot, isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
+import { isNoteRoot, isReadOnlyRoot, isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
 import { MediaGrid } from "@/components/library/media-grid"
@@ -115,8 +115,8 @@ export default async function LibraryPage({
           files={listing.files}
           flags={flags}
           notes={notes}
-          canMove={root !== "dropoff" && status.writable && !locked}
-          canEdit={status.writable && !locked}
+          canMove={root !== "dropoff" && !isReadOnlyRoot(root) && status.writable && !locked}
+          canEdit={!isReadOnlyRoot(root) && status.writable && !locked}
         />
       ) : (
         listing.folders.length === 0 && (

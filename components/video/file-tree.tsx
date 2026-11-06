@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { formatBytes } from "@/lib/format"
 import { formatTimecode } from "@/lib/video/time"
 import type { Project } from "@/lib/video/project"
+import { Thumb } from "./thumb"
 import { ASSET_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
@@ -44,8 +45,7 @@ export function FileTree({
             }}
             className="group flex cursor-grab items-center gap-2 rounded-md p-1 hover:bg-muted/60 active:cursor-grabbing"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={thumbUrl(id)} alt="" draggable={false} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
+            <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
             <span className="min-w-0 flex-1">
               <span className="block truncate" title={a.file}>{a.file}</span>
               <span className="block text-[11px] text-muted-foreground tabular-nums">{formatTimecode(a.duration)}</span>

@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
+import { newId } from "@/lib/video/ids"
 import { addClip, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
 import { clipIdAt } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
@@ -34,18 +35,32 @@ export function Editor({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
-  const { state: save, flush } = useAutosave(folder, project)
+  const { state: save, flush, isDirty } = useAutosave(folder, project)
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const exportTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const resumeAfterScrub = useRef(false)
 
   useEffect(() => () => {
     if (exportTimer.current) clearInterval(exportTimer.current)
   }, [])
 
+  // Closing the tab with an unsaved edit asks first.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirty()) return
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [isDirty])
+
+  // The asset id is the cache key: the media route caches for a year, and a
+  // file name can come back with different content after a re-import.
   const thumbUrl = useCallback(
     (assetId: string) => {
       const file = project.assets[assetId]?.file
-      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "thumb", "1") : ""
+      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "thumb", assetId) : ""
     },
     [project.assets, userFolder, folder]
   )
@@ -53,12 +68,24 @@ export function Editor({
   const videoUrl = useCallback(
     (assetId: string) => {
       const file = project.assets[assetId]?.file
-      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "original", "1") : ""
+      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "original", assetId) : ""
     },
     [project.assets, userFolder, folder]
   )
   const player = usePreviewPlayer(project, videoUrl)
   const playhead = player.time
+  const { toggle } = player
+
+  /** Playback pauses while the ruler is scrubbed and picks up again after. */
+  function scrub(active: boolean) {
+    if (active) {
+      resumeAfterScrub.current = player.playing
+      player.pause()
+    } else if (resumeAfterScrub.current) {
+      resumeAfterScrub.current = false
+      player.play()
+    }
+  }
 
   async function importFile(inboxFolder: string, name: string) {
     if (importing) return
@@ -126,23 +153,28 @@ export function Editor({
   }
 
   function addToTimeline(assetId: string) {
-    setProject((p) => addClip(p, assetId, p.clips.length, crypto.randomUUID()))
+    const id = newId()
+    setProject((p) => addClip(p, assetId, p.clips.length, id))
   }
 
-  // Keyboard: S splits the clip under the playhead, Delete removes the selection.
+  // Keyboard: Space plays, S splits the clip under the playhead, Delete removes the selection.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null
-      if (e.metaKey || e.ctrlKey || e.altKey || t?.closest("input, textarea, select, [contenteditable=true]")) return
+      const t = e.target instanceof Element ? e.target : null
+      // A handler that already acted (a clip's own Enter/Space select) prevents the default.
+      if (e.defaultPrevented || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
+      if (t?.closest("input, textarea, select, [contenteditable=true], [role=dialog], [role=menu]")) return
       if (e.key === " ") {
+        // Space already activates a focused button, link or slider.
+        if (t?.closest("button, a, [role=button], [role=menuitem], [role=slider]")) return
         e.preventDefault()
-        player.toggle()
+        toggle()
       } else if (e.key === "s" || e.key === "S") {
         const id = clipIdAt(project.clips, playhead)
         if (!id) return
         e.preventDefault()
-        const newId = crypto.randomUUID()
-        setProject((p) => splitClip(p, id, playhead, newId))
+        const splitId = newId()
+        setProject((p) => splitClip(p, id, playhead, splitId))
       } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
         e.preventDefault()
         setProject((p) => removeClip(p, selectedId))
@@ -151,7 +183,7 @@ export function Editor({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [project.clips, playhead, selectedId, player])
+  }, [project.clips, playhead, selectedId, toggle])
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
@@ -161,10 +193,13 @@ export function Editor({
           <span className="sr-only">All projects</span>
         </Link>
         <h1 className="truncate font-heading text-base font-semibold">{project.name}</h1>
-        <span className="flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
+        <span className="flex items-center gap-1 text-xs text-muted-foreground">
           {save === "saving" && <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>}
           {save === "saved" && <><Check className="h-3 w-3" /> Saved</>}
-          {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
+          {/* Only a failure is announced; Saving/Saved after every edit would be noise. */}
+          <span aria-live="polite">
+            {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
+          </span>
         </span>
         <div className="flex-1" />
         <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null}>
@@ -189,7 +224,7 @@ export function Editor({
                 <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
               </label>
             </div>
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onChange={setProject} />
+            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={setProject} />
           </div>
         </div>
       </div>
