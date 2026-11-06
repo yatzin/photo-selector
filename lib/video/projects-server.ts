@@ -25,6 +25,19 @@ function projectDir(userFolder: string, folder: string): string | null {
   return resolveInside(rootPath("video-projects"), [userFolder, folder])
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function sameDir(a: string, b: string): Promise<boolean> {
+  try {
+    const [x, y] = await Promise.all([fs.stat(a), fs.stat(b)])
+    return x.ino !== 0 && x.ino === y.ino && x.dev === y.dev
+  } catch {
+    return false
+  }
+}
+
 const exists = (p: string) => fs.access(p).then(() => true, () => false)
 
 export async function listProjects(userFolder: string): Promise<{ folder: string; name: string; clips: number; modified: number }[]> {
@@ -41,8 +54,12 @@ export async function listProjects(userFolder: string): Promise<{ folder: string
     if (!e.isDirectory()) continue
     const p = await readProject(userFolder, e.name)
     if (!p) continue
-    const st = await fs.stat(path.join(dir, e.name, "project.json"))
-    out.push({ folder: e.name, name: p.name, clips: p.clips.length, modified: st.mtimeMs })
+    try {
+      const st = await fs.stat(path.join(dir, e.name, "project.json"))
+      out.push({ folder: e.name, name: p.name, clips: p.clips.length, modified: st.mtimeMs })
+    } catch {
+      continue
+    }
   }
   return out
 }
@@ -60,11 +77,16 @@ export async function createProject(userFolder: string, name: string): Promise<{
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return { error: "A project with that name already exists." }
     throw error
   }
-  await fs.mkdir(path.join(dir, "assets"))
-  await fs.mkdir(path.join(dir, "output"))
-  await fs.mkdir(path.join(dir, "config"))
-  await fs.writeFile(path.join(dir, "config", "export.json"), JSON.stringify({ width: 1920, height: 1080, fps: 30 }, null, 2))
-  await writeProject(userFolder, folder, newProject(name))
+  try {
+    await fs.mkdir(path.join(dir, "assets"))
+    await fs.mkdir(path.join(dir, "output"))
+    await fs.mkdir(path.join(dir, "config"))
+    await fs.writeFile(path.join(dir, "config", "export.json"), JSON.stringify({ width: 1920, height: 1080, fps: 30 }, null, 2))
+    await writeProject(userFolder, folder, newProject(name))
+  } catch (error) {
+    await fs.rm(dir, { recursive: true, force: true })
+    return { error: errorText(error) }
+  }
   return { folder }
 }
 
@@ -113,8 +135,36 @@ export async function renameProject(userFolder: string, folder: string, name: st
   const to = resolveInside(user, [next])
   if (!to || to === user) return { error: "Invalid project name." }
   if (next !== folder) {
-    if (await exists(to)) return { error: "A project with that name already exists." }
-    await fs.rename(from, to)
+    try {
+      await fs.mkdir(to)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return { error: errorText(error) }
+      // On a case-insensitive file system "Old" -> "old" finds the project itself; step through a temp name.
+      const same = next.toLowerCase() === folder.toLowerCase() && (await sameDir(from, to))
+      if (!same) return { error: "A project with that name already exists." }
+      const tmp = `${from}.${randomBytes(4).toString("hex")}.rn`
+      try {
+        await fs.rename(from, tmp)
+        await fs.rename(tmp, to)
+      } catch (renameError) {
+        await fs.rename(tmp, from).catch(() => {})
+        return { error: errorText(renameError) }
+      }
+      await writeProject(userFolder, next, { ...p, name })
+      return { folder: next }
+    }
+    try {
+      await fs.rename(from, to)
+    } catch (first) {
+      // Windows won't rename a folder over an existing (here: our own, empty) one; free the name and retry.
+      // If someone else takes it in between, the second rename fails and nothing is overwritten.
+      await fs.rmdir(to).catch(() => {})
+      try {
+        await fs.rename(from, to)
+      } catch {
+        return { error: errorText(first) }
+      }
+    }
   }
   await writeProject(userFolder, next, { ...p, name })
   return { folder: next }
@@ -141,6 +191,16 @@ export async function importAsset(
   const assets = path.join(dir, "assets")
   if (!(await exists(assets))) return { error: "Project not found." }
 
+  // A symlink in the Inbox could point anywhere; copy only a real file that really sits inside the Inbox.
+  try {
+    const st = await fs.lstat(src)
+    if (!st.isFile() || st.isSymbolicLink()) return { error: "Not a video file." }
+    const [realRoot, realParent] = await Promise.all([fs.realpath(rootPath("video-inbox")), fs.realpath(path.dirname(src))])
+    if (!resolveInside(realRoot, [path.relative(realRoot, realParent)])) return { error: "Invalid Inbox folder." }
+  } catch (error) {
+    return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : errorText(error) }
+  }
+
   let dest: string | null = null
   let file = ""
   try {
@@ -151,7 +211,10 @@ export async function importAsset(
         await fs.copyFile(src, target, constants.COPYFILE_EXCL)
         dest = target
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          await fs.rm(target, { force: true })
+          throw error
+        }
       }
     }
   } catch (error) {

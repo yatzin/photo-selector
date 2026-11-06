@@ -113,6 +113,24 @@ describe("renameProject / deleteProject", () => {
     expect(await renameProject("mike", "New", "../Esc")).toEqual({ folder: "Esc" })
   })
 
+  it("renames case-only (Old to old) and keeps the project", async () => {
+    await createProject("mike", "Old")
+    expect(await renameProject("mike", "Old", "old")).toEqual({ folder: "old" })
+    expect(await fs.readdir(user)).toEqual(["old"])
+    expect((await readProject("mike", "old"))?.name).toBe("old")
+  })
+
+  it("returns an error, not a throw, when the rename fails, and leaves no reserved folder", async () => {
+    await createProject("mike", "Src")
+    const rename = vi.spyOn(fs, "rename").mockRejectedValue(Object.assign(new Error("boom"), { code: "ENOTEMPTY" }))
+    try {
+      expect(await renameProject("mike", "Src", "Dst")).toEqual({ error: "boom" })
+    } finally {
+      rename.mockRestore()
+    }
+    expect((await fs.readdir(user)).sort()).toEqual(["Src"])
+  })
+
   it("deletes a project and ignores traversal", async () => {
     await createProject("mike", "Gone")
     await deleteProject("mike", "../..")
@@ -134,6 +152,20 @@ describe("importAsset", () => {
     expect(await fs.readFile(path.join(user, "P", "assets", "clip (1).mp4"), "utf8")).toBe("video bytes")
     const c = await importAsset("mike", "P", ["mike", "sub"], "deep.mp4")
     expect(c).toMatchObject({ asset: { file: "deep.mp4" } })
+  })
+
+  it("refuses a symlink in the Inbox", async (ctx) => {
+    await createProject("mike", "P")
+    const outside = path.join(tmp, "secret.mp4")
+    await fs.writeFile(outside, "secret")
+    try {
+      await fs.symlink(outside, path.join(inbox, "mike", "link.mp4"), "file")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return ctx.skip()
+      throw error
+    }
+    expect(await importAsset("mike", "P", ["mike"], "link.mp4")).toHaveProperty("error")
+    expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual([])
   })
 
   it("rejects non-videos, paths in the name, escapes and missing files", async () => {
