@@ -8,6 +8,7 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } from "@/lib/media"
+import { exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
 import { mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteProject, importAsset, readProject, renameProject, writeProject } from "@/lib/video/projects-server"
@@ -142,4 +143,20 @@ export async function listInboxAction(): Promise<{ folder: string; files: { name
   }
   out.sort((a, b) => Number(b.folder === userFolder) - Number(a.folder === userFolder) || a.folder.localeCompare(b.folder))
   return out
+}
+
+export async function startExportAction(folder: string): Promise<{ jobId: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await startExport(userFolder, f.data)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+export async function exportStatusAction(jobId: string): Promise<ExportStatus> {
+  const { userFolder } = await requireUserFolder()
+  return exportStatus(userFolder, String(jobId))
 }

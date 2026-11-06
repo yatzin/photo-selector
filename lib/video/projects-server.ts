@@ -231,6 +231,11 @@ export async function importAsset(
   }
 }
 
+export function outputDir(userFolder: string, folder: string): string | null {
+  const dir = projectDir(userFolder, folder)
+  return dir && path.join(dir, "output")
+}
+
 export function assetPath(userFolder: string, folder: string, file: string): string | null {
   const dir = projectDir(userFolder, folder)
   if (!dir || !isPlainName(file)) return null

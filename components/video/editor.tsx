@@ -1,11 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ArrowLeft, Check, Download, Loader2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
-import { importAssetAction } from "@/lib/actions/video-projects"
+import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
 import { addClip, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
 import { clipIdAt } from "@/lib/video/timeline-math"
@@ -35,6 +35,12 @@ export function Editor({
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
   const save = useAutosave(folder, project)
+  const [exportProgress, setExportProgress] = useState<number | null>(null)
+  const exportTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => () => {
+    if (exportTimer.current) clearInterval(exportTimer.current)
+  }, [])
 
   const thumbUrl = useCallback(
     (assetId: string) => {
@@ -69,6 +75,47 @@ export function Editor({
       toast.error("Something went wrong importing that clip.")
     } finally {
       setImporting(null)
+    }
+  }
+
+  async function startExport() {
+    if (exportProgress !== null) return
+    setExportProgress(0)
+    const stop = () => {
+      if (exportTimer.current) clearInterval(exportTimer.current)
+      exportTimer.current = null
+      setExportProgress(null)
+    }
+    try {
+      const started = await startExportAction(folder)
+      if ("error" in started) {
+        toast.error(started.error)
+        stop()
+        return
+      }
+      let polling = false
+      exportTimer.current = setInterval(async () => {
+        if (polling) return
+        polling = true
+        try {
+          const s = await exportStatusAction(started.jobId)
+          if (s.state === "running") {
+            setExportProgress(s.progress)
+          } else {
+            stop()
+            if (s.state === "done") toast.success(`Exported ${s.output}`)
+            else toast.error(s.error ?? "Export failed.")
+          }
+        } catch {
+          stop()
+          toast.error("Lost contact with the export.")
+        } finally {
+          polling = false
+        }
+      }, 1000)
+    } catch {
+      stop()
+      toast.error("Something went wrong starting the export.")
     }
   }
 
@@ -114,8 +161,9 @@ export function Editor({
           {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
         </span>
         <div className="flex-1" />
-        <Button type="button" size="sm" disabled title="Export arrives in a later step">
-          <Download className="h-4 w-4" /> Export
+        <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null || save === "saving"}>
+          {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+          {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
         </Button>
       </div>
 
