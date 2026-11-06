@@ -75,6 +75,58 @@ describe("splitClip", () => {
   })
 })
 
+describe("splitClip boundaries and bad input", () => {
+  it("does nothing at exactly the clip edges", () => {
+    const p = sample()
+    expect(splitClip(p, "c1", 0, "s")).toBe(p)
+    expect(splitClip(p, "c1", 3, "s")).toBe(p)
+  })
+
+  it("splits at exactly MIN_CLIP from each edge", () => {
+    for (const t of [MIN_CLIP, 3 - MIN_CLIP]) {
+      const p = splitClip(sample(), "c1", t, "s")
+      expect(p.clips).toHaveLength(3)
+      for (const c of p.clips) expect(c.out - c.in).toBeGreaterThanOrEqual(MIN_CLIP - 1e-9)
+    }
+  })
+
+  it("is a no-op for non-finite times", () => {
+    const p = sample()
+    for (const t of [NaN, Infinity, -Infinity]) expect(splitClip(p, "c1", t, "s")).toBe(p)
+  })
+
+  it("is a no-op when newId is already used", () => {
+    const p = sample()
+    expect(splitClip(p, "c1", 1, "c2")).toBe(p)
+  })
+})
+
+describe("trimClip invariants", () => {
+  it("keeps out - in >= MIN_CLIP for extreme inputs", () => {
+    for (const edge of ["in", "out"] as const) {
+      for (const s of [0, -5, 99, Infinity, -Infinity]) {
+        const c = trimClip(sample(), "c1", edge, s).clips[0]
+        expect(c.out - c.in).toBeGreaterThanOrEqual(MIN_CLIP - 1e-9)
+        expect(c.in).toBeGreaterThanOrEqual(0)
+        expect(c.out).toBeLessThanOrEqual(10)
+      }
+    }
+  })
+
+  it("ignores NaN", () => {
+    const p = sample()
+    expect(trimClip(p, "c1", "in", NaN)).toBe(p)
+    expect(trimClip(p, "c1", "out", NaN)).toBe(p)
+  })
+})
+
+describe("addClip duplicate id", () => {
+  it("is a no-op when the id is already used", () => {
+    const p = sample()
+    expect(addClip(p, "a", 0, "c1")).toBe(p)
+  })
+})
+
 describe("moveClip", () => {
   it("moves a clip to the end", () => {
     expect(moveClip(sample(), "c1", 1).clips.map((c) => c.id)).toEqual(["c2", "c1"])
@@ -124,5 +176,24 @@ describe("parseProject", () => {
   it("rejects malformed clips", () => {
     const p = { ...sample(), clips: [{ id: "c1", asset: "a", in: "0", out: 3 }] }
     expect(parseProject(p)).toBeNull()
+  })
+
+  it("rejects duplicate clip ids", () => {
+    const p = sample()
+    p.clips[1].id = "c1"
+    expect(parseProject(p)).toBeNull()
+  })
+
+  it("rejects out-of-range clips", () => {
+    for (const [i, o] of [[-1, 3], [3, 3], [4, 3], [0, 11]]) {
+      const p = sample()
+      p.clips[0] = { id: "c1", asset: "a", in: i, out: o }
+      expect(parseProject(p)).toBeNull()
+    }
+  })
+
+  it("rejects a __proto__ asset key", () => {
+    const text = JSON.stringify(sample()).replace('"assets":{', '"assets":{"__proto__":{"file":"x.mp4","duration":1,"hasAudio":false},')
+    expect(parseProject(JSON.parse(text))).toBeNull()
   })
 })

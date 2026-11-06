@@ -36,7 +36,7 @@ export function totalLength(clips: Clip[]): number {
 
 export function addClip(p: Project, assetId: string, at: number, id: string): Project {
   const asset = p.assets[assetId]
-  if (!asset) return p
+  if (!asset || p.clips.some((c) => c.id === id)) return p
   const index = Math.max(0, Math.min(at, p.clips.length))
   const clips = [...p.clips]
   clips.splice(index, 0, { id, asset: assetId, in: 0, out: asset.duration })
@@ -46,7 +46,7 @@ export function addClip(p: Project, assetId: string, at: number, id: string): Pr
 export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: number): Project {
   const clip = p.clips.find((c) => c.id === id)
   const asset = clip && p.assets[clip.asset]
-  if (!clip || !asset) return p
+  if (!clip || !asset || Number.isNaN(seconds)) return p
   const next = { ...clip }
   if (edge === "in") {
     next.in = Math.max(0, Math.min(seconds, clip.out - MIN_CLIP))
@@ -58,7 +58,7 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
 
 export function splitClip(p: Project, id: string, timelineTime: number, newId: string): Project {
   const index = p.clips.findIndex((c) => c.id === id)
-  if (index < 0) return p
+  if (index < 0 || !Number.isFinite(timelineTime) || p.clips.some((c) => c.id === newId)) return p
   const clip = p.clips[index]
   const local = timelineTime - clipStarts(p.clips)[index]
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
@@ -97,14 +97,18 @@ export function parseProject(json: unknown): Project | null {
 
   const parsedAssets: Record<string, Asset> = {}
   for (const [key, a] of Object.entries(assets)) {
+    if (key === "__proto__") return null
     if (!isRecord(a) || typeof a.file !== "string" || !isNum(a.duration) || typeof a.hasAudio !== "boolean") return null
     parsedAssets[key] = { file: a.file, duration: a.duration, hasAudio: a.hasAudio }
   }
 
   const parsedClips: Clip[] = []
+  const ids = new Set<string>()
   for (const c of clips) {
     if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
     if (!Object.hasOwn(parsedAssets, c.asset)) return null
+    if (ids.has(c.id) || c.in < 0 || c.out <= c.in || c.out > parsedAssets[c.asset].duration) return null
+    ids.add(c.id)
     parsedClips.push({ id: c.id, asset: c.asset, in: c.in, out: c.out })
   }
 
