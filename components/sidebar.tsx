@@ -76,10 +76,7 @@ function SidebarContent({ onNavClick, aiPending, counts }: { onNavClick?: () => 
         <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Review</p>
         <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} />
         <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Tools</p>
-        <p className="flex items-center gap-3 px-3 pt-1 text-sm font-medium">
-          <Clapperboard className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.5} />
-          Video Editing
-        </p>
+        <NavLink href="/tools/video-editing" label="Video Editing" icon={Clapperboard} onClick={onNavClick} />
         <div className="ml-4 flex flex-col gap-1 border-l pl-2">
           {toolItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
         </div>
