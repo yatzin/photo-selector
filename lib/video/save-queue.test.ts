@@ -84,6 +84,28 @@ describe("createSaveQueue", () => {
     expect(save.mock.calls.map((c) => c[0])).toEqual([v1, v2])
   })
 
+  it("isDirty: clean as loaded, dirty while pending or in flight, clean once stored", async () => {
+    let release: (ok: boolean) => void = () => {}
+    const save = vi.fn(() => new Promise<boolean>((r) => (release = r)))
+    const queue = createSaveQueue(save, v0, () => {}, 800)
+    expect(queue.isDirty()).toBe(false)
+    queue.update(v1)
+    expect(queue.isDirty()).toBe(true)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(queue.isDirty()).toBe(true)
+    release(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(queue.isDirty()).toBe(false)
+  })
+
+  it("isDirty stays true after a failed save", async () => {
+    const { queue } = setup([false])
+    queue.update(v1)
+    await queue.flush()
+    expect(queue.isDirty()).toBe(true)
+  })
+
   it("close saves a pending change", async () => {
     const { queue, save } = setup()
     queue.update(v1)

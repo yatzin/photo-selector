@@ -46,7 +46,7 @@ export function clipAt(clips: Clip[], timelineTime: number): { index: number; so
 
 export function addClip(p: Project, assetId: string, at: number, id: string): Project {
   const asset = p.assets[assetId]
-  if (!asset || p.clips.some((c) => c.id === id)) return p
+  if (!asset || asset.duration < MIN_CLIP || p.clips.some((c) => c.id === id)) return p
   const index = Math.max(0, Math.min(at, p.clips.length))
   const clips = [...p.clips]
   clips.splice(index, 0, { id, asset: assetId, in: 0, out: asset.duration })
@@ -63,6 +63,8 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   } else {
     next.out = Math.min(asset.duration, Math.max(seconds, clip.in + MIN_CLIP))
   }
+  // Only possible when the asset itself is shorter than MIN_CLIP (the epsilon absorbs float rounding).
+  if (clipLength(next) < MIN_CLIP - 1e-9) return p
   return { ...p, clips: p.clips.map((c) => (c.id === id ? next : c)) }
 }
 
@@ -101,6 +103,7 @@ function isNum(v: unknown): v is number {
 
 const MAX_SIZE = 7680
 const MAX_FPS = 120
+const MAX_NAME = 200
 
 /** A whole number from 1 to `max`; these end up inside an ffmpeg filtergraph. */
 function isInt(v: unknown, max: number): v is number {
@@ -110,7 +113,7 @@ function isInt(v: unknown, max: number): v is number {
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || json.version !== 1) return null
   const { name, width, height, fps, assets, clips } = json
-  if (typeof name !== "string" || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
+  if (typeof name !== "string" || name.length > MAX_NAME || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
   if (!isRecord(assets) || !Array.isArray(clips)) return null
 
   const parsedAssets: Record<string, Asset> = {}
@@ -134,13 +137,15 @@ export function parseProject(json: unknown): Project | null {
 }
 
 /**
- * A client-sent project laid over the stored one: assets are server-owned, so
- * the client's are ignored. Null when it doesn't validate or a clip points at
- * an asset the stored project doesn't have.
+ * A client-sent project laid over the stored one: assets, name and settings
+ * are server-owned (a stale tab can't revert a rename), so only the client's
+ * clips are taken. Null when it doesn't validate or a clip points at an asset
+ * the stored project doesn't have.
  */
 export function mergeClientProject(client: unknown, stored: Project): Project | null {
   const parsed = parseProject(client)
   if (!parsed) return null
   if (!parsed.clips.every((c) => Object.hasOwn(stored.assets, c.asset))) return null
-  return parseProject({ ...parsed, assets: stored.assets })
+  const { name, width, height, fps, assets } = stored
+  return parseProject({ ...parsed, name, width, height, fps, assets })
 }

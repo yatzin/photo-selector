@@ -35,6 +35,11 @@ describe("addClip", () => {
     expect(p.clips.map((c) => c.id)).toEqual(["c1", "n", "c2"])
     expect(p.clips[1]).toEqual({ id: "n", asset: "a", in: 0, out: 10 })
   })
+
+  it("does nothing for an asset shorter than MIN_CLIP", () => {
+    const p = { ...sample(), assets: { ...sample().assets, z: { file: "z.mp4", duration: MIN_CLIP / 2, hasAudio: false } } }
+    expect(addClip(p, "z", 0, "n")).toBe(p)
+  })
 })
 
 describe("trimClip", () => {
@@ -118,6 +123,22 @@ describe("trimClip invariants", () => {
     expect(trimClip(p, "c1", "in", NaN)).toBe(p)
     expect(trimClip(p, "c1", "out", NaN)).toBe(p)
   })
+
+  it("leaves the project unchanged when the asset is shorter than MIN_CLIP", () => {
+    const p: Project = {
+      ...newProject("short"),
+      assets: { s: { file: "s.mp4", duration: 0.1, hasAudio: false } },
+      clips: [{ id: "c1", asset: "s", in: 0, out: 0.1 }],
+    }
+    for (const edge of ["in", "out"] as const) {
+      for (const s of [-1, 0, 0.05, 0.1, 5]) expect(trimClip(p, "c1", edge, s)).toBe(p)
+    }
+  })
+
+  it("still allows a trim to exactly MIN_CLIP despite float rounding", () => {
+    const p: Project = { ...newProject("f"), assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } }, clips: [{ id: "c1", asset: "a", in: 0.7, out: 5 }] }
+    expect(trimClip(p, "c1", "out", 0).clips[0].out).toBeCloseTo(0.7 + MIN_CLIP)
+  })
 })
 
 describe("addClip duplicate id", () => {
@@ -198,6 +219,11 @@ describe("parseProject", () => {
     }
   })
 
+  it("caps the name at 200 characters", () => {
+    expect(parseProject({ ...sample(), name: "x".repeat(200) })).not.toBeNull()
+    expect(parseProject({ ...sample(), name: "x".repeat(201) })).toBeNull()
+  })
+
   it("rejects a __proto__ asset key", () => {
     const text = JSON.stringify(sample()).replace('"assets":{', '"assets":{"__proto__":{"file":"x.mp4","duration":1,"hasAudio":false},')
     expect(parseProject(JSON.parse(text))).toBeNull()
@@ -228,6 +254,13 @@ describe("mergeClientProject", () => {
       clips: [{ id: "c1", asset: "a2", in: 0, out: 5 }],
     }
     expect(mergeClientProject(client, stored)).toBeNull()
+  })
+
+  it("keeps the stored name and settings (a stale tab can't revert a rename)", () => {
+    const client = { ...stored, name: "Stale", width: 1280, height: 720, fps: 25, clips: [{ id: "c1", asset: "a1", in: 0, out: 5 }] }
+    const merged = mergeClientProject(client, stored)
+    expect(merged && [merged.name, merged.width, merged.height, merged.fps]).toEqual(["P", 1920, 1080, 30])
+    expect(merged?.clips).toHaveLength(1)
   })
 
   it("rejects a clip beyond the stored asset's duration", () => {

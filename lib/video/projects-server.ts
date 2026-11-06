@@ -6,7 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
-import { newProject, parseProject, type Asset, type Project } from "./project"
+import { MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -224,7 +224,12 @@ export async function importAsset(
 
   try {
     const { duration, hasAudio } = await probeMedia(dest)
-    return { id: `a${randomBytes(4).toString("hex")}`, asset: { file, duration, hasAudio } }
+    if (!(duration >= MIN_CLIP)) {
+      await fs.rm(dest, { force: true })
+      return { error: "That clip is too short to edit." }
+    }
+    // The id doubles as the media URL's cache key, so it must not repeat.
+    return { id: `a${randomBytes(8).toString("hex")}`, asset: { file, duration, hasAudio } }
   } catch (error) {
     await fs.rm(dest, { force: true })
     return { error: error instanceof Error ? error.message : String(error) }

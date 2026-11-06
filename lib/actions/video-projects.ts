@@ -8,7 +8,7 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } from "@/lib/media"
-import { exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
+import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
 import { mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteProject, importAsset, readProject, renameProject, writeProject } from "@/lib/video/projects-server"
@@ -20,6 +20,7 @@ const plainName = z.string().refine(isPlainName)
 const MAX_CLIPS = 5000
 const MAX_PROJECT_JSON = 2_000_000
 const projectName = z.string().trim().min(1).max(200)
+const EXPORT_RUNNING = "This project is exporting. Try again when the export has finished."
 
 async function requireUserFolder(): Promise<{ userFolder: string }> {
   const session = await auth()
@@ -49,6 +50,7 @@ export async function renameProjectAction(folder: string, name: string): Promise
   const f = plainName.safeParse(folder)
   const n = projectName.safeParse(name)
   if (!f.success || !n.success) return { error: "Invalid request." }
+  if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
   try {
     return await withLock(`${userFolder}/${f.data}`, () => renameProject(userFolder, f.data, n.data))
   } catch (error) {
@@ -60,6 +62,7 @@ export async function deleteProjectAction(folder: string): Promise<{ ok: true } 
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   if (!f.success) return { error: "Invalid request." }
+  if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
   try {
     await withLock(`${userFolder}/${f.data}`, () => deleteProject(userFolder, f.data))
     return { ok: true }

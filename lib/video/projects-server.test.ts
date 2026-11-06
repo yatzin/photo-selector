@@ -2,10 +2,11 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { newProject } from "./project"
+import { MIN_CLIP, newProject } from "./project"
 
 vi.mock("./ffmpeg-server", () => ({ probeMedia: vi.fn(async () => ({ duration: 12.5, hasAudio: true })) }))
 
+import { probeMedia } from "./ffmpeg-server"
 import { assetPath, createProject, deleteProject, importAsset, listProjects, readProject, renameProject, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-video-${process.pid}-${Date.now()}`)
@@ -148,10 +149,18 @@ describe("importAsset", () => {
     const b = await importAsset("mike", "P", ["mike"], "clip.mp4")
     expect(b).toMatchObject({ asset: { file: "clip (1).mp4" } })
     expect((a as { id: string }).id).not.toBe((b as { id: string }).id)
+    expect((a as { id: string }).id).toMatch(/^a[0-9a-f]{16}$/)
     expect(await fs.readFile(path.join(inbox, "mike", "clip.mp4"), "utf8")).toBe("video bytes")
     expect(await fs.readFile(path.join(user, "P", "assets", "clip (1).mp4"), "utf8")).toBe("video bytes")
     const c = await importAsset("mike", "P", ["mike", "sub"], "deep.mp4")
     expect(c).toMatchObject({ asset: { file: "deep.mp4" } })
+  })
+
+  it("refuses a clip shorter than MIN_CLIP and removes the copy", async () => {
+    await createProject("mike", "P")
+    vi.mocked(probeMedia).mockResolvedValueOnce({ duration: MIN_CLIP / 2, hasAudio: false })
+    expect(await importAsset("mike", "P", ["mike"], "clip.mp4")).toEqual({ error: "That clip is too short to edit." })
+    expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual([])
   })
 
   it("refuses a symlink in the Inbox", async (ctx) => {

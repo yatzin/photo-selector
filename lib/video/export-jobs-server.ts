@@ -54,12 +54,15 @@ function prune() {
   for (const [id, j] of jobs) if (j.finishedAt && now - j.finishedAt > KEEP_FINISHED_MS) jobs.delete(id)
 }
 
+/** True while an export of this user's project is running. */
+export function exportRunning(user: string, folder: string): boolean {
+  for (const j of jobs.values()) if (j.state === "running" && j.user === user && j.folder === folder) return true
+  return false
+}
+
 export async function startExport(user: string, folder: string): Promise<{ jobId: string } | { error: string }> {
   prune()
-  const key = `${user}/${folder}`
-  for (const j of jobs.values()) {
-    if (j.state === "running" && `${j.user}/${j.folder}` === key) return { error: "An export is already running for this project." }
-  }
+  if (exportRunning(user, folder)) return { error: "An export is already running for this project." }
   // Claim the project before any await so two quick clicks can't both start.
   const jobId = randomBytes(8).toString("hex")
   const job: Job = { user, folder, state: "running", progress: 0 }

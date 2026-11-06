@@ -51,6 +51,13 @@ export function isRootKey(value: string): value is RootKey {
   return (ROOT_KEYS as readonly string[]).includes(value)
 }
 
+/** Video Editing projects are managed by the editor; the library may only read (and copy) them. */
+export function isReadOnlyRoot(value: string): value is "video-projects" {
+  return value === "video-projects"
+}
+
+export const READ_ONLY_ROOT_MESSAGE = "Video Editing projects are read-only here."
+
 /** The roots AI scans can read. User Temp Storage and Video Editing are staging areas, not part of the library to sort. */
 export const SCAN_ROOT_KEYS = ["upload", "dropoff"] as const satisfies readonly RootKey[]
 

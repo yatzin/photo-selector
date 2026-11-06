@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect, it } from "vitest"
-import { fileVersion, isPlainName, isPlainPath, isRootKey, isScanRoot, isSkippedDir, mediaKind, numberedName, projectFolderName, resolveInside, safeSegments, tempFolderName, trashBatchId, trashBatchTime } from "./media"
+import { fileVersion, isPlainName, isPlainPath, isReadOnlyRoot, isRootKey, isScanRoot, isSkippedDir, mediaKind, numberedName, projectFolderName, resolveInside, safeSegments, tempFolderName, trashBatchId, trashBatchTime } from "./media"
 
 describe("mediaKind", () => {
   it("recognises photos and videos regardless of case", () => {
@@ -31,6 +31,11 @@ describe("isRootKey", () => {
     expect(isRootKey("dropoff")).toBe(true)
     expect(isRootKey("temp")).toBe(true)
     expect(isRootKey("etc")).toBe(false)
+  })
+
+  it("treats only Video Editing Projects as read-only", () => {
+    expect(isReadOnlyRoot("video-projects")).toBe(true)
+    for (const r of ["upload", "dropoff", "temp", "video-inbox"]) expect(isReadOnlyRoot(r)).toBe(false)
   })
 
   it("keeps User Temp Storage out of AI scans", () => {

@@ -58,6 +58,10 @@ config/        export.json: resolution, fps, codec presets (reusable when templa
 - Autosave to `project.json` after each edit, debounced.
 - Routes: `/tools/video-editing` (project list), `/tools/video-editing/<project>` (editor). Sidebar "Video Editing" label links to the list.
 - Access: a user sees and edits only their own `Projects/<user>/` folder in this tool.
+- `project.json` in v1 holds one flat `clips` list: no tracks and no `transitionIn` yet. The file carries `version: 1`, so v2 can migrate it when tracks and transitions arrive.
+- `config/export.json` is written when a project is created, but export reads width, height and fps from `project.json`. The config file is kept for export templating later.
+- Projects are keyed by the user's display-name folder (`Projects/<display name>/`), the same way User Temp Storage keys its folders.
+- In the library, Video Editing Projects is read-only: no move, delete or rotate, and Move to Video Editing/Temp only copies from it. The editor owns those files.
 
 ## Constraints
 

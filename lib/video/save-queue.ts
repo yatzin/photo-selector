@@ -55,6 +55,10 @@ export function createSaveQueue(save: (p: Project) => Promise<boolean>, initial:
       await chain
       return latest === confirmed
     },
+    /** True while a change is waiting, being saved, or failed to save. */
+    isDirty(): boolean {
+      return timer !== null || inflight > 0 || latest !== confirmed
+    },
     /** Saves a pending change without waiting (the editor is closing). */
     close() {
       start()

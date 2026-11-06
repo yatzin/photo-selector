@@ -7,7 +7,7 @@ import { z } from "zod"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { sendToTemp, type ActionResult } from "@/lib/file-ops-server"
-import { isNoteRoot, isPlainPath, isRootKey, NOTE_ROOT_KEYS, ROOT_LABELS, safeSegments, tempFolderName } from "@/lib/media"
+import { isNoteRoot, isPlainPath, isReadOnlyRoot, isRootKey, NOTE_ROOT_KEYS, READ_ONLY_ROOT_MESSAGE, ROOT_LABELS, safeSegments, tempFolderName } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
@@ -62,6 +62,8 @@ export async function sendToTempAction(data: {
   const { root, dest, names, userId, mode } = parsed.data
   const folder = safeSegments(parsed.data.folder)
   if (!folder || !isRootKey(root)) return { error: "Invalid folder." }
+  // A copy leaves the source alone, so it's allowed from a read-only root.
+  if (mode === "move" && isReadOnlyRoot(root)) return { error: READ_ONLY_ROOT_MESSAGE }
 
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true } })
   if (!user) return { error: "That user no longer exists." }

@@ -10,7 +10,7 @@ vi.mock("./ffmpeg-server", async () => {
   return { ...actual, probeMedia: vi.fn(async () => ({ duration: 5, hasAudio: true })), runExport: (...a: unknown[]) => runExport(...a) }
 })
 
-import { exportStatus, sanitizeError, startExport } from "./export-jobs-server"
+import { exportRunning, exportStatus, sanitizeError, startExport } from "./export-jobs-server"
 import { createProject, readProject, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-export-${process.pid}-${Date.now()}`)
@@ -118,6 +118,21 @@ describe("startExport", () => {
     release()
     await waitDone("mike", first.jobId)
     expect("jobId" in (await startExport("mike", folder))).toBe(true)
+  })
+
+  it("exportRunning is true only while that user's export of that project runs", async () => {
+    const folder = await makeProject()
+    let release: () => void = () => {}
+    runExport.mockImplementation((_a: string[], outFile: string) => new Promise<void>((resolve) => (release = () => void fs.writeFile(outFile, "v").then(() => resolve()))))
+    expect(exportRunning("mike", folder)).toBe(false)
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    expect(exportRunning("mike", folder)).toBe(true)
+    expect(exportRunning("someone", folder)).toBe(false)
+    expect(exportRunning("mike", "other")).toBe(false)
+    release()
+    await waitDone("mike", r.jobId)
+    expect(exportRunning("mike", folder)).toBe(false)
   })
 
   it("reports progress while running", async () => {
