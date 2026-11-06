@@ -25,6 +25,10 @@ take of each, using any OpenAI-compatible vision model you host yourself.
   there it can be rotated, deleted, moved to Sort Dropoff or sent on to someone
   else. Sending a file that's already in that folder replaces it and updates the note.
 
+**Video editing**
+- **Tools → Video Editing**: cut video clips together on a timeline and export
+  an MP4 on the server. See [Video Editing](#video-editing).
+
 **AI review** (optional)
 - Groups bursts locally, by capture time and visual similarity; nothing leaves
   the NAS except the groups sent to *your* AI server.
@@ -147,6 +151,45 @@ Database changes apply themselves on start.
 | `\\ugreen\Photo\Sort Dropoff`   | `/photos/dropoff`  | `PHOTOS_DROPOFF_DIR`  |
 | (app data)                      | `/data`            | `DATABASE_URL`, `PHOTOS_CACHE_DIR` |
 | (app data) User Temp Storage    | `/data/UserTempStorage` | `PHOTOS_TEMP_DIR` (created on start) |
+| (app data) Video Editing Inbox  | `/data/VideoEditing/Inbox` | `PHOTOS_VIDEO_INBOX_DIR` (created on start) |
+| (app data) Video Editing Projects | `/data/VideoEditing/Projects` | `PHOTOS_VIDEO_PROJECTS_DIR` (created on start) |
+
+## Video Editing
+
+Tools → Video Editing cuts video clips together and exports an MP4.
+
+**Getting clips in.** Right-click files in the library, use the toolbar's
+**Video Editing** button, or the button in the viewer, then choose
+**Move to Video Editing…**. The files go to `Inbox/<user>` with a note, and you
+pick whose folder. You can copy instead of move.
+
+**Projects.** Each one is a folder, `Projects/<user>/<project>/`:
+
+- `project.json`: the timeline
+- `assets/`: the clips the project uses
+- `output/`: exported videos
+- `config/export.json`: export size and frame rate
+
+Importing copies a file from the Inbox into `assets/`. The original stays in the Inbox.
+
+**Editing.**
+- Drag a clip onto the timeline.
+- Drag a clip's edges to trim it, or drag the clip to reorder.
+- **S** splits at the playhead, **Delete** removes the selected clip, **Space** plays.
+
+**Export.** Renders an MP4 into `output/` on the server with ffmpeg, at
+1920x1080 and 30 fps. It never overwrites: a name already taken gets a new one.
+
+**Limits in this version**
+- Video clips only. No text, transitions or audio import yet.
+- Cuts only.
+- Preview plays the files in your browser. A clip the browser can't decode
+  (some iPhone HEVC) shows a message in the preview but still exports.
+
+**Requirements.** ffmpeg 7 or newer on the server (the Docker image has it).
+Set the folders with `PHOTOS_VIDEO_INBOX_DIR` and `PHOTOS_VIDEO_PROJECTS_DIR`.
+They default to `/data/VideoEditing/Inbox` and `/data/VideoEditing/Projects`,
+beside the cache.
 
 ## File share permissions
 
