@@ -1,7 +1,7 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { clipLength, type Project } from "./project"
+import { assetKind, clipLength, type Project } from "./project"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -28,23 +28,33 @@ export function probeMedia(file: string): Promise<{ duration: number; hasAudio: 
 
 const num = (n: number) => String(Number(n.toFixed(3)))
 
-/** The filtergraph text for the whole timeline, plus the input files in clip order. */
-export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[] } {
+/** The filtergraph text for the whole timeline, plus each clip's input arguments in clip order. */
+export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (p.clips.length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
-  const inputs: string[] = []
+  const inputs: string[][] = []
   const parts: string[] = []
   const labels: string[] = []
   p.clips.forEach((c, i) => {
     const file = files[c.asset]
     if (!file) throw new Error("Missing asset file")
-    inputs.push(file)
+    const asset = p.assets[c.asset]
+    const silence = `anullsrc=r=48000:cl=stereo,atrim=0:${num(clipLength(c))},asetpts=PTS-STARTPTS[a${i}]`
+    if (asset && assetKind(asset) === "image") {
+      // A still image repeats for the clip's length; there's nothing to trim.
+      inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p[v${i}]`)
+      parts.push(silence)
+      labels.push(`[v${i}][a${i}]`)
+      return
+    }
+    inputs.push(["-i", file])
     parts.push(
       `[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}[v${i}]`
     )
     parts.push(
-      p.assets[c.asset]?.hasAudio === false
-        ? `anullsrc=r=48000:cl=stereo,atrim=0:${num(clipLength(c))},asetpts=PTS-STARTPTS[a${i}]`
+      asset?.hasAudio === false
+        ? silence
         : `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a${i}]`
     )
     labels.push(`[v${i}][a${i}]`)
@@ -56,8 +66,9 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
 /**
  * ffmpeg arguments for the whole timeline: every clip is trimmed, scaled into
  * the project frame with a letterbox pad (never stretched), then concatenated.
- * `files` maps asset id to absolute path; one input per clip keeps each
- * filter label used once. A clip from a silent asset gets generated silence.
+ * `files` maps asset id to absolute path (for an image, a still ffmpeg can
+ * read); one input per clip keeps each filter label used once. A clip from a
+ * silent asset or an image gets generated silence; an image input loops.
  * With `graphFile` the filtergraph is read from that file (the caller writes
  * `buildExportGraph(...).graph` there) so a long timeline can't overflow the
  * command line (`-/filter_complex <file>`, needs ffmpeg 7 or newer; the old
@@ -66,7 +77,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
 export function buildExportArgs(p: Project, files: Record<string, string>, outFile: string, graphFile?: string): string[] {
   const { graph, inputs } = buildExportGraph(p, files)
   const args = ["-hide_banner", "-y", "-nostats", "-progress", "pipe:1"]
-  for (const file of inputs) args.push("-i", file)
+  for (const input of inputs) args.push(...input)
   args.push(
     graphFile ? "-/filter_complex" : "-filter_complex", graphFile ?? graph,
     "-map", "[v]", "-map", "[a]",

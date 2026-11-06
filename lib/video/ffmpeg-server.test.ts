@@ -2,6 +2,7 @@ import { execFile } from "child_process"
 import fs from "fs"
 import os from "os"
 import path from "path"
+import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
 import { newProject, type Project } from "./project"
@@ -69,6 +70,26 @@ describe("buildExportArgs", () => {
     const { graph } = buildExportGraph(p, files)
     expect(graph).toContain("concat=n=150:v=1:a=1")
     expect(graph.length).toBeGreaterThan(32_767)
+  })
+
+  it("loops an image for its length with silence, next to video clips", () => {
+    const p: Project = {
+      ...twoClips(),
+      assets: { ...twoClips().assets, i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" } },
+      clips: [{ id: "c1", asset: "a", in: 1, out: 3 }, { id: "p", asset: "i", in: 0, out: 2.5 }, { id: "c2", asset: "s", in: 0, out: 1.5 }],
+    }
+    const args = buildExportArgs(p, { ...files, i: "/cache/i.webp" }, "o")
+    const g = graph(args)
+    const at = args.indexOf("/cache/i.webp")
+    expect(args.slice(at - 7, at + 1)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2.5", "-i", "/cache/i.webp"])
+    expect(args.filter((a) => a === "-loop")).toHaveLength(1)
+    expect(args.filter((a) => a === "-i")).toHaveLength(3)
+    expect(g).toContain("[1:v]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v1]")
+    expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:2.5,asetpts=PTS-STARTPTS[a1]")
+    expect(g).not.toContain("[1:a]")
+    expect(g).not.toMatch(/\[1:v\]trim/)
+    expect(g).toContain("[0:a]atrim=1:3")
+    expect(g).toContain("concat=n=3:v=1:a=1")
   })
 
   it("throws when there is nothing to export", () => {
@@ -171,6 +192,29 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     // A pixel near the left edge is pad (black, luma 16), not picture.
     const px = await ffmpeg(["-ss", "0.5", "-i", r.out, "-frames:v", "1", "-vf", "crop=1:1:5:540,format=gray", "-f", "rawvideo", "-"])
     expect(px.stdout[0]).toBeLessThanOrEqual(20)
+  }, 60_000)
+
+  it("exports video, a 2 s image and video with audio and the summed length", async () => {
+    const image = path.join(dir, "still.webp")
+    await sharp({ create: { width: 800, height: 600, channels: 3, background: "#c33" } }).webp().toFile(image)
+    const p: Project = {
+      ...newProject("Image"),
+      assets: { a: { file: "a", duration: 3, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
+      clips: [{ id: "1", asset: "a", in: 0, out: 1 }, { id: "2", asset: "i", in: 0, out: 2 }, { id: "3", asset: "a", in: 1, out: 2 }],
+    }
+    const r = await exportProject(p, { a: sample(1), i: image }, "image.mp4")
+    expect(Math.abs(r.duration - 4)).toBeLessThan(0.4)
+    expect(r.info).toMatch(/Stream #[^\n]*Audio:/)
+    expect(r.info).toMatch(/Video: h264[^\n]*1920x1080/)
+    // The picture itself runs the whole length (a single frame would leave only the audio).
+    const video = (await ffmpeg(["-i", r.out, "-map", "0:v", "-f", "null", "-"])).stderr
+    let last = 0
+    for (const m of video.matchAll(/time=(\d+):(\d+):(\d+\.\d+)/g)) last = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
+    expect(Math.abs(last - 4)).toBeLessThan(0.4)
+    // Mid-image the frame is the red still.
+    const px = await ffmpeg(["-ss", "2", "-i", r.out, "-frames:v", "1", "-vf", "crop=2:2:960:540,format=rgb24", "-f", "rawvideo", "-"])
+    expect(px.stdout[0]).toBeGreaterThan(150)
+    expect(px.stdout[1]).toBeLessThan(100)
   }, 60_000)
 
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {

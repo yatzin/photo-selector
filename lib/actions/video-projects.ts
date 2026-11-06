@@ -11,7 +11,7 @@ import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } fr
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
 import { mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
-import { createProject, deleteProject, importAsset, readProject, renameProject, writeProject } from "@/lib/video/projects-server"
+import { createProject, deleteProject, importAsset, readProject, renameProject, reusableAsset, writeProject } from "@/lib/video/projects-server"
 
 // Server actions for video projects. The user's folder always comes from the
 // session, never from the client; failures come back as { error }.
@@ -97,7 +97,7 @@ export async function importAssetAction(
   folder: string,
   inboxFolder: string[],
   fileName: string
-): Promise<{ id: string; asset: Asset } | { error: string }> {
+): Promise<{ id: string; asset: Asset; reused?: true } | { error: string }> {
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   const file = plainName.safeParse(fileName)
@@ -106,10 +106,13 @@ export async function importAssetAction(
   if (!f.success || !file.success || !segments) return { error: "Invalid request." }
   try {
     return await withLock(`${userFolder}/${f.data}`, async () => {
-      const imported = await importAsset(userFolder, f.data, segments, file.data)
-      if ("error" in imported) return imported
       const project = await readProject(userFolder, f.data)
       if (!project) return { error: "Project not found." }
+      // The same Inbox file again: use the copy that's already in the project.
+      const existing = await reusableAsset(userFolder, f.data, project, [...segments, file.data].join("/"))
+      if (existing) return { ...existing, reused: true as const }
+      const imported = await importAsset(userFolder, f.data, segments, file.data)
+      if ("error" in imported) return imported
       await writeProject(userFolder, f.data, { ...project, assets: { ...project.assets, [imported.id]: imported.asset } })
       return imported
     })
@@ -118,8 +121,10 @@ export async function importAssetAction(
   }
 }
 
-/** Video files in each user's Inbox folder; the current user's own folder comes first. */
-export async function listInboxAction(): Promise<{ folder: string; files: { name: string; size: number }[] }[]> {
+type InboxFile = { name: string; size: number; kind: "image" | "video" }
+
+/** Video and image files in each user's Inbox folder; the current user's own folder comes first. */
+export async function listInboxAction(): Promise<{ folder: string; files: InboxFile[] }[]> {
   const { userFolder } = await requireUserFolder()
   const root = rootPath("video-inbox")
   let entries
@@ -128,15 +133,16 @@ export async function listInboxAction(): Promise<{ folder: string; files: { name
   } catch {
     return []
   }
-  const out: { folder: string; files: { name: string; size: number }[] }[] = []
+  const out: { folder: string; files: InboxFile[] }[] = []
   for (const e of entries) {
     if (!e.isDirectory() || isSkippedDir(e.name)) continue
-    const files: { name: string; size: number }[] = []
+    const files: InboxFile[] = []
     try {
       for (const f of await fs.readdir(path.join(root, e.name), { withFileTypes: true })) {
-        if (!f.isFile() || mediaKind(f.name) !== "video") continue
+        const kind = f.isFile() ? mediaKind(f.name) : null
+        if (!kind) continue
         const st = await fs.stat(path.join(root, e.name, f.name))
-        files.push({ name: f.name, size: st.size })
+        files.push({ name: f.name, size: st.size, kind })
       }
     } catch {
       continue

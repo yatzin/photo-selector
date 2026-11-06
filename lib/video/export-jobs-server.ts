@@ -4,8 +4,9 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { numberedName, projectFolderName } from "@/lib/media"
+import { ensureVariant } from "@/lib/thumbs-server"
 import { buildExportArgs, buildExportGraph, runExport } from "./ffmpeg-server"
-import { totalLength } from "./project"
+import { assetKind, totalLength } from "./project"
 import { assetPath, outputDir, readProject } from "./projects-server"
 
 // Exports run in this server process (the table is in-process, so a second
@@ -81,7 +82,14 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
       const asset = project.assets[clip.asset]
       const file = asset && assetPath(user, folder, asset.file)
       if (!asset || !file || !(await exists(file))) throw new Error(`${asset?.file ?? "A clip's file"} is missing from the project's assets.`)
-      files[clip.asset] = file
+      if (assetKind(asset) === "image") {
+        // ffmpeg gets the converted preview (the same one the editor shows), so HEIC and DNG work too.
+        const still = await ensureVariant("video-projects", [user, folder, "assets", asset.file].join("/"), file, "preview", "high").catch(() => null)
+        if (!still || "failed" in still) throw new Error(`${asset.file} couldn't be prepared for export.`)
+        files[clip.asset] = still.path
+      } else {
+        files[clip.asset] = file
+      }
     }
     await fs.mkdir(dir, { recursive: true })
     const base = `${projectFolderName(project.name)} ${stamp(new Date())}.mp4`

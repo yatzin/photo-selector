@@ -2,6 +2,7 @@ import fsSync from "fs"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import sharp from "sharp"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 const runExport = vi.fn()
@@ -201,6 +202,49 @@ describe("startExport", () => {
     if ("error" in r) throw new Error(r.error)
     const s = await waitDone("mike", r.jobId)
     expect(s.error).toBe("file: No such file or directory")
+  })
+})
+
+describe("startExport with images", () => {
+  async function imageProject(image: Buffer | string): Promise<string> {
+    const folder = await makeProject()
+    await fs.writeFile(path.join(tmp, "projects", "mike", folder, "assets", "photo.png"), image)
+    const p = (await readProject("mike", folder))!
+    await writeProject("mike", folder, {
+      ...p,
+      assets: { ...p.assets, i: { file: "photo.png", duration: 5, hasAudio: false, kind: "image" } },
+      clips: [...p.clips, { id: "p", asset: "i", in: 0, out: 2 }],
+    })
+    return folder
+  }
+
+  it("feeds ffmpeg the cached preview of an image, looped for the clip's length", async () => {
+    const png = await sharp({ create: { width: 64, height: 48, channels: 3, background: "#09f" } }).png().toBuffer()
+    const folder = await imageProject(png)
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    expect(await waitDone("mike", r.jobId)).toMatchObject({ state: "done" })
+    const [args, , total] = runExport.mock.calls[0] as [string[], string, number]
+    const loop = args.indexOf("-loop")
+    expect(args.slice(loop, loop + 7)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2", "-i"])
+    const still = args[loop + 7]
+    expect(still.startsWith(path.join(tmp, "cache", "preview"))).toBe(true)
+    expect(still.endsWith(".webp")).toBe(true)
+    expect(fsSync.existsSync(still)).toBe(true)
+    expect(total).toBe(6)
+  })
+
+  it("refuses with the file's name when the image can't be converted", async () => {
+    const folder = await imageProject("not an image")
+    expect(await startExport("mike", folder)).toEqual({ error: "photo.png couldn't be prepared for export." })
+    expect(runExport).not.toHaveBeenCalled()
+    expect(exportRunning("mike", folder)).toBe(false)
+  })
+
+  it("still reports a missing image file as missing", async () => {
+    const folder = await imageProject("x")
+    await fs.rm(path.join(tmp, "projects", "mike", folder, "assets", "photo.png"))
+    expect(await startExport("mike", folder)).toEqual({ error: "photo.png is missing from the project's assets." })
   })
 })
 

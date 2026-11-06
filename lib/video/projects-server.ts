@@ -6,7 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
-import { MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
+import { DEFAULT_IMAGE, findAssetBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -176,7 +176,11 @@ export async function deleteProject(userFolder: string, folder: string): Promise
   await fs.rm(dir, { recursive: true, force: true })
 }
 
-/** Copies a video from the Video Editing Inbox into the project's assets/ (never replacing a file) and probes it. The Inbox original stays. */
+/**
+ * Copies a video or image from the Video Editing Inbox into the project's
+ * assets/ (never replacing a file); a video is probed, an image gets the
+ * default length. The Inbox original stays; its path is kept as `source`.
+ */
 export async function importAsset(
   userFolder: string,
   folder: string,
@@ -185,7 +189,8 @@ export async function importAsset(
 ): Promise<{ id: string; asset: Asset } | { error: string }> {
   const dir = projectDir(userFolder, folder)
   if (!dir) return { error: "Invalid project." }
-  if (!isPlainName(fileName) || mediaKind(fileName) !== "video") return { error: "Not a video." }
+  const kind = mediaKind(fileName)
+  if (!isPlainName(fileName) || !kind) return { error: "Not a video or image." }
   const src = resolveInside(rootPath("video-inbox"), [...inboxFolder, fileName])
   if (!src) return { error: "Invalid Inbox folder." }
   const assets = path.join(dir, "assets")
@@ -194,7 +199,7 @@ export async function importAsset(
   // A symlink in the Inbox could point anywhere; copy only a real file that really sits inside the Inbox.
   try {
     const st = await fs.lstat(src)
-    if (!st.isFile() || st.isSymbolicLink()) return { error: "Not a video file." }
+    if (!st.isFile() || st.isSymbolicLink()) return { error: "Not a media file." }
     const [realRoot, realParent] = await Promise.all([fs.realpath(rootPath("video-inbox")), fs.realpath(path.dirname(src))])
     if (!resolveInside(realRoot, [path.relative(realRoot, realParent)])) return { error: "Invalid Inbox folder." }
   } catch (error) {
@@ -221,6 +226,10 @@ export async function importAsset(
     return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : error instanceof Error ? error.message : String(error) }
   }
   if (!dest) return { error: "Too many files with that name." }
+  const source = [...inboxFolder, fileName].join("/")
+  // The id doubles as the media URL's cache key, so it must not repeat.
+  const id = `a${randomBytes(8).toString("hex")}`
+  if (kind === "image") return { id, asset: { file, duration: DEFAULT_IMAGE, hasAudio: false, kind: "image", source } }
 
   try {
     const { duration, hasAudio } = await probeMedia(dest)
@@ -228,11 +237,22 @@ export async function importAsset(
       await fs.rm(dest, { force: true })
       return { error: "That clip is too short to edit." }
     }
-    // The id doubles as the media URL's cache key, so it must not repeat.
-    return { id: `a${randomBytes(8).toString("hex")}`, asset: { file, duration, hasAudio } }
+    return { id, asset: { file, duration, hasAudio, source } }
   } catch (error) {
     await fs.rm(dest, { force: true })
     return { error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** The asset already copied from this Inbox path, if its file is still in assets/. */
+export async function reusableAsset(userFolder: string, folder: string, p: Project, source: string): Promise<{ id: string; asset: Asset } | null> {
+  const found = findAssetBySource(p, source)
+  const file = found && assetPath(userFolder, folder, found.asset.file)
+  if (!found || !file) return null
+  try {
+    return (await fs.stat(file)).isFile() ? found : null
+  } catch {
+    return null
   }
 }
 

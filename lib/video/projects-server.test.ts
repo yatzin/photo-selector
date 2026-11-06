@@ -2,12 +2,12 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { MIN_CLIP, newProject } from "./project"
+import { DEFAULT_IMAGE, MIN_CLIP, newProject } from "./project"
 
 vi.mock("./ffmpeg-server", () => ({ probeMedia: vi.fn(async () => ({ duration: 12.5, hasAudio: true })) }))
 
 import { probeMedia } from "./ffmpeg-server"
-import { assetPath, createProject, deleteProject, importAsset, listProjects, readProject, renameProject, writeProject } from "./projects-server"
+import { assetPath, createProject, deleteProject, importAsset, listProjects, readProject, renameProject, reusableAsset, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-video-${process.pid}-${Date.now()}`)
 const projects = path.join(tmp, "projects")
@@ -25,6 +25,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(inbox, "mike", "clip.mp4"), "video bytes")
   await fs.writeFile(path.join(inbox, "mike", "sub", "deep.mp4"), "deep bytes")
   await fs.writeFile(path.join(inbox, "mike", "notes.txt"), "text")
+  await fs.writeFile(path.join(inbox, "mike", "photo.HEIC"), "image bytes")
 })
 
 const exists = (...p: string[]) => fs.access(path.join(...p)).then(() => true, () => false)
@@ -156,6 +157,22 @@ describe("importAsset", () => {
     expect(c).toMatchObject({ asset: { file: "deep.mp4" } })
   })
 
+  it("records the Inbox path it came from as source", async () => {
+    await createProject("mike", "P")
+    expect(await importAsset("mike", "P", ["mike"], "clip.mp4")).toMatchObject({ asset: { source: "mike/clip.mp4" } })
+    expect(await importAsset("mike", "P", ["mike", "sub"], "deep.mp4")).toMatchObject({ asset: { source: "mike/sub/deep.mp4" } })
+  })
+
+  it("imports an image without probing it, with the default length and no audio", async () => {
+    await createProject("mike", "P")
+    vi.mocked(probeMedia).mockClear()
+    const r = await importAsset("mike", "P", ["mike"], "photo.HEIC")
+    expect(r).toMatchObject({ asset: { file: "photo.HEIC", duration: DEFAULT_IMAGE, hasAudio: false, kind: "image", source: "mike/photo.HEIC" } })
+    expect(probeMedia).not.toHaveBeenCalled()
+    expect(await fs.readFile(path.join(user, "P", "assets", "photo.HEIC"), "utf8")).toBe("image bytes")
+    expect(await fs.readFile(path.join(inbox, "mike", "photo.HEIC"), "utf8")).toBe("image bytes")
+  })
+
   it("refuses a clip shorter than MIN_CLIP and removes the copy", async () => {
     await createProject("mike", "P")
     vi.mocked(probeMedia).mockResolvedValueOnce({ duration: MIN_CLIP / 2, hasAudio: false })
@@ -186,6 +203,19 @@ describe("importAsset", () => {
     expect(await importAsset("mike", "P", ["mike"], "missing.mp4")).toHaveProperty("error")
     expect(await importAsset("mike", "../P", ["mike"], "clip.mp4")).toHaveProperty("error")
     expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual([])
+  })
+})
+
+describe("reusableAsset", () => {
+  it("returns the asset already imported from that Inbox file while its copy exists", async () => {
+    await createProject("mike", "P")
+    const a = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    if ("error" in a) throw new Error(a.error)
+    const p = { ...newProject("P"), assets: { [a.id]: a.asset } }
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toEqual({ id: a.id, asset: a.asset })
+    expect(await reusableAsset("mike", "P", p, "mike/other.mp4")).toBeNull()
+    await fs.rm(path.join(user, "P", "assets", "clip.mp4"))
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toBeNull()
   })
 })
 

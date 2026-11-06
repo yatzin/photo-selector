@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { addClip, mergeClientProject, clipStarts, MIN_CLIP, moveClip, newProject, parseProject, removeClip, splitClip, totalLength, trimClip, type Project } from "./project"
+import {
+  addClip, assetKind, clipAt, clipStarts, DEFAULT_IMAGE, findAssetBySource, MAX_IMAGE, mergeClientProject, MIN_CLIP, moveClip, newProject, parseProject, removeClip,
+  splitClip, totalLength, trimClip, type Project,
+} from "./project"
 
 function sample(): Project {
   return {
@@ -266,5 +269,132 @@ describe("mergeClientProject", () => {
   it("rejects a clip beyond the stored asset's duration", () => {
     const client = { ...stored, clips: [{ id: "c1", asset: "a1", in: 0, out: 50 }] }
     expect(mergeClientProject(client, stored)).toBeNull()
+  })
+})
+
+function withImage(): Project {
+  return {
+    ...newProject("img"),
+    assets: {
+      a: { file: "a.mp4", duration: 10, hasAudio: true },
+      i: { file: "i.jpg", duration: DEFAULT_IMAGE, hasAudio: false, kind: "image", source: "mike/i.jpg" },
+    },
+    clips: [
+      { id: "c1", asset: "a", in: 0, out: 3 },
+      { id: "p", asset: "i", in: 0, out: 4 },
+    ],
+  }
+}
+
+describe("assetKind", () => {
+  it("is video unless the asset says image", () => {
+    expect(assetKind({ file: "a.mp4", duration: 1, hasAudio: true })).toBe("video")
+    expect(assetKind({ file: "a.mp4", duration: 1, hasAudio: true, kind: "video" })).toBe("video")
+    expect(assetKind({ file: "i.jpg", duration: 5, hasAudio: false, kind: "image" })).toBe("image")
+  })
+})
+
+describe("image clips", () => {
+  it("addClip gives an image clip the default length", () => {
+    const p = { ...withImage(), assets: { ...withImage().assets, i: { ...withImage().assets.i, duration: 99 } } }
+    expect(addClip(p, "i", 0, "n").clips[0]).toEqual({ id: "n", asset: "i", in: 0, out: DEFAULT_IMAGE })
+  })
+
+  it("trims the out edge to the new length, with in staying 0", () => {
+    expect(trimClip(withImage(), "p", "out", 7).clips[1]).toMatchObject({ in: 0, out: 7 })
+    // An image has no source length to run out of.
+    expect(trimClip(withImage(), "p", "out", 300).clips[1]).toMatchObject({ in: 0, out: 300 })
+  })
+
+  it("trims the in edge by shortening or lengthening the clip, with in staying 0", () => {
+    expect(trimClip(withImage(), "p", "in", 1.5).clips[1]).toMatchObject({ in: 0, out: 2.5 })
+    expect(trimClip(withImage(), "p", "in", -2).clips[1]).toMatchObject({ in: 0, out: 6 })
+  })
+
+  it("clamps image lengths to MIN_CLIP..MAX_IMAGE", () => {
+    expect(trimClip(withImage(), "p", "out", 0).clips[1].out).toBe(MIN_CLIP)
+    expect(trimClip(withImage(), "p", "out", MAX_IMAGE + 50).clips[1].out).toBe(MAX_IMAGE)
+    expect(trimClip(withImage(), "p", "in", 10).clips[1].out).toBe(MIN_CLIP)
+    expect(trimClip(withImage(), "p", "in", -MAX_IMAGE).clips[1].out).toBe(MAX_IMAGE)
+    expect(trimClip(withImage(), "p", "out", Infinity).clips[1].out).toBe(MAX_IMAGE)
+    expect(trimClip(withImage(), "p", "out", -Infinity).clips[1].out).toBe(MIN_CLIP)
+    expect(trimClip(withImage(), "p", "in", Infinity).clips[1].out).toBe(MIN_CLIP)
+    expect(trimClip(withImage(), "p", "in", -Infinity).clips[1].out).toBe(MAX_IMAGE)
+    for (const edge of ["in", "out"] as const) expect(trimClip(withImage(), "p", edge, 3).clips[1].in).toBe(0)
+  })
+
+  it("ignores NaN on an image clip", () => {
+    const p = withImage()
+    expect(trimClip(p, "p", "in", NaN)).toBe(p)
+    expect(trimClip(p, "p", "out", NaN)).toBe(p)
+  })
+
+  it("splits an image clip into two image clips that both start at 0", () => {
+    const p = splitClip(withImage(), "p", 4, "s")
+    expect(p.clips.map((c) => [c.id, c.in, c.out])).toEqual([["c1", 0, 3], ["p", 0, 1], ["s", 0, 3]])
+  })
+
+  it("does not split an image clip within MIN_CLIP of an edge", () => {
+    const p = withImage()
+    expect(splitClip(p, "p", 3.1, "s")).toBe(p)
+    expect(splitClip(p, "p", 6.9, "s")).toBe(p)
+  })
+
+  it("clipAt gives the time inside an image clip", () => {
+    expect(clipAt(withImage().clips, 4.5)).toEqual({ index: 1, sourceTime: 1.5 })
+    expect(clipAt(withImage().clips, 7)).toBeNull()
+  })
+})
+
+describe("parseProject with images", () => {
+  it("round-trips kind and source", () => {
+    const p = withImage()
+    expect(parseProject(JSON.parse(JSON.stringify(p)))).toEqual(p)
+  })
+
+  it("accepts an image clip longer than the asset's duration, up to MAX_IMAGE", () => {
+    const p = withImage()
+    p.clips[1] = { id: "p", asset: "i", in: 0, out: MAX_IMAGE }
+    expect(parseProject(p)).not.toBeNull()
+  })
+
+  it("rejects image clips that don't start at 0 or are out of range", () => {
+    for (const [i, o] of [[1, 3], [0, MIN_CLIP / 2], [0, MAX_IMAGE + 1], [0, 0]]) {
+      const p = withImage()
+      p.clips[1] = { id: "p", asset: "i", in: i, out: o }
+      expect(parseProject(p)).toBeNull()
+    }
+  })
+
+  it("rejects a bad kind or source", () => {
+    for (const patch of [{ kind: "audio" }, { kind: 1 }, { source: 5 }, { source: "x".repeat(401) }]) {
+      const p = withImage()
+      expect(parseProject({ ...p, assets: { ...p.assets, i: { ...p.assets.i, ...patch } } })).toBeNull()
+    }
+    const p = withImage()
+    expect(parseProject({ ...p, assets: { ...p.assets, i: { ...p.assets.i, source: "x".repeat(400) } } })).not.toBeNull()
+  })
+
+  it("mergeClientProject keeps stored image assets and validates against them", () => {
+    const stored = withImage()
+    const client = { ...stored, assets: { ...stored.assets, x: { file: "x.jpg", duration: 5, hasAudio: false, kind: "image" } }, clips: [{ id: "p", asset: "i", in: 0, out: 60 }] }
+    const merged = mergeClientProject(client, stored)
+    expect(merged?.assets).toEqual(stored.assets)
+    expect(merged?.clips).toEqual([{ id: "p", asset: "i", in: 0, out: 60 }])
+    // A client can't stretch a video past its length by calling it an image.
+    const spoof = { ...stored, assets: { ...stored.assets, a: { ...stored.assets.a, kind: "image" } }, clips: [{ id: "c1", asset: "a", in: 0, out: 60 }] }
+    expect(mergeClientProject(spoof, stored)).toBeNull()
+  })
+})
+
+describe("findAssetBySource", () => {
+  it("finds the asset imported from that Inbox file", () => {
+    expect(findAssetBySource(withImage(), "mike/i.jpg")).toEqual({ id: "i", asset: withImage().assets.i })
+  })
+
+  it("is null when no asset came from there", () => {
+    expect(findAssetBySource(withImage(), "mike/other.jpg")).toBeNull()
+    expect(findAssetBySource(withImage(), "")).toBeNull()
+    expect(findAssetBySource(newProject("x"), "mike/i.jpg")).toBeNull()
   })
 })
