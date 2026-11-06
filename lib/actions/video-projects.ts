@@ -8,13 +8,16 @@ import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } from "@/lib/media"
-import { parseProject, type Asset } from "@/lib/video/project"
+import { mergeClientProject, type Asset } from "@/lib/video/project"
+import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteProject, importAsset, readProject, renameProject, writeProject } from "@/lib/video/projects-server"
 
 // Server actions for video projects. The user's folder always comes from the
 // session, never from the client; failures come back as { error }.
 
 const plainName = z.string().refine(isPlainName)
+const MAX_CLIPS = 5000
+const MAX_PROJECT_JSON = 2_000_000
 const projectName = z.string().trim().min(1).max(200)
 
 async function requireUserFolder(): Promise<{ userFolder: string }> {
@@ -46,7 +49,7 @@ export async function renameProjectAction(folder: string, name: string): Promise
   const n = projectName.safeParse(name)
   if (!f.success || !n.success) return { error: "Invalid request." }
   try {
-    return await renameProject(userFolder, f.data, n.data)
+    return await withLock(`${userFolder}/${f.data}`, () => renameProject(userFolder, f.data, n.data))
   } catch (error) {
     return { error: errorText(error) }
   }
@@ -57,7 +60,7 @@ export async function deleteProjectAction(folder: string): Promise<{ ok: true } 
   const f = plainName.safeParse(folder)
   if (!f.success) return { error: "Invalid request." }
   try {
-    await deleteProject(userFolder, f.data)
+    await withLock(`${userFolder}/${f.data}`, () => deleteProject(userFolder, f.data))
     return { ok: true }
   } catch (error) {
     return { error: errorText(error) }
@@ -68,13 +71,19 @@ export async function saveProjectAction(folder: string, project: unknown): Promi
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   if (!f.success) return { error: "Invalid request." }
-  const parsed = parseProject(project)
-  if (!parsed) return { error: "Invalid project." }
+  const tooLarge =
+    typeof project === "object" && project !== null && Array.isArray((project as { clips?: unknown }).clips) && (project as { clips: unknown[] }).clips.length > MAX_CLIPS
+  if (tooLarge || JSON.stringify(project ?? null).length > MAX_PROJECT_JSON) return { error: "Project is too large." }
   try {
-    // Saving must not resurrect a deleted project.
-    if (!(await readProject(userFolder, f.data))) return { error: "Project not found." }
-    await writeProject(userFolder, f.data, parsed)
-    return { ok: true }
+    return await withLock(`${userFolder}/${f.data}`, async () => {
+      // Saving must not resurrect a deleted project; assets are server-owned.
+      const stored = await readProject(userFolder, f.data)
+      if (!stored) return { error: "Project not found." }
+      const merged = mergeClientProject(project, stored)
+      if (!merged) return { error: "Invalid project." }
+      await writeProject(userFolder, f.data, merged)
+      return { ok: true as const }
+    })
   } catch (error) {
     return { error: errorText(error) }
   }
@@ -92,12 +101,14 @@ export async function importAssetAction(
   const segments = inbox.success ? safeSegments(inbox.data) : null
   if (!f.success || !file.success || !segments) return { error: "Invalid request." }
   try {
-    const imported = await importAsset(userFolder, f.data, segments, file.data)
-    if ("error" in imported) return imported
-    const project = await readProject(userFolder, f.data)
-    if (!project) return { error: "Project not found." }
-    await writeProject(userFolder, f.data, { ...project, assets: { ...project.assets, [imported.id]: imported.asset } })
-    return imported
+    return await withLock(`${userFolder}/${f.data}`, async () => {
+      const imported = await importAsset(userFolder, f.data, segments, file.data)
+      if ("error" in imported) return imported
+      const project = await readProject(userFolder, f.data)
+      if (!project) return { error: "Project not found." }
+      await writeProject(userFolder, f.data, { ...project, assets: { ...project.assets, [imported.id]: imported.asset } })
+      return imported
+    })
   } catch (error) {
     return { error: errorText(error) }
   }

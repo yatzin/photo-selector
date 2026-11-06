@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { addClip, clipStarts, MIN_CLIP, moveClip, newProject, parseProject, removeClip, splitClip, totalLength, trimClip, type Project } from "./project"
+import { addClip, mergeClientProject, clipStarts, MIN_CLIP, moveClip, newProject, parseProject, removeClip, splitClip, totalLength, trimClip, type Project } from "./project"
 
 function sample(): Project {
   return {
@@ -195,5 +195,37 @@ describe("parseProject", () => {
   it("rejects a __proto__ asset key", () => {
     const text = JSON.stringify(sample()).replace('"assets":{', '"assets":{"__proto__":{"file":"x.mp4","duration":1,"hasAudio":false},')
     expect(parseProject(JSON.parse(text))).toBeNull()
+  })
+})
+
+describe("mergeClientProject", () => {
+  const stored: Project = {
+    ...newProject("P"),
+    assets: { a1: { file: "one.mp4", duration: 10, hasAudio: true } },
+  }
+
+  it("ignores client-supplied assets", () => {
+    const client = {
+      ...stored,
+      assets: { a1: { file: "../../evil.mp4", duration: 10, hasAudio: true }, a2: { file: "x.mp4", duration: 5, hasAudio: false } },
+      clips: [{ id: "c1", asset: "a1", in: 0, out: 5 }],
+    }
+    const merged = mergeClientProject(client, stored)
+    expect(merged?.assets).toEqual(stored.assets)
+    expect(merged?.clips).toHaveLength(1)
+  })
+
+  it("rejects a clip whose asset isn't stored", () => {
+    const client = {
+      ...stored,
+      assets: { a2: { file: "x.mp4", duration: 5, hasAudio: false } },
+      clips: [{ id: "c1", asset: "a2", in: 0, out: 5 }],
+    }
+    expect(mergeClientProject(client, stored)).toBeNull()
+  })
+
+  it("rejects a clip beyond the stored asset's duration", () => {
+    const client = { ...stored, clips: [{ id: "c1", asset: "a1", in: 0, out: 50 }] }
+    expect(mergeClientProject(client, stored)).toBeNull()
   })
 })

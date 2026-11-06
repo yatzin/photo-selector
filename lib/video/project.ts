@@ -114,3 +114,15 @@ export function parseProject(json: unknown): Project | null {
 
   return { version: 1, name, width, height, fps, assets: parsedAssets, clips: parsedClips }
 }
+
+/**
+ * A client-sent project laid over the stored one: assets are server-owned, so
+ * the client's are ignored. Null when it doesn't validate or a clip points at
+ * an asset the stored project doesn't have.
+ */
+export function mergeClientProject(client: unknown, stored: Project): Project | null {
+  const parsed = parseProject(client)
+  if (!parsed) return null
+  if (!parsed.clips.every((c) => Object.hasOwn(stored.assets, c.asset))) return null
+  return parseProject({ ...parsed, assets: stored.assets })
+}
