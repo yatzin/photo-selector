@@ -28,20 +28,30 @@ export function isSkippedDir(name: string): boolean {
  * The library roots, chosen by the short key used in URLs. Mapped from the
  * NAS in docker-compose.yml; locally they can point at the UNC share.
  */
-export const ROOT_KEYS = ["upload", "dropoff", "temp"] as const
+export const ROOT_KEYS = ["upload", "dropoff", "temp", "video-inbox", "video-projects"] as const
 export type RootKey = (typeof ROOT_KEYS)[number]
 
 export const ROOT_LABELS: Record<RootKey, string> = {
   upload: "Mobile Upload",
   dropoff: "Sort Dropoff",
   temp: "User Temp Storage",
+  "video-inbox": "Video Editing Inbox",
+  "video-projects": "Video Editing Projects",
+}
+
+/** Roots that hold a folder per user, where files can carry a note. */
+export const NOTE_ROOT_KEYS = ["temp", "video-inbox"] as const satisfies readonly RootKey[]
+export type NoteRootKey = (typeof NOTE_ROOT_KEYS)[number]
+
+export function isNoteRoot(value: string): value is NoteRootKey {
+  return (NOTE_ROOT_KEYS as readonly string[]).includes(value)
 }
 
 export function isRootKey(value: string): value is RootKey {
   return (ROOT_KEYS as readonly string[]).includes(value)
 }
 
-/** The roots AI scans can read. User Temp Storage is a staging area, not part of the library to sort. */
+/** The roots AI scans can read. User Temp Storage and Video Editing are staging areas, not part of the library to sort. */
 export const SCAN_ROOT_KEYS = ["upload", "dropoff"] as const satisfies readonly RootKey[]
 
 export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[number] {

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 import { auth } from "@/auth"
 import { moveToDropoff, restoreBatch, rotateFiles, trashFiles, type ActionResult } from "@/lib/file-ops-server"
-import { isPlainName, isRootKey, safeSegments, type RootKey } from "@/lib/media"
+import { isNoteRoot, isPlainName, isRootKey, safeSegments, type RootKey } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
@@ -41,9 +41,10 @@ function done<T extends ActionResult>(result: T): T {
 export async function moveToDropoffAction(input: { root: string; folder: string[]; names: string[] }) {
   const t = await parse(input)
   if ("error" in t) return t
-  if (t.root === "dropoff") return { error: "Only files in Mobile Upload or User Temp Storage can be moved to the drop-off." }
+  if (t.root === "dropoff") return { error: "Only files in Mobile Upload, User Temp Storage or Video Editing Inbox can be moved to the drop-off." }
+  if (t.root === "video-projects") return { error: "Files in Video Editing Projects can't be moved to the drop-off." }
   const result = await moveToDropoff(t.root, t.folder, t.names)
-  if (t.root === "temp") await dropTempNotes(t.folder, result.ok)
+  if (isNoteRoot(t.root)) await dropTempNotes(t.root, t.folder, result.ok)
   return done(result)
 }
 

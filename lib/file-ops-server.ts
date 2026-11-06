@@ -6,7 +6,7 @@ import path from "path"
 import sharp from "sharp"
 import { rootPath } from "@/lib/library-server"
 import { isJpeg, orientationEdit, readOrientation, rotateOrientation, type RotateDirection } from "@/lib/exif-orientation"
-import { mediaKind, numberedName, resolveInside, TRASH_DIR, TRASH_RETENTION_DAYS, trashBatchId, trashBatchTime, type RootKey } from "@/lib/media"
+import { mediaKind, numberedName, resolveInside, TRASH_DIR, TRASH_RETENTION_DAYS, trashBatchId, trashBatchTime, type NoteRootKey, type RootKey } from "@/lib/media"
 import { cacheKey, moveCached } from "@/lib/thumbs-server"
 
 // Moves, deletes (to trash) and rotations. Photos are irreplaceable, so every
@@ -99,8 +99,8 @@ async function eachFile(
   return result
 }
 
-/** Moves files from a Mobile Upload (or User Temp Storage) folder into the top of Sort Dropoff. */
-export async function moveToDropoff(rootKey: "upload" | "temp", folder: string[], names: string[]): Promise<ActionResult> {
+/** Moves files from a Mobile Upload, User Temp Storage or Video Editing Inbox folder into the top of Sort Dropoff. */
+export async function moveToDropoff(rootKey: "upload" | NoteRootKey, folder: string[], names: string[]): Promise<ActionResult> {
   const dropoff = rootPath("dropoff")
   return eachFile(rootKey, folder, names, async (file, name) => {
     const before = await fs.stat(file)
@@ -136,12 +136,12 @@ async function placeReplacing(src: string, dir: string, name: string, move: bool
 }
 
 /**
- * Moves or copies files into a user's folder in User Temp Storage (created if
- * needed). Unlike every other operation here this replaces a file of the same
- * name: sending a photo again updates what's there.
+ * Moves or copies files into a user's folder in User Temp Storage or the Video
+ * Editing Inbox (created if needed). Unlike every other operation here this
+ * replaces a file of the same name: sending a photo again updates what's there.
  */
-export async function sendToTemp(rootKey: RootKey, folder: string[], names: string[], userFolder: string, mode: "move" | "copy"): Promise<ActionResult> {
-  const dir = resolveInside(rootPath("temp"), [userFolder])
+export async function sendToTemp(rootKey: RootKey, folder: string[], names: string[], userFolder: string, mode: "move" | "copy", dest: NoteRootKey = "temp"): Promise<ActionResult> {
+  const dir = resolveInside(rootPath(dest), [userFolder])
   if (!dir) return { ok: [], failed: names.map((name) => ({ name, error: "Invalid destination." })) }
   return eachFile(rootKey, folder, names, (file, name) => placeReplacing(file, dir, path.basename(name), mode === "move"))
 }

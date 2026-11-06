@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, Download, FolderOutput, Inbox, MessageSquareText, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { ChevronLeft, ChevronRight, Clapperboard, Download, FolderOutput, Inbox, MessageSquareText, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { FileEntry } from "@/lib/library-server"
@@ -30,6 +30,8 @@ type Props = {
   notes?: Record<string, TempNoteView>
   /** Opens "Send to User Temp Storage" for this photo. */
   onTemp?: (name: string) => void
+  /** Opens "Send to Video Editing" for this photo. */
+  onVideo?: (name: string) => void
 }
 
 /** rootDir + folder + name, with the separator rootDir already uses. */
@@ -100,7 +102,7 @@ function Picture({ root, folder, item, onBackdrop }: { root: string; folder: str
   )
 }
 
-export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate, notes, onTemp }: Props) {
+export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit, busy, onIndex, onClose, onMove, onDelete, onRotate, notes, onTemp, onVideo }: Props) {
   const item = items[index]
   const touchX = useRef<number | null>(null)
 
@@ -154,6 +156,9 @@ export function Lightbox({ root, rootDir, folder, items, index, canMove, canEdit
         )}
         {onTemp && (
           <IconButton label="Move or copy to User Temp Storage" onClick={() => onTemp(item.name)} disabled={busy}><Inbox className="h-4 w-4" /></IconButton>
+        )}
+        {onVideo && (
+          <IconButton label="Move or copy to Video Editing" onClick={() => onVideo(item.name)} disabled={busy}><Clapperboard className="h-4 w-4" /></IconButton>
         )}
         {canMove && (
           <IconButton label="Move to Sort Dropoff (M)" onClick={() => onMove(item.name)} disabled={busy}><FolderOutput className="h-4 w-4" /></IconButton>

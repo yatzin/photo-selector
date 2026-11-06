@@ -11,7 +11,7 @@ import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, SCAN_RO
 // development PHOTOS_UPLOAD_DIR / PHOTOS_DROPOFF_DIR can point at the share.
 // User Temp Storage lives in the app's own data volume, next to the cache.
 
-const DEFAULT_ROOTS: Record<Exclude<RootKey, "temp">, string> = {
+const DEFAULT_ROOTS: Record<"upload" | "dropoff", string> = {
   upload: "/photos/upload",
   dropoff: "/photos/dropoff",
 }
@@ -20,24 +20,32 @@ const ENV_NAMES: Record<RootKey, string> = {
   upload: "PHOTOS_UPLOAD_DIR",
   dropoff: "PHOTOS_DROPOFF_DIR",
   temp: "PHOTOS_TEMP_DIR",
+  "video-inbox": "PHOTOS_VIDEO_INBOX_DIR",
+  "video-projects": "PHOTOS_VIDEO_PROJECTS_DIR",
 }
 
 export const TEMP_DIR_NAME = "UserTempStorage"
+export const VIDEO_DIR_NAME = "VideoEditing"
 
 export function rootPath(key: RootKey): string {
   const fromEnv = process.env[ENV_NAMES[key]]
   if (fromEnv) return path.resolve(fromEnv)
   // Beside the cache: /data/UserTempStorage in the container, ./.data/UserTempStorage locally.
   if (key === "temp") return path.join(path.dirname(cacheDir()), TEMP_DIR_NAME)
+  // Video Editing: /data/VideoEditing/Inbox and /Projects in the container.
+  if (key === "video-inbox") return path.join(path.dirname(cacheDir()), VIDEO_DIR_NAME, "Inbox")
+  if (key === "video-projects") return path.join(path.dirname(cacheDir()), VIDEO_DIR_NAME, "Projects")
   return path.resolve(DEFAULT_ROOTS[key])
 }
 
-/** Creates User Temp Storage when it's missing (at startup; user folders are made as needed). */
+/** Creates User Temp Storage and the Video Editing folders when missing (at startup; user folders are made as needed). */
 export async function ensureTempRoot(): Promise<void> {
-  try {
-    await fs.mkdir(rootPath("temp"), { recursive: true })
-  } catch (error) {
-    console.error(`[storage] could not create ${rootPath("temp")}:`, error)
+  for (const key of ["temp", "video-inbox", "video-projects"] as const) {
+    try {
+      await fs.mkdir(rootPath(key), { recursive: true })
+    } catch (error) {
+      console.error(`[storage] could not create ${rootPath(key)}:`, error)
+    }
   }
 }
 

@@ -59,4 +59,6 @@ ENV PHOTOS_UPLOAD_DIR=/photos/upload
 ENV PHOTOS_DROPOFF_DIR=/photos/dropoff
 ENV PHOTOS_CACHE_DIR=/data/cache
 ENV PHOTOS_TEMP_DIR=/data/UserTempStorage
+ENV PHOTOS_VIDEO_INBOX_DIR=/data/VideoEditing/Inbox
+ENV PHOTOS_VIDEO_PROJECTS_DIR=/data/VideoEditing/Projects
 ENTRYPOINT ["./docker-entrypoint.sh"]

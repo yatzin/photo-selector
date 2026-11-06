@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { FolderInput, FolderOutput, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
+import { Clapperboard, FolderInput, FolderOutput, FolderKanban, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
 import type { RootCounts } from "@/lib/library-server"
 
 type NavItem = { href: string; label: string; icon: React.ElementType; badge?: number; subtitle?: string }
@@ -14,6 +14,12 @@ const navItems: (NavItem & { root: keyof RootCounts })[] = [
   { root: "upload", href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
   { root: "dropoff", href: "/library/dropoff", label: "Sort Dropoff", icon: FolderOutput },
   { root: "temp", href: "/library/temp", label: "User Temp Storage", icon: Inbox },
+]
+
+// Tools: Video Editing, with its two folders.
+const toolItems: (NavItem & { root: keyof RootCounts })[] = [
+  { root: "video-inbox", href: "/library/video-inbox", label: "Inbox", icon: Inbox },
+  { root: "video-projects", href: "/library/video-projects", label: "Projects", icon: FolderKanban },
 ]
 
 const itemCount = (n: number) => `${n.toLocaleString()} item${n === 1 ? "" : "s"}`
@@ -69,6 +75,14 @@ function SidebarContent({ onNavClick, aiPending, counts }: { onNavClick?: () => 
         {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
         <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Review</p>
         <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} />
+        <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Tools</p>
+        <p className="flex items-center gap-3 px-3 pt-1 text-sm font-medium">
+          <Clapperboard className="h-[18px] w-[18px] shrink-0 text-muted-foreground" strokeWidth={1.5} />
+          Video Editing
+        </p>
+        <div className="ml-4 flex flex-col gap-1 border-l pl-2">
+          {toolItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
+        </div>
       </nav>
       <nav className="flex flex-col gap-1 border-t pt-3 mt-3">
         {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} />)}
