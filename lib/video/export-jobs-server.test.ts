@@ -33,6 +33,11 @@ async function waitDone(user: string, jobId: string) {
   throw new Error("job never finished")
 }
 
+/** A job reports done or failed before its best-effort cleanup has finished, so wait for that. */
+async function eventually(check: () => boolean | Promise<boolean>) {
+  for (let i = 0; i < 100 && !(await check()); i++) await tick()
+}
+
 let n = 0
 async function makeProject(withClips = true, withFile = true): Promise<string> {
   const name = `Proj${n++}`
@@ -166,6 +171,7 @@ describe("startExport", () => {
     const s = await waitDone("mike", r.jobId)
     expect(s).toMatchObject({ state: "failed", error: "Invalid argument" })
     expect(s.output).toBeUndefined()
+    await eventually(async () => (await fs.readdir(outDir(folder))).length === 0 && !fsSync.existsSync(script))
     expect(await fs.readdir(outDir(folder))).toEqual([])
     expect(fsSync.existsSync(script)).toBe(false)
   })
@@ -181,6 +187,7 @@ describe("startExport", () => {
     if ("error" in r) throw new Error(r.error)
     await waitDone("mike", r.jobId)
     expect(script).not.toBe("")
+    await eventually(() => !fsSync.existsSync(script))
     expect(fsSync.existsSync(script)).toBe(false)
   })
 
