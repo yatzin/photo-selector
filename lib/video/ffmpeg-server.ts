@@ -1,7 +1,8 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { allClips, assetKind, clipLength, totalLength, type Clip, type Project } from "./project"
+import { allClips, assetKind, clipLength, totalLength, trackStarts, type Clip, type Project } from "./project"
+import { IDENTITY, isIdentity, type Transform } from "./transform"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -27,6 +28,74 @@ export function probeMedia(file: string): Promise<{ duration: number; hasAudio: 
 }
 
 const num = (n: number) => String(Number(n.toFixed(3)))
+/** A transform fraction: six decimals keep the placement well under a pixel. */
+const frac = (n: number) => String(Number(n.toFixed(6)))
+const signed = (n: number) => `${n < 0 ? "-" : "+"}${frac(Math.abs(n))}`
+
+/**
+ * The overlay filter's x and y for a clip's picture (ffmpeg expressions in W,
+ * H: the canvas, and w, h: the cropped picture), the same place clipRect
+ * gives the visible strip: centred, moved by fractions of the canvas, and the
+ * crop's top cut back in (h / keep is the picture's height before the crop).
+ */
+export function overlayPosition(t: Transform): { x: string; y: string } {
+  const keep = frac(1 - t.cropTop - t.cropBottom)
+  return { x: `(W-w)/2${signed(t.x)}*W`, y: `(H-h/${keep})/2${signed(t.y)}*H+${frac(t.cropTop)}*h/${keep}` }
+}
+
+/**
+ * The graph when any clip is moved, scaled or cropped: every clip, base track
+ * included, is fit inside the canvas, scaled (to even sizes), cropped top and
+ * bottom, and overlaid on a black canvas the timeline's length at its place,
+ * track by track (lowest first) and enabled for its own span. Audio as in the
+ * layered graph: each heard clip's sound delayed to its start, over silence.
+ */
+function transformedGraph(p: Project, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
+  const { width: W, height: H, fps } = p
+  const inputs: string[][] = []
+  const parts: string[] = []
+  const total = num(totalLength(p))
+  parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
+  const mix = ["[asil]"]
+  const clips = p.tracks.flatMap((track, ti) => {
+    const starts = trackStarts(track, ti === 0)
+    return track.clips.map((c, k) => ({ c, start: starts[k], muted: Boolean(track.muted) }))
+  })
+  let under = "[bg]"
+  clips.forEach(({ c, start, muted }, n) => {
+    const i = inputs.length
+    const file = fileFor(c)
+    const t = c.transform ?? IDENTITY
+    const keep = 1 - t.cropTop - t.cropBottom
+    const place = [
+      `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
+      `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
+      ...(t.cropTop > 0 || t.cropBottom > 0 ? [`crop=iw:round(ih*${frac(keep)}/2)*2:0:round(ih*${frac(t.cropTop)}/2)*2`] : []),
+      "setsar=1",
+    ].join(",")
+    const shift = `setpts=PTS+${num(start)}/TB`
+    if (isImage(c)) {
+      inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=yuv420p,${shift}[v${i}]`)
+    } else {
+      inputs.push(["-i", file])
+      parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
+      if (!muted && p.assets[c.asset]?.hasAudio !== false) {
+        parts.push(
+          `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=${Math.round(start * 48000)}S:all=1[a${i}]`
+        )
+        mix.push(`[a${i}]`)
+      }
+    }
+    const { x, y } = overlayPosition(t)
+    const out = n === clips.length - 1 ? "[v]" : `[l${n + 1}]`
+    parts.push(`${under}[v${i}]overlay=x=${x}:y=${y}:eval=init:enable='between(t,${num(start)},${num(start + clipLength(c))})':eof_action=pass${out}`)
+    under = out
+  })
+  parts.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[asil]`)
+  parts.push(`${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0[a]`)
+  return { graph: parts.join(";"), inputs }
+}
 
 /**
  * The filtergraph text for the whole timeline, plus each clip's input
@@ -37,7 +106,9 @@ const num = (n: number) => String(Number(n.toFixed(3)))
  * the base stream goes over a black canvas the timeline's length, and every
  * overlay clip (shifted to its start) over that, lower tracks first, enabled
  * for its own span. Audio is the base track's plus each unmuted overlay clip's
- * (delayed to its start), mixed over silence the timeline's length.
+ * (delayed to its start), mixed over silence the timeline's length. When any
+ * clip has a transform, every clip is placed on the canvas instead
+ * (transformedGraph); with none the graph is the same as it always was.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -54,6 +125,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
     const asset = p.assets[c.asset]
     return asset !== undefined && assetKind(asset) === "image"
   }
+  if (allClips(p).some((c) => !isIdentity(c.transform))) return transformedGraph(p, fileFor, isImage)
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or the track is muted).
   const [baseTrack, ...overlays] = p.tracks

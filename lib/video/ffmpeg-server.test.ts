@@ -4,8 +4,9 @@ import os from "os"
 import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { buildExportArgs, buildExportGraph, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
+import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
 import { newProject, totalLength, type Clip, type Project } from "./project"
+import { clipRect, IDENTITY, type Transform } from "./transform"
 
 describe("parseProbe", () => {
   it("reads duration and audio", () => {
@@ -171,6 +172,99 @@ describe("buildExportArgs with layers", () => {
     expect(g).toContain("[l1][v1]overlay=enable='between(t,6,7)':eof_action=pass[v]")
     expect(g).not.toContain("concat")
     expect(g).toContain("[asil]amix=inputs=1:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+})
+
+describe("buildExportArgs with transforms", () => {
+  const half: Transform = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
+  const fit = "scale=1920:1080:force_original_aspect_ratio=decrease,setsar=1,fps=30"
+  function project(tracks: Project["tracks"]): Project {
+    return {
+      ...newProject("T"),
+      assets: { a: { file: "a.mp4", duration: 5, hasAudio: true }, i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" }, s: { file: "s.mp4", duration: 5, hasAudio: false } },
+      tracks,
+    }
+  }
+  const tFiles = { a: "/x/a.mp4", i: "/x/i.webp", s: "/x/s.mp4" }
+
+  it("overlays a transformed base clip on the black canvas: fit, scale, crop, then place", () => {
+    const p = project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 1, out: 4, transform: half }, { id: "c2", asset: "s", in: 0, out: 2 }] }])
+    const g = graph(buildExportArgs(p, tFiles, "o"))
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=5,format=yuv420p[bg]")
+    expect(g).toContain(`[0:v]trim=1:4,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2,crop=iw:round(ih*0.7/2)*2:0:round(ih*0.1/2)*2,setsar=1,setpts=PTS+0/TB[v0]`)
+    expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0.25*W:y=(H-h/0.7)/2-0.1*H+0.1*h/0.7:eval=init:enable='between(t,0,3)':eof_action=pass[l1]")
+    // The untransformed base clip after it is placed as fit, from its own start.
+    expect(g).toContain(`[1:v]trim=0:2,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*1/2)*2:trunc(ih*1/2)*2,setsar=1,setpts=PTS+3/TB[v1]`)
+    expect(g).toContain("[l1][v1]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,3,5)':eof_action=pass[v]")
+    expect(g).not.toContain("concat")
+    expect(g).not.toContain("pad=")
+    // Audio: the clip's own, delayed to its start, over silence; the silent asset adds none.
+    expect(g).toContain("[0:a]atrim=1:4,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=0S:all=1[a0]")
+    expect(g).not.toContain("[1:a]")
+    expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:5[asil]")
+    expect(g).toContain("[asil][a0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("puts every clip on the canvas in track order when only an overlay is transformed", () => {
+    const p = project([
+      { id: "t1", muted: true, clips: [{ id: "c1", asset: "a", in: 0, out: 4 }] },
+      { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1, transform: { ...IDENTITY, scale: 0.3, x: -0.3 } }] },
+      { id: "t3", clips: [{ id: "v", asset: "a", in: 2, out: 3, start: 2.5 }] },
+    ])
+    const args = buildExportArgs(p, tFiles, "o")
+    const g = graph(args)
+    expect(args.slice(args.indexOf("/x/i.webp") - 7, args.indexOf("/x/i.webp") + 1)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2", "-i", "/x/i.webp"])
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=4,format=yuv420p[bg]")
+    expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,0,4)':eof_action=pass[l1]")
+    expect(g).toContain(`[1:v]setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.3/2)*2:trunc(ih*0.3/2)*2,setsar=1,format=yuv420p,setpts=PTS+1/TB[v1]`)
+    expect(g).toContain("[l1][v1]overlay=x=(W-w)/2-0.3*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,1,3)':eof_action=pass[l2]")
+    expect(g).toContain("[l2][v2]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,2.5,3.5)':eof_action=pass[v]")
+    // The muted base is silent; the unmuted overlay video is heard from its start.
+    expect(g).not.toContain("[0:a]")
+    expect(g).toContain("[2:a]atrim=2:3,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=120000S:all=1[a2]")
+    expect(g).toContain("[asil][a2]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("builds exactly the old graph when every transform is the identity", () => {
+    const plain = twoClips()
+    const identity = { ...plain, tracks: [{ ...plain.tracks[0], clips: plain.tracks[0].clips.map((c) => ({ ...c, transform: { ...IDENTITY } })) }] }
+    expect(buildExportGraph(identity, files)).toEqual(buildExportGraph(plain, files))
+    const layers: Project = {
+      ...plain,
+      tracks: [plain.tracks[0], { id: "t2", clips: [{ id: "o", asset: "a", in: 0, out: 1, start: 1, transform: { ...IDENTITY } }] }],
+    }
+    const bare: Project = { ...layers, tracks: [plain.tracks[0], { id: "t2", clips: [{ id: "o", asset: "a", in: 0, out: 1, start: 1 }] }] }
+    expect(buildExportGraph(layers, files)).toEqual(buildExportGraph(bare, files))
+  })
+
+  it("places the picture where the preview does (overlay x/y against clipRect)", () => {
+    const evaluate = (expr: string, v: Record<string, number>) => new Function(...Object.keys(v), `return ${expr}`)(...Object.values(v)) as number
+    const canvases = [[1920, 1080], [1080, 1920], [1280, 720], [1000, 1000]]
+    const aspects = [16 / 9, 9 / 16, 4 / 3, 1, 2.39]
+    const transforms: Transform[] = [
+      IDENTITY,
+      { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 },
+      { x: -1.3, y: 0.7, scale: 2.5, cropTop: 0, cropBottom: 0.45 },
+      { x: 0.123456, y: -0.654321, scale: 0.1234, cropTop: 0.333, cropBottom: 0.5 },
+      { x: 0, y: 0, scale: 5, cropTop: 0.9, cropBottom: 0.05 },
+    ]
+    for (const [W, H] of canvases) for (const a of aspects) for (const t of transforms) {
+      const r = clipRect(a, W, H, t)
+      const { x, y } = overlayPosition(t)
+      const keep = 1 - t.cropTop - t.cropBottom
+      // Exact sizes: the formulas match clipRect to the float.
+      expect(evaluate(x, { W, H, w: r.w, h: r.h * keep })).toBeCloseTo(r.visible.x, 3)
+      expect(evaluate(y, { W, H, w: r.w, h: r.h * keep })).toBeCloseTo(r.visible.y, 3)
+      // ffmpeg's whole-pixel sizes (fit rounded, even scale, even crop) land within 3 px of the
+      // preview while at least half the height is kept (the crop's rounding grows as 1/keep).
+      if (keep < 0.5) continue
+      const fit = clipRect(a, W, H, IDENTITY)
+      const sw = Math.floor((Math.round(fit.w) * t.scale) / 2) * 2
+      const sh = Math.floor((Math.round(fit.h) * t.scale) / 2) * 2
+      const ch = keep < 1 ? Math.round((sh * keep) / 2) * 2 : sh
+      expect(Math.abs(evaluate(x, { W, H, w: sw, h: ch }) - r.visible.x)).toBeLessThanOrEqual(3)
+      expect(Math.abs(evaluate(y, { W, H, w: sw, h: ch }) - r.visible.y)).toBeLessThanOrEqual(3)
+    }
   })
 })
 
@@ -349,6 +443,33 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     expect(Math.max(...(await centre(r.out, 2.5)))).toBeLessThan(40)
     expect((await centre(r.out, 3.5))[0]).toBeGreaterThan(150)
     expect(r.info).toMatch(/Stream #[^\n]*Audio:/)
+  }, 60_000)
+
+  it("scales, moves and crops a base clip over black, keeping its length and audio", async () => {
+    const { blue } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Transform"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true } },
+      // Half size, moved right a quarter of the width, bottom half cut: the strip is x 960-1920, y 270-540.
+      tracks: base([{ id: "1", asset: "v", in: 0, out: 3, transform: { x: 0.25, y: 0, scale: 0.5, cropTop: 0, cropBottom: 0.5 } }]),
+    }
+    const r = await exportProject(p, { v: blue }, "transform.mp4")
+    expect(Math.abs(r.duration - 3)).toBeLessThan(0.3)
+    expect(r.info).toMatch(/Video: h264[^\n]*1920x1080/)
+    const at = async (x: number, y: number) => {
+      const px = await ffmpeg(["-ss", "1", "-i", r.out, "-frames:v", "1", "-vf", `crop=2:2:${x}:${y},format=rgb24`, "-f", "rawvideo", "-"])
+      return [px.stdout[0], px.stdout[1], px.stdout[2]]
+    }
+    const inside = await at(1440, 400)
+    expect(inside[2]).toBeGreaterThan(150)
+    expect(inside[0]).toBeLessThan(100)
+    // Left of it, below the strip (cropped away) and above it: the black canvas.
+    for (const [x, y] of [[300, 540], [1440, 700], [1440, 200], [940, 400]]) expect(Math.max(...(await at(x, y)))).toBeLessThan(40)
+    // The sound runs the whole length.
+    const audio = (await ffmpeg(["-i", r.out, "-map", "0:a", "-f", "null", "-"])).stderr
+    let last = 0
+    for (const m of audio.matchAll(/time=(\d+):(\d+):(\d+\.\d+)/g)) last = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
+    expect(Math.abs(last - 3)).toBeLessThan(0.3)
   }, 60_000)
 
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {
