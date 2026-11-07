@@ -165,7 +165,9 @@ pick whose folder. You can copy instead of move.
 
 **Projects.** Each one is a folder, `Projects/<user>/<project>/`:
 
-- `project.json`: the timeline
+- `project.json`: the timeline. Version 2 stores tracks (layers); a project
+  saved before layers (version 1, one list of clips) opens with those clips on
+  the base track and is saved as version 2 from the next edit
 - `assets/`: the clips and images the project uses
 - `output/`: exported videos
 - `config/export.json`: export size and frame rate
@@ -183,7 +185,22 @@ to import the new one).
 - An image starts as a 5 s clip. Drag either edge to stretch or shorten it,
   from 0.2 s up to 10 minutes. It exports letterboxed with silence.
 - Drag a clip's edges to trim it, or drag the clip to reorder.
-- **S** splits at the playhead, **Delete** removes the selected clip, **Space** plays.
+- **Layers.** The timeline has up to four tracks: V1 at the bottom is the
+  base, V2 to V4 above it are layers. Whatever plays on a higher layer covers
+  the ones below (full frame, letterboxed), and every layer's sound is mixed.
+  Drop media onto a layer's row to put it there, or onto the dashed row above
+  the top layer (it shows while you drag) to make a new layer. The **+** at
+  the left of the ruler adds an empty layer; an empty layer has an **×** to
+  remove it. Drag a clip up or down to move it to another layer.
+- The base track (V1) keeps its clips end to end: removing or trimming a clip
+  closes the gap. On a layer, clips stay where you put them and gaps are fine.
+  Dragging a layer clip sideways moves it freely; it snaps to the playhead,
+  the start and other clips' edges. Clips on one layer never overlap: a clip
+  dropped on another slides to the free space after it. Trimming a layer
+  clip's left edge keeps the picture where it was.
+- The speaker button beside a track mutes it in the preview and the export.
+- **S** splits the selected clip at the playhead (or the top clip there),
+  **Delete** removes the selected clip, **Esc** deselects, **Space** plays.
 - Undo and redo (top bar, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Shift+Z** or **Ctrl+Y**)
   cover the last 50 timeline edits. Imports aren't undone: an undone clip's
   file stays in Project media.

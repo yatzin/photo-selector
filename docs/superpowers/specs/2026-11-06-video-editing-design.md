@@ -33,14 +33,18 @@ feel like a polished consumer editor (iPhone / CapCut class), not a form.
 `Projects/<user>/<project>/` (user folder name from `tempFolderName`; project folder name is the project name, cleaned the same way):
 
 ```
-project.json   the timeline: clips, trims, order, settings (the only file the editor reads and writes)
+project.json   the timeline: tracks, clips, trims, order, settings (the only file the editor reads and writes)
 assets/        clips imported from the Inbox (copied in)
 output/        rendered videos, one file per export, never overwritten
 config/        export.json: resolution, fps, codec presets (reusable when templating)
 ```
 
-`project.json` is versioned (`"version": 1`) and holds ordered clips as
-`{ id, asset, in, out }` (seconds into the asset). Writes are atomic (temp file then rename).
+`project.json` is versioned (`"version": 2`) and holds `tracks`, each
+`{ id, muted?, clips }`, with clips as `{ id, asset, in, out, start? }`
+(seconds into the asset; `start` is the timeline position, on overlay tracks
+only). A version 1 file (one flat `clips` list) is read as version 2 with
+those clips on the base track `t1`, and saved as version 2 from then on.
+Writes are atomic (temp file then rename).
 
 ## Decisions made with the user
 
@@ -59,7 +63,9 @@ config/        export.json: resolution, fps, codec presets (reusable when templa
 - Autosave to `project.json` after each edit, debounced.
 - Routes: `/tools/video-editing` (project list), `/tools/video-editing/<project>` (editor). Sidebar "Video Editing" label links to the list.
 - Access: a user sees and edits only their own `Projects/<user>/` folder in this tool.
-- `project.json` in v1 holds one flat `clips` list: no tracks and no `transitionIn` yet. The file carries `version: 1`, so v2 can migrate it when tracks and transitions arrive.
+- ~~`project.json` in v1 holds one flat `clips` list.~~ Superseded: version 2 has `tracks` (layers), up to 4 (`MAX_TRACKS`). Track 0 is the base: magnetic, clips end to end, edits ripple. Tracks 1 to 3 are overlays: clips sit at their own `start`, gaps allowed, no overlaps (a drop or move slides to the next free slot after the clip it would overlap). A higher track draws over a lower one, opaque and full frame (letterboxed, no position, scale or opacity yet); every unmuted track's audio is mixed. The timeline's length is the latest clip end on any track. Undo covers `{ tracks }`, mute toggles included. `transitionIn` still isn't there.
+- Export with layers: the base track is concatenated as before (a single-track project exports exactly as it did), laid over a black canvas the timeline's length, and each overlay clip, shifted to its start, overlaid in track order with `enable=between(t,start,end)`. Audio mixes the base track and each unmuted overlay clip (delayed with `adelay`) over silence the timeline's length (`amix`, `normalize=0`).
+- Preview with layers: each track has its own pair of video elements (8 at most); all play from one clock, the topmost track with a clip is shown and the others are heard. The lowest track playing a healthy video drives the clock; other tracks are re-seeked if they drift more than 0.3 s.
 - `config/export.json` is written when a project is created, but export reads width, height and fps from `project.json`. The config file is kept for export templating later.
 - Projects are keyed by the user's display-name folder (`Projects/<display name>/`), the same way User Temp Storage keys its folders.
 - In the library, Video Editing Projects is read-only: no move, delete or rotate, and Move to Video Editing/Temp only copies from it. The editor owns those files.
