@@ -256,11 +256,12 @@ export function TransformOverlay({
 
   return (
     <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas}>
+      {/* 2 px, centred on the line: a centred 1 px line often straddles two device pixels and blurs to half strength, faint over a picture. */}
       {guides?.x.map((x) => (
-        <div key={`x${x}`} aria-hidden className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-fuchsia-400" style={{ left: pct(x, W) }} />
+        <div key={`x${x}`} aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-fuchsia-400" style={{ left: pct(x, W) }} />
       ))}
       {guides?.y.map((y) => (
-        <div key={`y${y}`} aria-hidden className="pointer-events-none absolute inset-x-0 h-px -translate-y-1/2 bg-fuchsia-400" style={{ top: pct(y, H) }} />
+        <div key={`y${y}`} aria-hidden className="pointer-events-none absolute inset-x-0 h-0.5 -translate-y-1/2 bg-fuchsia-400" style={{ top: pct(y, H) }} />
       ))}
       {selected && v && (
         <div
