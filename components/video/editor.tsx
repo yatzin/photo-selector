@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -12,12 +12,14 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, removeAsset, removeClip, resolveStart, setClipMuted, setTransform, splitClip,
-  totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
+  addClip, addTextClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, isTextClip, MAX_TRACKS, removeAsset, removeClip, resolveStart,
+  setClipMuted, setClipText, setTransform, splitClip, totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
+import { DEFAULT_TEXT } from "@/lib/video/text"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
+import { EditTextDialog } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
@@ -70,6 +72,9 @@ export function Editor({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Undo can take away the selected clip: drop a selection that no longer exists.
   if (selectedId !== null && !allClips(project).some((c) => c.id === selectedId)) setSelectedId(null)
+  // The text clip whose Edit text dialog is open.
+  const [textFor, setTextFor] = useState<string | null>(null)
+  const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
 
   /** One user gesture: one undo step. Repeats with the same `group` in quick succession make one step together. */
   const edit = useCallback((change: (p: Project) => Project, group?: string) => {
@@ -344,6 +349,30 @@ export function Editor({
     }
   }
 
+  /**
+   * Add text (the toolbar): a "Text" clip DEFAULT_IMAGE long at the playhead,
+   * white, centred, selected, with its Edit text dialog open. It goes on the
+   * selected clip's layer when that's free at the playhead for its length (not
+   * a snapped layer 1); else on the lowest layer above the base free there, a
+   * new layer when none is, else on the base (appended when it's snapped, else
+   * slid clear). So it lands at the playhead over the picture. One undo step.
+   */
+  function addText() {
+    const at = playhead
+    const id = newId()
+    edit((p) => {
+      const freeAt = (i: number) => resolveStart(p.tracks[i].clips, DEFAULT_IMAGE, at) === at
+      const selected = selectedId ? p.tracks.findIndex((t) => t.clips.some((c) => c.id === selectedId)) : -1
+      if (selected >= 0 && !(selected === 0 && isMagnetic(p)) && freeAt(selected)) return addTextClip(p, DEFAULT_TEXT, selected, { start: at }, id)
+      const free = p.tracks.findIndex((_, i) => i > 0 && freeAt(i))
+      if (free > 0) return addTextClip(p, DEFAULT_TEXT, free, { start: at }, id)
+      if (p.tracks.length < MAX_TRACKS) return addTextClip(p, DEFAULT_TEXT, p.tracks.length, { start: at }, id)
+      return addTextClip(p, DEFAULT_TEXT, 0, { start: isMagnetic(p) ? trackEnd(p.tracks[0]) : at }, id)
+    })
+    setSelectedId(id)
+    setTextFor(id)
+  }
+
   function addToTimeline(assetId: string) {
     const id = newId()
     // After the base track's last clip.
@@ -505,7 +534,7 @@ export function Editor({
             className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
             style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
-            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} />
+            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={setTextFor} />
           </div>
           <ResizeHandle
             label="Resize preview"
@@ -545,6 +574,9 @@ export function Editor({
                 <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
                   <Trash2 className="h-4 w-4" />
                 </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
+                  <Type className="h-4 w-4" /> Add text
+                </Button>
                 {transformed && (
                   <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
                     <RotateCcw className="h-4 w-4" /> Reset
@@ -581,10 +613,21 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={setTextFor} />
           </div>
         </div>
       </div>
+      {textClip && isTextClip(textClip) && (
+        <EditTextDialog
+          key={textClip.id}
+          text={textClip.text}
+          onApply={(t) => {
+            const id = textClip.id
+            edit((p) => setClipText(p, id, t))
+          }}
+          onClose={() => setTextFor(null)}
+        />
+      )}
     </div>
   )
 }

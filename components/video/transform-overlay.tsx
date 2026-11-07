@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react"
 import { FlipHorizontal2, FlipVertical2, RotateCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
-  angleFrom, clipRect, contentCentre, dragCorner, dragEdge, dragMove, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
-  snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Corner, type Edge, type Guides, type Transform,
+  angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
+  snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
 } from "@/lib/video/transform"
 
 // The layer over the preview canvas that edits where a clip's picture sits.
@@ -24,6 +24,8 @@ import {
 // sit outside the frame: Rotate at the top right (drag round the centre,
 // 15 degree steps unless Alt is held, double-click for 0, arrows 1 degree,
 // Shift 15) and the two flips at the top left (each click one undo step).
+// A double-click on a clip (the selected one first, else the topmost there)
+// goes to onDoubleClickClip.
 
 const DRAG_THRESHOLD = 3 // screen px before a press becomes a drag
 const SNAP_PX = 6 // screen px within which an edge or centre snaps to the canvas's
@@ -31,7 +33,8 @@ const MIN_SIDE_FOR_MIDDLE = 48 // screen px: a shorter side hides its middle cro
 const FLOAT_OFFSET = 22 // screen px out from a frame corner, along the frame's own axes, to a floating button's centre
 const FLOAT_SIZE = 24 // screen px, a floating button's diameter
 
-export type TransformTarget = { id: string; label: string; aspect: number; transform: Transform }
+/** `aspect`: the picture's aspect, or a text's content box (lib/video/transform's Content). */
+export type TransformTarget = { id: string; label: string; aspect: Content; transform: Transform }
 
 type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge } | { kind: "rotate" }
 
@@ -55,7 +58,7 @@ const isSide = (edge: Edge) => edge === "left" || edge === "right"
 const pct = (v: number, of: number) => `${(v / of) * 100}%`
 
 export function TransformOverlay({
-  width: W, height: H, displayWidth, room, selected, hitTest, onSelect, onDraft, onCommit, onGesture,
+  width: W, height: H, displayWidth, room, selected, hitTest, onSelect, onDraft, onCommit, onGesture, onDoubleClickClip,
 }: {
   /** The canvas (project) size in px; the overlay covers the canvas on screen. */
   width: number
@@ -75,6 +78,8 @@ export function TransformOverlay({
   onCommit: (id: string, transform: Transform, group?: string) => void
   /** A drag started moving or Alt changed during it ({ snapping }), or it ended (null). */
   onGesture?: (state: GestureState) => void
+  /** A double-click on a clip's picture (not on a handle or button). */
+  onDoubleClickClip?: (id: string) => void
 }) {
   const root = useRef<HTMLDivElement>(null)
   const stopGesture = useRef<(() => void) | null>(null)
@@ -284,6 +289,14 @@ export function TransformOverlay({
     onCommit(id, t, `transform-key-${id}`)
   }
 
+  /** A double-click on the canvas: the selected clip when it's under the pointer, else the topmost one there. Handles and buttons keep theirs. */
+  function doubleClick(e: React.MouseEvent) {
+    if (!onDoubleClickClip || (e.target instanceof Element && e.target.closest("button"))) return
+    const p = toCanvas(e.clientX, e.clientY)
+    const id = selected && containsPoint(selected.aspect, W, H, selected.transform, p.x, p.y) ? selected.id : hitTest(p.x, p.y)?.id
+    if (id) onDoubleClickClip(id)
+  }
+
   /** Rotate handle and flip buttons: the press is theirs alone (no move, no select). */
   const own = (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -331,7 +344,7 @@ export function TransformOverlay({
     "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full bg-white text-neutral-900 shadow-[0_1px_4px_rgb(0_0_0/0.45)] ring-1 ring-black/25 outline-none hover:bg-neutral-100 focus-visible:ring-2 focus-visible:ring-ring"
 
   return (
-    <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas}>
+    <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas} onDoubleClick={doubleClick}>
       {/* 2 px, centred on the line: a centred 1 px line often straddles two device pixels and blurs to half strength, faint over a picture. */}
       {guides?.x.map((x) => (
         <div key={`x${x}`} aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-fuchsia-400" style={{ left: pct(x, W) }} />

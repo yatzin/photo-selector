@@ -1,12 +1,12 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Film, Image as ImageIcon, Magnet, Plus, Volume2, VolumeX, X } from "lucide-react"
+import { Film, Image as ImageIcon, Magnet, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip, removeClip,
-  removeTrack, resolveStart, setBaseMagnetic, setClipMuted, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, isTextClip, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip,
+  removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setClipText, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
 import { newId } from "@/lib/video/ids"
@@ -39,7 +39,9 @@ import { Thumb } from "./thumb"
 // (Shift: up and down). A clip with sound has its own mute button and, when
 // waveforms are on, its waveform over the thumbnail. Right-clicking a clip
 // opens its menu (split at the playhead, delete, mute, and for an image Edit
-// length..., a dialog for its start and length).
+// length..., a dialog for its start and length). A text clip is a coloured
+// block with its text; it has Edit length... too, Edit text... (also a
+// double-click) and Horizontal / Vertical (letters across or stacked).
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -77,7 +79,7 @@ function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: n
 }
 
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -100,6 +102,8 @@ export function Timeline({
   onChange: (edit: (p: Project) => Project) => void
   /** An Inbox file was dropped: import it, then add it at `target`. */
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
+  /** Open a text clip's Edit text dialog. */
+  onEditText: (id: string) => void
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
@@ -619,7 +623,7 @@ export function Timeline({
 
   /** What a clip's menu offers; each kind of clip adds its own items here. */
   function menuItems(clip: Clip): ClipMenuItem[] {
-    const asset = project.assets[clip.asset]
+    const asset = isTextClip(clip) ? undefined : project.assets[clip.asset]
     const image = asset !== undefined && assetKind(asset) === "image"
     const audible = asset !== undefined && !image && asset.hasAudio
     const id = clip.id
@@ -646,7 +650,18 @@ export function Timeline({
       },
     ]
     if (audible) items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
-    if (image) items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
+    if (image || isTextClip(clip)) items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
+    if (isTextClip(clip)) {
+      const text = clip.text
+      items.push(
+        { label: "Edit text...", onSelect: () => onEditText(id) },
+        ...(["horizontal", "vertical"] as const).map((orientation) => ({
+          label: orientation === "horizontal" ? "Horizontal" : "Vertical",
+          checked: text.orientation === orientation,
+          onSelect: () => onChange((p) => setClipText(p, id, { ...text, orientation })),
+        }))
+      )
+    }
     return items
   }
 
@@ -794,7 +809,8 @@ export function Timeline({
                   )}
                   {track.clips.map((clip, k) => {
                     const moving = drag?.id === clip.id
-                    const asset = project.assets[clip.asset]
+                    const text = isTextClip(clip) ? clip.text : null
+                    const asset = text ? undefined : project.assets[clip.asset]
                     const file = asset?.file
                     const image = asset !== undefined && assetKind(asset) === "image"
                     // Only a video with sound can be muted or show a waveform.
@@ -807,21 +823,24 @@ export function Timeline({
                         key={clip.id}
                         role="button"
                         tabIndex={0}
-                        aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds${muted ? ", muted" : ""}`}
+                        aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${text ? `text "${text.content}"` : `${image ? "image " : ""}${file ?? "missing file"}`}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds${muted ? ", muted" : ""}`}
                         aria-pressed={selectedId === clip.id}
                         aria-haspopup="menu"
                         data-clip-id={clip.id}
                         onPointerDown={(e) => startMove(e, clip, i, starts[k])}
                         onContextMenu={(e) => openMenu(e, clip)}
+                        onDoubleClick={text ? () => onEditText(clip.id) : undefined}
                         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
                         className={cn(
                           "group absolute touch-none select-none overflow-hidden rounded-lg border outline-none",
                           inset,
-                          isBase ? "bg-muted" : "bg-sky-500/15",
+                          text ? "bg-violet-500/25 dark:bg-violet-400/25" : isBase ? "bg-muted" : "bg-sky-500/15",
                           !moving && !trim && landed !== clip.id && "transition-[left] duration-150 motion-reduce:transition-none",
                           selectedId === clip.id
                             ? "z-10 border-editor-accent ring-2 ring-editor-accent"
-                            : isBase
+                            : text
+                              ? "border-violet-500/70 hover:border-violet-500 focus-visible:ring-2 focus-visible:ring-ring dark:border-violet-400/70 dark:hover:border-violet-300"
+                              : isBase
                               ? "border-border hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
                               : "border-sky-500/60 hover:border-sky-400 focus-visible:ring-2 focus-visible:ring-ring",
                           moving ? "pointer-events-none z-20 cursor-grabbing opacity-70 shadow-lg" : "cursor-grab"
@@ -831,9 +850,17 @@ export function Timeline({
                           width: clipWidth,
                           transform: moving ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
                         }}
-                        title={file}
+                        title={text ? `${text.content} (double-click to edit)` : file}
                       >
-                        <Thumb src={thumbUrl(clip.asset)} className={cn("pointer-events-none h-full w-full object-cover", isBase ? "opacity-80" : "opacity-70")} />
+                        {text ? (
+                          // The text itself, on one line, over a block in its layer's place.
+                          <span className="pointer-events-none absolute inset-x-3 inset-y-0 flex items-center gap-1 overflow-hidden text-[11px] font-medium text-violet-950 dark:text-violet-50">
+                            <Type aria-hidden className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{text.content.replace(/\s+/g, " ")}</span>
+                          </span>
+                        ) : (
+                          <Thumb src={thumbUrl(clip.asset)} className={cn("pointer-events-none h-full w-full object-cover", isBase ? "opacity-80" : "opacity-70")} />
+                        )}
                         {waveforms && audible && (
                           <ClipWaveform
                             folder={folder}
@@ -847,7 +874,7 @@ export function Timeline({
                             scroller={scroller}
                           />
                         )}
-                        {image ? (
+                        {text ? null : image ? (
                           <span className="pointer-events-none absolute inset-x-3 bottom-0.5 flex items-center gap-1 truncate text-[10px] font-medium text-white drop-shadow">
                             <ImageIcon className="h-3 w-3 shrink-0" /> {clipLength(clip).toFixed(1)}s image
                           </span>

@@ -2,19 +2,23 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
+import { Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // The timeline's right-click menu on a clip: a small role="menu" at the
 // pointer, kept inside the window. Focus moves to the first item that works;
 // the arrows, Home and End move it, Enter or Space runs it. Escape, Tab, a
 // press outside, any scroll, a resize or the window losing focus closes it,
-// and so does running an item.
+// and so does running an item. Items with `checked` are a radio pair (a
+// check mark on the one that's on), set off from the others by a line.
 
 export type ClipMenuItem = {
   label: string
   /** The key that does the same, shown at the right (Delete, S, M). */
   hint?: string
   disabled?: boolean
+  /** A choice of several (menuitemradio): whether it's the one that's on. */
+  checked?: boolean
   onSelect: () => void
 }
 
@@ -106,7 +110,8 @@ export function ClipMenu({ x, y, label, items, onClose }: {
             buttons.current[i] = el
           }}
           type="button"
-          role="menuitem"
+          role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+          aria-checked={item.checked}
           tabIndex={-1}
           disabled={item.disabled}
           aria-disabled={item.disabled || undefined}
@@ -118,10 +123,15 @@ export function ClipMenu({ x, y, label, items, onClose }: {
           className={cn(
             "flex w-full items-center justify-between gap-6 rounded-md px-2 py-1.5 text-left outline-none",
             "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
-            "disabled:pointer-events-none disabled:opacity-50"
+            "disabled:pointer-events-none disabled:opacity-50",
+            // A line above the first of a radio group.
+            item.checked !== undefined && items[i - 1]?.checked === undefined && i > 0 && "relative mt-2 before:absolute before:inset-x-0 before:-top-1 before:h-px before:bg-border"
           )}
         >
-          <span>{item.label}</span>
+          <span className="flex items-center gap-2">
+            {item.checked !== undefined && <Check aria-hidden className={cn("h-3.5 w-3.5", !item.checked && "invisible")} />}
+            {item.label}
+          </span>
           {item.hint && <kbd className="font-sans text-xs text-muted-foreground">{item.hint}</kbd>}
         </button>
       ))}

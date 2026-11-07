@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, clipsAt, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Transform } from "@/lib/video/transform"
+import { assetKind, clipsAt, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { TEXT_FONT_FAMILY, textLayout, textSize, type ClipText } from "@/lib/video/text"
+import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
 import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
@@ -22,13 +23,15 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // flipped, cropped and turned by its clip's transform (lib/video/transform), so a lower layer
 // shows wherever an upper one doesn't cover and black shows where nothing
 // does. A clip with no transform fills the canvas letterboxed in black, as it
-// always has (and as the export draws it). An image clip shows as a still in its track's place. Clicking the
+// always has (and as the export draws it). An image clip shows as a still in its track's place, and a
+// text clip as its text (TextPicture) in its content box, placed the same way. Clicking the
 // canvas selects a clip there and TransformOverlay edits it, with a hint
 // about Alt below the canvas while a drag runs. A file dragged from the left
 // panel onto the canvas is added at the playhead (onDrop). The area around
 // the canvas is light gray. A clip the
 // browser can't decode shows a message here and still exports, one whose file
 // is missing says so (export fails on it). Play/Pause lives in the timeline's toolbar.
+// Double-clicking a text clip on the canvas opens its Edit text dialog (onEditText).
 
 /**
  * Where a picture sits in the canvas box: its full rect in percent, the crop
@@ -37,10 +40,11 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
  * in the element's own, unflipped box before its transform, so a flip swaps
  * the insets it mirrors: the cut stays on the side the user sees, as the
  * canonical order says (flip, then a screen-axis crop, then the turn). With no
- * transform it fills the canvas, letterboxed in black (object-contain).
+ * transform it fills the canvas, letterboxed in black (object-contain); a
+ * text's box (`{ w, h }`) is placed at its own size, centred, even then.
  */
-function placement(aspect: number, W: number, H: number, t: Transform): CSSProperties {
-  if (isIdentity(t)) return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
+function placement(aspect: Content, W: number, H: number, t: Transform): CSSProperties {
+  if (isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
   const r = clipRect(aspect, W, H, t)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
@@ -59,8 +63,31 @@ function placement(aspect: number, W: number, H: number, t: Transform): CSSPrope
   }
 }
 
+/** The font size the text is laid out at in its SVG; the viewBox scales it to the box on screen. */
+const TEXT_LAYOUT_PX = 100
+
+/**
+ * A text clip's picture, filling its content box: each line of textLayout as
+ * SVG text in the bundled font, centred on its baseline, so it lands where the
+ * export's drawtext puts it. Spaces are kept; nothing wraps.
+ */
+function TextPicture({ text }: { text: ClipText }) {
+  const l = textLayout(text, TEXT_LAYOUT_PX)
+  return (
+    <svg viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="none" aria-hidden className="absolute inset-0 h-full w-full">
+      {l.lines.map((line, i) =>
+        line.text.trim() === "" ? null : (
+          <text key={i} x={line.cx} y={line.baseline} textAnchor="middle" fill={text.color} fontSize={TEXT_LAYOUT_PX} style={{ fontFamily: `"${TEXT_FONT_FAMILY}"`, whiteSpace: "pre" }}>
+            {line.text}
+          </text>
+        )
+      )}
+    </svg>
+  )
+}
+
 export function Preview({
-  player, project, imageUrl, selectedId, onSelect, onChange, onDrop,
+  player, project, imageUrl, selectedId, onSelect, onChange, onDrop, onEditText,
 }: {
   player: PreviewPlayer
   project: Project
@@ -71,6 +98,8 @@ export function Preview({
   onChange: (edit: (p: Project) => Project, group?: string) => void
   /** A file from the left panel was dropped on the canvas: add it at the playhead. */
   onDrop: (drop: MediaDrop) => void
+  /** A text clip was double-clicked on the canvas: edit its text. */
+  onEditText: (id: string) => void
 }) {
   const [brokenImage, setBrokenImage] = useState<string | null>(null)
   // A canvas drag in progress (for the Alt hint), and a file dragged over the canvas.
@@ -115,11 +144,13 @@ export function Preview({
   const missing = currentAsset !== undefined && player.missing.has(currentAsset)
 
   const isImage = (clip: Clip | undefined) => {
-    const asset = clip && project.assets[clip.asset]
+    const asset = clip && !isTextClip(clip) ? project.assets[clip.asset] : undefined
     return asset !== undefined && assetKind(asset) === "image"
   }
   const transformOf = (clip: Clip) => (draft?.id === clip.id ? draft.transform : clip.transform ?? IDENTITY)
   const aspectOf = (assetId: string) => aspects[assetId] ?? W / H
+  /** What clipRect places for a clip: a text's content box, else its picture's aspect. */
+  const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, H) : aspectOf(clip.asset))
   const learnAspect = (assetId: string | null, w: number, h: number) => {
     if (!assetId || !(w > 0 && h > 0)) return
     const ratio = w / h
@@ -130,19 +161,19 @@ export function Preview({
 
   const target = (clip: Clip, lane: number): TransformTarget => ({
     id: clip.id,
-    label: `Layer ${lane + 1}, ${project.assets[clip.asset]?.file ?? "missing file"}`,
-    aspect: aspectOf(clip.asset),
+    label: `Layer ${lane + 1}, ${isTextClip(clip) ? `text "${clip.text.content}"` : (project.assets[clip.asset]?.file ?? "missing file")}`,
+    aspect: contentOf(clip),
     transform: transformOf(clip),
   })
   const selectedHit = hits.find((h) => h?.clip.id === selectedId)
   const selected = selectedHit ? target(selectedHit.clip, selectedHit.track) : null
-  /** The topmost clip at the playhead that covers canvas point x, y (its visible strip as it shows, turned too; with no transform, the whole canvas). */
+  /** The topmost clip at the playhead that covers canvas point x, y (its visible strip as it shows, turned too; with no transform, the whole canvas, but a text only its box). */
   const hitTest = (x: number, y: number): TransformTarget | null => {
     for (let lane = hits.length - 1; lane >= 0; lane--) {
       const hit = hits[lane]
       if (!hit) continue
       const t = transformOf(hit.clip)
-      const on = isIdentity(t) ? x >= 0 && x <= W && y >= 0 && y <= H : containsPoint(aspectOf(hit.clip.asset), W, H, t, x, y)
+      const on = isIdentity(t) && !isTextClip(hit.clip) ? x >= 0 && x <= W && y >= 0 && y <= H : containsPoint(contentOf(hit.clip), W, H, t, x, y)
       if (on) return target(hit.clip, lane)
     }
     return null
@@ -154,7 +185,7 @@ export function Preview({
       const hit = hits[i]
       const starts = trackStarts(track)
       const next = hit ? track.clips[hit.index + 1] : track.clips[starts.findIndex((s) => s > look)]
-      const a = next && project.assets[next.asset]
+      const a = next && !isTextClip(next) ? project.assets[next.asset] : undefined
       return next && a && assetKind(a) === "image" ? imageUrl(next.asset) : ""
     })
     .filter(Boolean)
@@ -228,7 +259,7 @@ export function Preview({
             {lanes.map((track, lane) =>
               [0, 1].map((slot) => {
                 const clip = hits[lane]?.clip
-                const shown = clip !== undefined && !isImage(clip) && player.active[lane] === slot
+                const shown = clip !== undefined && !isStill(project, clip) && player.active[lane] === slot
                 return (
                   <video
                     key={`${lane}-${slot}`}
@@ -248,6 +279,13 @@ export function Preview({
             {/* Stills after the videos in the DOM, so a still coming and going never moves (and so pauses) a video. */}
             {lanes.map((track, lane) => {
               const clip = hits[lane]?.clip
+              if (clip && isTextClip(clip)) {
+                return (
+                  <div key={`text-${lane}`} className="absolute" style={{ ...placement(contentOf(clip), W, H, transformOf(clip)), zIndex: lane + 1 }}>
+                    <TextPicture text={clip.text} />
+                  </div>
+                )
+              }
               if (!clip || !isImage(clip)) return null
               const still = imageUrl(clip.asset)
               if (!still) return null
@@ -295,6 +333,9 @@ export function Preview({
               onDraft={setDraft}
               onCommit={(id, t, group) => onChange((p) => setTransform(p, id, t), group)}
               onGesture={setGesture}
+              onDoubleClickClip={(id) => {
+                if (hits.some((h) => h?.clip.id === id && isTextClip(h.clip))) onEditText(id)
+              }}
             />
           )}
           {hint && !hintOutside && hintPill("bottom-3")}

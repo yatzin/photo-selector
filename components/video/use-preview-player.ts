@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
-import { assetKind, clipLength, MAX_TRACKS, totalLength, trackClipAt, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { clipLength, isStill, MAX_TRACKS, totalLength, trackClipAt, trackStarts, type Clip, type Project } from "@/lib/video/project"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
 // has a lane of two <video> elements that take turns: one shows the track's
@@ -85,10 +85,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     lanes.current[lane].primed[slot] = false
   }, [])
 
-  const isImage = useCallback((clip: Clip | undefined) => {
-    const asset = clip && projectRef.current.assets[clip.asset]
-    return asset !== undefined && assetKind(asset) === "image"
-  }, [])
+  // A still (an image's or a text clip) has nothing for a <video> to play.
+  const isImage = useCallback((clip: Clip | undefined) => clip !== undefined && isStill(projectRef.current, clip), [])
 
   /** The first video (not image) clip on `lane` from index `from` on: the one its waiting slot should hold. */
   const nextVideo = useCallback(

@@ -4,6 +4,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* The video editor's text clips: the same font file the export draws them with (lib/video/text). */
+@font-face {
+  font-family: "PS Video Text";
+  src: url("/fonts/GeistMono-Bold.ttf") format("truetype");
+  font-display: block;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
