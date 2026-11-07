@@ -1,7 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { describe, expect, it } from "vitest"
-import { CHARSET, DEFAULT_FONT, fontById, fontFamily, FONTS, isFontId, lineWidth } from "./fonts"
+import { CHARSET, DEFAULT_FONT, fontById, fontFamily, FONT_MOODS, FONTS, isFontId, lineWidth } from "./fonts"
 
 const FONT_DIR = path.resolve("public/fonts")
 
@@ -49,27 +49,57 @@ function readTtf(file: string) {
 const ceil20 = (v: number) => Math.ceil(v * 20 - 1e-9) / 20
 
 describe("the font registry", () => {
-  it("has unique ids and names, Mono first and the default, about a dozen fonts", () => {
+  it("has 50 fonts with unique ids and names, Mono first and the default", () => {
+    expect(FONTS.length).toBe(50)
     expect(new Set(FONTS.map((f) => f.id)).size).toBe(FONTS.length)
     expect(new Set(FONTS.map((f) => f.name)).size).toBe(FONTS.length)
     expect(new Set(FONTS.map((f) => fontFamily(f))).size).toBe(FONTS.length)
+    expect(new Set(FONTS.map((f) => f.file)).size).toBe(FONTS.length)
     expect(FONTS[0].id).toBe(DEFAULT_FONT)
     expect(FONTS[0].name).toBe("Mono")
-    expect(FONTS.length).toBeGreaterThanOrEqual(12)
     for (const f of FONTS) expect(f.id).toMatch(/^[a-z0-9-]+$/)
   })
 
-  it("ships every font file and its licence text (OFL or Apache), under about 3 MB in all", () => {
-    let bytes = 0
+  it("keeps the first fonts' ids and files, so saved projects stay valid", () => {
+    const first = {
+      mono: "GeistMono-Bold.ttf", anton: "Anton-Regular.ttf", fredoka: "Fredoka-Bold.ttf", pacifico: "Pacifico-Regular.ttf",
+      bangers: "Bangers-Regular.ttf", "permanent-marker": "PermanentMarker-Regular.ttf", "press-start": "PressStart2P-Regular.ttf",
+      "rubik-glitch": "RubikGlitch-Regular.ttf", playfair: "PlayfairDisplay-Black.ttf", "special-elite": "SpecialElite-Regular.ttf",
+      creepster: "Creepster-Regular.ttf", nosifer: "Nosifer-Regular.ttf", "reenie-beanie": "ReenieBeanie-Regular.ttf",
+    }
+    for (const [id, file] of Object.entries(first)) expect(fontById(id).file, id).toBe(file)
+  })
+
+  it("gives each font a mood from the fixed set, every mood used, at least 5 elegant ones", () => {
+    for (const f of FONTS) {
+      expect(FONT_MOODS, f.name).toContain(f.mood)
+      expect(f.style.length, f.name).toBeGreaterThan(0)
+    }
+    for (const m of FONT_MOODS) expect(FONTS.some((f) => f.mood === m), m).toBe(true)
+    expect(FONTS.filter((f) => f.mood === "Elegant").length).toBeGreaterThanOrEqual(5)
+  })
+
+  it("ships every font as a TrueType file with its licence text (OFL or Apache), the folder at most 8 MB", () => {
     for (const f of FONTS) {
       const file = path.join(FONT_DIR, f.file)
       expect(fs.existsSync(file), f.file).toBe(true)
       expect(f.file).toMatch(/\.ttf$/)
-      bytes += fs.statSync(file).size
+      const b = fs.readFileSync(file)
+      expect(b.readUInt32BE(0), f.file).toBe(0x00010000)
+      expect(b.includes(Buffer.from("glyf")), f.file).toBe(true)
       const licence = fs.readFileSync(path.join(FONT_DIR, f.licenceFile), "utf8")
-      expect(licence).toContain(f.licence === "OFL-1.1" ? "SIL OPEN FONT LICENSE Version 1.1" : "Apache License")
+      expect(licence, f.licenceFile).toContain(f.licence === "OFL-1.1" ? "SIL OPEN FONT LICENSE Version 1.1" : "Apache License")
     }
-    expect(bytes).toBeLessThan(3 * 1024 * 1024)
+    const bytes = fs.readdirSync(FONT_DIR).reduce((a, n) => a + fs.statSync(path.join(FONT_DIR, n)).size, 0)
+    expect(bytes).toBeLessThan(8 * 1024 * 1024)
+  })
+
+  it("lists every font and its licence in public/fonts/THIRD_PARTY_FONTS.md", () => {
+    const index = fs.readFileSync(path.join(FONT_DIR, "THIRD_PARTY_FONTS.md"), "utf8")
+    for (const f of FONTS) {
+      expect(index, f.name).toContain(f.file)
+      expect(index, f.name).toContain(f.licenceFile)
+    }
   })
 
   it("declares an @font-face for each font in globals.css, its family and file", () => {
@@ -79,11 +109,15 @@ describe("the font registry", () => {
     }
   })
 
-  it("has a glyph for every printable ASCII character in every font", () => {
+  it("has a glyph for A-Z, a-z, 0-9 and common punctuation in every font, and for all printable ASCII but a few known gaps", () => {
+    // Known gaps: drawn as the font's missing-glyph box by the export, a fallback font by the preview.
+    const gaps: Record<string, string> = { orbitron: "^" }
+    const needed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?'-:&@#"
     for (const f of FONTS) {
       const ttf = readTtf(path.join(FONT_DIR, f.file))
+      expect(Array.from(needed).filter((ch) => ttf.glyph(ch.charCodeAt(0)) === 0), f.name).toEqual([])
       const missing = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)).filter((ch) => ttf.glyph(ch.charCodeAt(0)) === 0)
-      expect(missing, f.name).toEqual([])
+      expect(missing.join(""), f.name).toBe(gaps[f.id] ?? "")
     }
   })
 
@@ -126,6 +160,7 @@ describe("the font registry", () => {
 describe("isFontId, fontById and lineWidth", () => {
   it("knows the registry's ids only", () => {
     expect(isFontId("pacifico")).toBe(true)
+    for (const f of FONTS) expect(isFontId(f.id)).toBe(true)
     for (const bad of ["Pacifico", "comic-sans", "", undefined, null, 3]) expect(isFontId(bad)).toBe(false)
   })
 

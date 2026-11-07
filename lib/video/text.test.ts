@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { fontById, lineWidth } from "./fonts"
+import { fontById, FONTS, lineWidth } from "./fonts"
 import { DEFAULT_TEXT, fitAnims, isValidAnim, isValidText, MAX_TEXT, MIN_ANIM, normalizeText, sameText, splitAnims, textLayout, textLines, textSize } from "./text"
 
 describe("isValidText and normalizeText", () => {
@@ -35,7 +35,9 @@ describe("isValidText and normalizeText", () => {
   it("takes a font from the registry and refuses an unknown one", () => {
     expect(isValidText({ ...DEFAULT_TEXT, font: "pacifico" })).toBe(true)
     expect(normalizeText({ ...DEFAULT_TEXT, font: "pacifico" })).toEqual({ ...DEFAULT_TEXT, font: "pacifico" })
-    for (const font of ["Pacifico", "comic-sans", "", 7, null]) {
+    for (const f of FONTS) expect(isValidText({ ...DEFAULT_TEXT, font: f.id }), f.id).toBe(true)
+    expect(FONTS.length).toBe(50)
+    for (const font of ["Pacifico", "comic-sans", "great vibes", "", 7, null]) {
       expect(isValidText({ ...DEFAULT_TEXT, font })).toBe(false)
       expect(normalizeText({ ...DEFAULT_TEXT, font })).toBeNull()
     }

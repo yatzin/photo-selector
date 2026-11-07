@@ -5,7 +5,7 @@ import { DEFAULT_FONT, fontById, isFontId, lineWidth } from "./fonts"
 // the text and its font's numbers alone, so the preview and the export agree
 // on it without measuring anything:
 //
-// - Fonts are bundled (lib/video/fonts: a dozen OFL or Apache fonts in
+// - Fonts are bundled (lib/video/fonts: 50 OFL or Apache fonts in
 //   public/fonts, each licence beside it). The preview loads them with
 //   @font-face, the export hands the same file to ffmpeg's drawtext, so no
 //   system font is involved. A text with no `font` uses Mono, Geist Mono Bold,

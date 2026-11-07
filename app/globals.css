@@ -4,7 +4,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* The video editor's text clips: the same font files the export draws them with (lib/video/fonts). */
+/* The video editor's text clips: the same font files the export draws them with (lib/video/fonts).
+   A browser fetches a face only when text uses it, so the editor loads just the fonts its text clips and the font picker show. */
 @font-face {
   font-family: "PS Video Text";
   src: url("/fonts/GeistMono-Bold.ttf") format("truetype");
@@ -68,6 +69,191 @@
 @font-face {
   font-family: "PS Video Text Reenie Beanie";
   src: url("/fonts/ReenieBeanie-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Great Vibes";
+  src: url("/fonts/GreatVibes-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Dancing Script";
+  src: url("/fonts/DancingScript-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Parisienne";
+  src: url("/fonts/Parisienne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Tangerine";
+  src: url("/fonts/Tangerine-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Monsieur La Doulaise";
+  src: url("/fonts/MonsieurLaDoulaise-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Sacramento";
+  src: url("/fonts/Sacramento-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Alex Brush";
+  src: url("/fonts/AlexBrush-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Archivo Black";
+  src: url("/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Black Ops One";
+  src: url("/fonts/BlackOpsOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Bungee";
+  src: url("/fonts/Bungee-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Sedgwick Ave Display";
+  src: url("/fonts/SedgwickAveDisplay-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Graduate";
+  src: url("/fonts/Graduate-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Titan One";
+  src: url("/fonts/TitanOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rubik Bubbles";
+  src: url("/fonts/RubikBubbles-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Gloria Hallelujah";
+  src: url("/fonts/GloriaHallelujah-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Luckiest Guy";
+  src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Chewy";
+  src: url("/fonts/Chewy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Londrina Sketch";
+  src: url("/fonts/LondrinaSketch-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Cabin Sketch";
+  src: url("/fonts/CabinSketch-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Eater";
+  src: url("/fonts/Eater-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Butcherman";
+  src: url("/fonts/Butcherman-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Metal Mania";
+  src: url("/fonts/MetalMania-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Unifraktur Maguntia";
+  src: url("/fonts/UnifrakturMaguntia-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Jolly Lodger";
+  src: url("/fonts/JollyLodger-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Griffy";
+  src: url("/fonts/Griffy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rye";
+  src: url("/fonts/Rye-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Shrikhand";
+  src: url("/fonts/Shrikhand-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Poiret One";
+  src: url("/fonts/PoiretOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Monoton";
+  src: url("/fonts/Monoton-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Ultra";
+  src: url("/fonts/Ultra-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Audiowide";
+  src: url("/fonts/Audiowide-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Orbitron";
+  src: url("/fonts/Orbitron-Black.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text VT323";
+  src: url("/fonts/VT323-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Kaushan Script";
+  src: url("/fonts/KaushanScript-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Patrick Hand";
+  src: url("/fonts/PatrickHand-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Amatic SC";
+  src: url("/fonts/AmaticSC-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Poppins";
+  src: url("/fonts/Poppins-Bold.ttf") format("truetype");
   font-display: block;
 }
 

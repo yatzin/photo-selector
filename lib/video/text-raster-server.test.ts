@@ -3,7 +3,7 @@ import os from "os"
 import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { fontById } from "./fonts"
+import { fontById, FONTS } from "./fonts"
 import { textLayout, type ClipText } from "./text"
 import { rasteriseText, textFontPath } from "./text-raster-server"
 
@@ -131,6 +131,53 @@ describe("textFontPath", () => {
     expect(ra.solid).toBeGreaterThan(50)
     expect(rb.solid).toBeGreaterThan(50)
   }, 30_000)
+
+  // drawtext cuts a glyph that crosses the frame edge a few px inside it, so ink within 4 px of the edge was cut.
+  const MIN_MARGIN = 4
+  /** The least distance (px) from any drawn pixel to the PNG's edge. */
+  const margin = (r: Awaited<ReturnType<typeof read>>) => {
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+    for (let y = 0; y < r.h; y++) {
+      for (let x = 0; x < r.w; x++) {
+        if (!r.data[(y * r.w + x) * 4 + 3]) continue
+        left = Math.min(left, x)
+        right = Math.max(right, x + 1)
+        top = Math.min(top, y)
+        bottom = Math.max(bottom, y + 1)
+      }
+    }
+    return Math.min(left, top, r.w - right, r.h - bottom)
+  }
+
+  it("keeps the swashes of elegant scripts and a blackletter's and horror font's ink inside the box", async () => {
+    for (const font of ["monsieur-la-doulaise", "great-vibes", "unifraktur-maguntia", "eater"]) {
+      const text: ClipText = { content: "jJY Quiz &\nJoy Fizz! QfNKT", color: "#ffffff", orientation: "horizontal", font }
+      const out = path.join(dir, `e-${font}.png`)
+      await rasteriseText(text, 100, out, dir)
+      const r = await read(out)
+      const box = textLayout(text, 100)
+      expect([r.w, r.h], font).toEqual([Math.ceil(box.w - 1e-6), Math.ceil(box.h - 1e-6)])
+      expect(r.solid, font).toBeGreaterThan(2000)
+      expect(margin(r), font).toBeGreaterThan(MIN_MARGIN)
+    }
+  }, 60_000)
+
+  it("draws every font inside the box the layout gives it, the PNG exactly that box", async () => {
+    // Capitals and descenders at both ends of the line, where scripts' swashes reach furthest past the advances.
+    const results = await Promise.all(FONTS.map(async (f) => {
+      const text: ClipText = { content: "jJY Joy & Fizz! QgfNKT", color: "#ffffff", orientation: "horizontal", font: f.id }
+      const out = path.join(dir, `all-${f.id}.png`)
+      await rasteriseText(text, 60, out, dir)
+      const r = await read(out)
+      const box = textLayout(text, 60)
+      return { id: f.id, size: [r.w, r.h], box: [Math.ceil(box.w - 1e-6), Math.ceil(box.h - 1e-6)], solid: r.solid, margin: margin(r) }
+    }))
+    for (const r of results) {
+      expect(r.size, r.id).toEqual(r.box)
+      expect(r.solid, r.id).toBeGreaterThan(200)
+      expect(r.margin, r.id).toBeGreaterThan(MIN_MARGIN)
+    }
+  }, 120_000)
 
   it("draws text as it is: no %{...} expansion, quotes and colons are fine", async () => {
     const out = path.join(dir, "s.png")
