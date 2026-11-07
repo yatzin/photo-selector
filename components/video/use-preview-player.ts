@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { clockStalled, resyncTo } from "@/lib/video/follow"
 import { assetKind, clipLength, MAX_TRACKS, totalLength, trackClipAt, trackStarts, type Clip, type Project } from "@/lib/video/project"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
@@ -9,19 +10,28 @@ import { assetKind, clipLength, MAX_TRACKS, totalLength, trackClipAt, trackStart
 // seeked), so a cut doesn't stall. All lanes play at once from one clock, so
 // every track's sound mixes; the preview shows the topmost lane with a clip.
 // The lowest lane playing a healthy video drives the clock (a stall waits for
-// it); with none, wall time does. A clip the browser can't play still takes
+// it, and the other lanes pause until it plays on); with none, wall time does. A clip the browser can't play still takes
 // its time on the timeline, and so does an image clip: the preview shows it
 // as an <img>, no video element loads it, and the waiting slot holds the next
 // video.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
-const DRIFT = 0.3 // seconds a following lane may drift from the clock before it is re-seeked
 
 /** One track's playback state: the asset loaded in each slot, the slot on show and the clip playing (-1: none). */
 type Lane = { loaded: (string | null)[]; active: number; index: number; primed: boolean[] }
 
 const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false] })
+
+/** Whether two lists of track clips match lane by lane (an empty lane matches a missing one). */
+function sameClips(a: Clip[][], b: Clip[][]): boolean {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? []
+    const y = b[i] ?? []
+    if (x !== y && (x.length > 0 || y.length > 0)) return false
+  }
+  return true
+}
 
 export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => string) {
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
@@ -35,6 +45,16 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const raf = useRef(0)
   const tickRef = useRef<(now: number) => void>(() => {})
   const failedRef = useRef<Set<string>>(new Set())
+  // The lane driving the clock at the last frame (-1: wall time).
+  const masterRef = useRef(-1)
+  // The clock's video and when its time last moved, to tell a stall.
+  const stallRef = useRef<{ v: HTMLVideoElement | null; time: number; at: number }>({ v: null, time: 0, at: 0 })
+  // True while the other lanes are paused for a stalled clock.
+  const heldRef = useRef(false)
+  // Per lane, the frame time (ms) of its last corrective seek.
+  const lastResync = useRef<number[]>(Array.from({ length: MAX_TRACKS }, () => -Infinity))
+  // The clips the preview last seeked for, to tell a clip edit from a mute toggle.
+  const shownClips = useRef<Clip[][] | null>(null)
   const [active, setActive] = useState<number[]>(() => Array.from({ length: MAX_TRACKS }, () => 0))
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
@@ -156,7 +176,11 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     )
   }, [])
 
-  /** play() on a slot; a refusal (autoplay policy) stops playback so the button doesn't claim it's playing. */
+  /**
+   * play() on a slot. A refusal (autoplay policy) on the base or the clock's
+   * lane stops playback so the button doesn't claim it's playing; any other
+   * lane just stays paused (stalled) until the next play() primes it.
+   */
   const playSlot = useCallback(
     (lane: number, slot: number) => {
       const v = el(lane, slot)
@@ -171,7 +195,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           if (id) markFailed(id)
           return
         }
-        if (playingRef.current && lanes.current[lane].active === slot) pause()
+        const clockLane = lane === 0 || masterRef.current < 0 || lane === masterRef.current
+        if (playingRef.current && clockLane && lanes.current[lane].active === slot) pause()
       })
     },
     [markFailed, pause]
@@ -195,6 +220,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       // At or past the end: rest on the last frame.
       const look = clamped >= total ? Math.max(0, total - 0.001) : clamped
       clock.current = { t: clamped, at: performance.now() }
+      // Every lane is seeked (and played) afresh: none is held for a stall now.
+      heldRef.current = false
+      stallRef.current = { v: null, time: 0, at: 0 }
       for (let lane = 0; lane < MAX_TRACKS; lane++) showLane(lane, look)
       setTimeline(clamped)
       if (playingRef.current) for (let lane = 0; lane < p.tracks.length; lane++) if (playableClip(lane)) playSlot(lane, lanes.current[lane].active)
@@ -228,6 +256,30 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         break
       }
       clock.current = { t, at: now }
+      masterRef.current = master
+
+      // The clock's video stalls (buffering, or decoding slower than real time): hold the
+      // other lanes so they don't run ahead and get re-seeked over and over; resume them after.
+      let stalled = false
+      if (master >= 0) {
+        const v = el(master, lanes.current[master].active)
+        if (v) {
+          const s = stallRef.current
+          if (s.v !== v || s.time !== v.currentTime) stallRef.current = { v, time: v.currentTime, at: now }
+          stalled = clockStalled(v.readyState, now - stallRef.current.at)
+        }
+      }
+      if (stalled !== heldRef.current) {
+        heldRef.current = stalled
+        for (let lane = 0; lane < p.tracks.length; lane++) {
+          const v = el(lane, lanes.current[lane].active)
+          if (lane === master || !v || !playableClip(lane)) continue
+          if (stalled) v.pause()
+          // play() on an ended video would start it over.
+          else if (!v.ended) playSlot(lane, lanes.current[lane].active)
+        }
+      }
+
       if (t >= total - END_MARGIN) {
         pause()
         setTimeline(total)
@@ -248,14 +300,17 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         const at = trackClipAt(track, isBase, look)
         const index = at ? at.index : -1
         if (index === L.index) {
-          // Keep a following lane's video with the clock.
-          const clip = lane === master ? undefined : playableClip(lane)
+          // Keep a following lane's video with the clock (not while it's held for a stall).
+          const clip = lane === master || heldRef.current ? undefined : playableClip(lane)
           const v = el(lane, L.active)
           if (clip && v && !v.seeking && !v.ended) {
             const expected = clip.in + (t - starts[L.index])
-            if (Math.abs(v.currentTime - expected) > DRIFT && expected < clip.out && !(expected >= v.duration - END_MARGIN)) {
+            const limit = Number.isFinite(v.duration) ? Math.min(clip.out, v.duration - END_MARGIN) : clip.out
+            const to = resyncTo({ current: v.currentTime, expected, limit, now, lastResync: lastResync.current[lane] })
+            if (to !== null) {
+              lastResync.current[lane] = now
               try {
-                v.currentTime = expected
+                v.currentTime = to
               } catch {
                 // Not seekable yet.
               }
@@ -279,7 +334,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           L.active = 1 - old
           swapped = true
           load(lane, L.active, next.asset, at.sourceTime)
-          if (!failedRef.current.has(next.asset)) playSlot(lane, L.active)
+          // A lane held for a stalled clock starts when the hold ends.
+          if (!failedRef.current.has(next.asset) && !(heldRef.current && lane !== master)) playSlot(lane, L.active)
           v?.pause()
           const after = nextVideo(lane, index + 1)
           if (after) load(lane, old, after.asset, after.in)
@@ -301,7 +357,6 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     playingRef.current = true
     setPlaying(true)
     clock.current = { t: timeRef.current, at: performance.now() }
-    const anyVideo = p.tracks.flatMap((t) => t.clips).find((c) => !isImage(c))
     for (let lane = 0; lane < p.tracks.length; lane++) {
       const L = lanes.current[lane]
       const clip = p.tracks[lane].clips[L.index]
@@ -312,17 +367,18 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       }
       // Safari lets a later play() from the frame loop (at a cut) through only on an
       // element that was played inside a user gesture, so prime the waiting one now
-      // (both, when an image or nothing is showing on this track).
+      // (both, when an image or nothing is showing on this track). A track with no
+      // video yet is skipped and primed by a later play(), once it has one.
       for (const slot of showingVideo ? [1 - L.active] : [0, 1]) {
         const v = el(lane, slot)
         if (!v || L.primed[slot]) continue
         if (!v.src) {
           // An empty slot would get its first src at a cut, unprimed, and Safari would
-          // refuse that play(): load an upcoming video (any video, failing that) into it now.
+          // refuse that play(): load an upcoming video of this track (failing that, its first) into it now.
           const held = L.loaded[1 - slot]
           const from = upcoming(lane, L.index, timeRef.current)
           const later = p.tracks[lane].clips.slice(Number.isFinite(from) ? from : p.tracks[lane].clips.length).find((c) => !isImage(c) && c.asset !== held)
-          const fill = later ?? nextVideo(lane, 0) ?? anyVideo
+          const fill = later ?? nextVideo(lane, 0)
           if (!fill) continue
           load(lane, slot, fill.asset, fill.in)
         }
@@ -343,11 +399,19 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   const hasClips = project.tracks.some((t) => t.clips.length > 0)
 
-  // An edit changed the tracks: apply each track's mute and show the frame at the current time again.
+  // An edit changed the tracks: apply each track's mute (without a re-seek, which would be heard).
   useEffect(() => {
     project.tracks.forEach((t, lane) => {
       for (const v of els.current[lane] ?? []) if (v) v.muted = Boolean(t.muted)
     })
+  }, [project.tracks])
+
+  // An edit changed the clips: show the frame at the current time again.
+  useEffect(() => {
+    const clips = project.tracks.map((t) => t.clips)
+    const prev = shownClips.current
+    shownClips.current = clips
+    if (prev && sameClips(prev, clips)) return
     if (!project.tracks.some((t) => t.clips.length > 0)) {
       // Nothing to play: stop the media here; `playing` is reset during render below.
       playingRef.current = false
