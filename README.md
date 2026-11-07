@@ -304,19 +304,24 @@ Not while the project is exporting, or while that file is being imported.
   in the preview. Its menu also has **Horizontal** and **Vertical** (one
   letter a line, stacked; a space leaves a gap), with a check on the current
   one. On the timeline it's a violet block showing its text.
-- **Fonts.** Edit text lists 13 fonts, each name drawn in its own font with
-  its mood: Mono (clean, the default and the font older text keeps), Anton
-  (headline), Fredoka (happy), Pacifico (cute script), Bangers (comic),
-  Permanent Marker (marker), Press Start 2P (arcade), Rubik Glitch (glitch),
-  Playfair Display Black (elegant), Special Elite (true crime), Creepster
-  (horror), Nosifer (dripping) and Reenie Beanie (spooky scrawl). Click one or
-  move through the list with the arrow keys; the sample above it shows your
-  text in it. Bangers and Creepster show lower case as capitals. The fonts are
-  bundled with the app (`public/fonts`, each licence beside it: SIL Open Font
-  License 1.1, or Apache 2.0 for Permanent Marker and Special Elite), so the
-  export draws the text where the preview does: the box comes from each font's
-  stored letter widths, the same numbers on both sides. Letters a font lacks
-  (emoji, some scripts) come from a fallback font and may differ.
+- **Fonts.** Edit text has 50 fonts, each name drawn in its own font with a
+  word on its look. A row of mood chips filters them: Clean, Bold, Happy, Fun,
+  Elegant, Handwritten, Retro, Tech, Scary and Creepy (All shows every font).
+  Elegant holds Playfair Display and seven sweeping scripts: Great Vibes,
+  Dancing Script, Parisienne, Tangerine, Monsieur La Doulaise, Sacramento and
+  Alex Brush. Click a font, or move with the arrow keys, Home and End, or
+  type the first letters of its name; the sample above shows your text in it.
+  Mono stays the default and the font older text keeps. Bangers, Creepster,
+  Nosifer, Bungee, Graduate, Luckiest Guy, Eater and Butcherman show lower
+  case as capitals. The fonts are bundled with the app (`public/fonts`, about
+  5 MB, each licence beside it and all listed in
+  `public/fonts/THIRD_PARTY_FONTS.md`: SIL Open Font License 1.1, or Apache
+  2.0 for Permanent Marker, Special Elite, Luckiest Guy, Chewy and Ultra). The
+  editor only downloads a font when a text clip uses it or it scrolls into
+  view in the list. The export draws the text where the preview does: the box
+  comes from each font's stored letter widths, the same numbers on both
+  sides, with room for script swashes. Letters a font lacks (emoji, some
+  scripts, Orbitron's ^) come from a fallback font and may differ.
 - **Text animation.** The Animation tab of Edit text (or **Animation...** in
   a text clip's menu) sets an **In** animation, played from the clip's start,
   and an **Out** one, played up to its end, each with its own type and length
