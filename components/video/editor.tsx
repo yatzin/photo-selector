@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Check, Download, Loader2, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -12,9 +12,10 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, removeAsset, removeClip, resolveStart, setTransform, splitClip,
+  addClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, removeAsset, removeClip, resolveStart, setClipMuted, setTransform, splitClip,
   totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
+import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
@@ -28,7 +29,6 @@ import { useAutosave } from "./use-autosave"
 // Slice 1 shell: import, add to timeline and autosave; drag/trim/split come
 // with the timeline interactions, playback with the preview player.
 
-const DEFAULT_ZOOM = 60 // px per second
 const MIN_PREVIEW = 120 // px
 const MIN_TIMELINE = 160 // px
 const HANDLE = 8 // px, the resize handle's height
@@ -79,7 +79,11 @@ export function Editor({
       return history === s.history ? s : { ...s, history }
     })
   }, [])
+  // Px per second: the slider, or the wheel over the ruler (which may land between the slider's steps).
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
+  // Audio waveforms on the timeline: on unless turned off in this browser (the server and first paint show them on).
+  const [storedWaveforms, setStoredWaveforms] = useStoredValue("ps.video.waveforms")
+  const waveforms = storedWaveforms !== "0"
   const [importing, setImporting] = useState<string | null>(null)
   // The guard against a second import: a ref, so two quick drops in one render can't both start.
   const importingRef = useRef(false)
@@ -392,6 +396,17 @@ export function Editor({
   const canvasSelected = shownHits.tracks.some((h) => h !== null && h.clip.id === selectedId) ? selectedId : null
   const transformed = selectedId !== null && allClips(project).some((c) => c.id === selectedId && !isIdentity(c.transform))
 
+  /** Mutes or unmutes the selected clip (M); false when nothing is selected or it has no sound. One undo step. */
+  function toggleMuteSelected(): boolean {
+    const clip = selectedId ? allClips(project).find((c) => c.id === selectedId) : undefined
+    const asset = clip && project.assets[clip.asset]
+    if (!clip || !asset || assetKind(asset) !== "video" || !asset.hasAudio) return false
+    const id = clip.id
+    const muted = !clip.muted
+    edit((p) => setClipMuted(p, id, muted))
+    return true
+  }
+
   /** Puts the selected clip's picture back as fit (the toolbar's Reset). One undo step. */
   function resetTransform() {
     if (!selectedId) return
@@ -411,7 +426,7 @@ export function Editor({
   }
 
   // Keyboard: Space plays, S splits the selected clip under the playhead (else the topmost one there),
-  // Delete removes the selection, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo,
+  // Delete removes the selection, M mutes or unmutes it, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo,
   // the arrows nudge the clip selected on the canvas by 1% (Shift: 5%).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -445,6 +460,8 @@ export function Editor({
         if (splitAtPlayhead()) e.preventDefault()
       } else if (e.key === "Delete" || e.key === "Backspace") {
         if (deleteSelected()) e.preventDefault()
+      } else if (e.key === "m" || e.key === "M") {
+        if (toggleMuteSelected()) e.preventDefault()
       } else if (e.key === "Escape" && selectedId) {
         setSelectedId(null)
       }
@@ -522,6 +539,18 @@ export function Editor({
               <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
                 <Trash2 className="h-4 w-4" />
               </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setStoredWaveforms(waveforms ? "0" : "1")}
+                aria-pressed={waveforms}
+                title={waveforms ? "Hide audio waveforms" : "Show audio waveforms"}
+                aria-label="Audio waveforms"
+                className={cn(waveforms && "bg-muted text-foreground")}
+              >
+                <AudioWaveform className="h-4 w-4" />
+              </Button>
               {transformed && (
                 <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position and crop">
                   <RotateCcw className="h-4 w-4" /> Reset
@@ -530,10 +559,10 @@ export function Editor({
               <div className="flex-1" />
               <label className="flex items-center gap-2">
                 Zoom
-                <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
+                <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
               </label>
             </div>
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} />
           </div>
         </div>
       </div>

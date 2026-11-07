@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import type { Clip } from "./project"
-import { autoPanSpeed, clampRowZoom, pxToTime, rowHeight, snapStart, timeToPx, timelineWidth, trimDelta } from "./timeline-math"
+import {
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, pxToTime, rowHeight, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+} from "./timeline-math"
 
 const clip = (id: string, a: number, b: number): Clip => ({ id, asset: "a", in: a, out: b, start: 0 })
 
@@ -90,9 +92,10 @@ describe("timelineWidth", () => {
 })
 
 describe("rowHeight / clampRowZoom", () => {
-  it("keeps full rows for one or two layers whatever the zoom", () => {
-    expect(rowHeight(1, 2)).toBe(80)
-    expect(rowHeight(2, 0.6)).toBe(80)
+  it("keeps full rows for one or two layers, scaled by the zoom", () => {
+    expect(rowHeight(1, 1)).toBe(80)
+    expect(rowHeight(1, 2)).toBe(160)
+    expect(rowHeight(2, 0.6)).toBe(48)
   })
   it("halves rows from three layers and scales them by the zoom", () => {
     expect(rowHeight(3, 1)).toBe(40)
@@ -104,5 +107,55 @@ describe("rowHeight / clampRowZoom", () => {
     expect(clampRowZoom(0.1)).toBe(0.6)
     expect(clampRowZoom(Number.NaN)).toBe(1)
     expect(clampRowZoom(1.25)).toBe(1.25)
+  })
+})
+
+describe("zoomAround", () => {
+  it("keeps the time under the pointer under it", () => {
+    // At 50 px/s scrolled 100 px, the pointer 200 px in is at 6 s; at 100 px/s 6 s is 600 px in, so scroll 400.
+    expect(zoomAround(50, 100, 200, 100)).toBe(400)
+    expect(zoomAround(100, 50, 200, 400)).toBe(100)
+    const t = (zoom: number, x: number, scroll: number) => (scroll + x) / zoom
+    for (const [z, nz, x, sl] of [[60, 64.8, 333, 1200], [37, 20, 10, 0], [200, 180, 640, 5000]]) {
+      const next = zoomAround(z, nz, x, sl)
+      if (next > 0) expect(t(nz, x, next)).toBeCloseTo(t(z, x, sl))
+    }
+  })
+
+  it("never scrolls before the start", () => {
+    expect(zoomAround(100, 50, 300, 100)).toBe(0)
+    expect(zoomAround(60, 60, 0, 0)).toBe(0)
+  })
+})
+
+describe("clampZoom", () => {
+  it("keeps the horizontal zoom in the slider's range", () => {
+    expect([MIN_ZOOM, MAX_ZOOM]).toEqual([20, 200])
+    expect(clampZoom(5)).toBe(20)
+    expect(clampZoom(500)).toBe(200)
+    expect(clampZoom(64.8)).toBe(64.8)
+    expect(clampZoom(Number.NaN)).toBe(60)
+  })
+})
+
+describe("wheelPixels", () => {
+  it("turns line and page deltas into pixels and passes pixels through", () => {
+    expect(wheelPixels({ deltaX: 0, deltaY: 100, deltaMode: 0 }, 600)).toEqual({ x: 0, y: 100 })
+    expect(wheelPixels({ deltaX: 1, deltaY: -3, deltaMode: 1 }, 600)).toEqual({ x: 40, y: -120 })
+    expect(wheelPixels({ deltaX: 0, deltaY: 1, deltaMode: 2 }, 600)).toEqual({ x: 0, y: 600 })
+  })
+})
+
+describe("wheelZoomFactor", () => {
+  it("zooms in about 8% for a notch up, out by the same for a notch down", () => {
+    expect(wheelZoomFactor(-100)).toBeCloseTo(1.08)
+    expect(wheelZoomFactor(100)).toBeCloseTo(1 / 1.08)
+    expect(wheelZoomFactor(0)).toBe(1)
+  })
+
+  it("follows small trackpad deltas smoothly and caps a huge one at three notches", () => {
+    expect(wheelZoomFactor(-4)).toBeGreaterThan(1)
+    expect(wheelZoomFactor(-4)).toBeLessThan(1.01)
+    expect(wheelZoomFactor(-5000)).toBeCloseTo(1.08 ** 3)
   })
 })

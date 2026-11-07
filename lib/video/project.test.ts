@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   addClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
-  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setBaseMagnetic, setTrackMuted, setTransform,
+  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setTransform,
   splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
 } from "./project"
 import { commit, createHistory, undo } from "./history"
@@ -243,7 +243,7 @@ describe("purity", () => {
     addClip(p, "a", 1, { start: 1 }, "n")
     addTrack(p)
     removeTrack(p, "t2")
-    setTrackMuted(p, "t2", true)
+    setClipMuted(p, "o1", true)
     expect(p).toEqual(copy)
   })
 })
@@ -345,16 +345,28 @@ function layered(): Project {
 const overlay = (p: Project, i = 1) => p.tracks[i].clips
 
 describe("parseProject: tracks", () => {
-  it("round-trips tracks, overlay starts and mute", () => {
+  it("round-trips tracks, overlay starts and clip mute", () => {
     const p = layered()
-    p.tracks[1].muted = true
+    p.tracks[1].clips[0].muted = true
     expect(parseProject(JSON.parse(JSON.stringify(p)))).toEqual(p)
   })
 
-  it("drops muted: false", () => {
+  it("drops muted: false on a track and on a clip", () => {
     const p = layered()
-    const parsed = parseProject({ ...p, tracks: [{ ...p.tracks[0], muted: false }, p.tracks[1]] })
+    const parsed = parseProject({ ...p, tracks: [{ ...p.tracks[0], muted: false, clips: [{ ...base(p)[0], muted: false }, base(p)[1]] }, p.tracks[1]] })
     expect(parsed?.tracks[0]).toEqual({ id: "t1", clips: base(p) })
+  })
+
+  it("reads an older track mute as a mute on every clip of that track", () => {
+    const p = layered()
+    const parsed = parseProject({ ...p, tracks: [p.tracks[0], { ...p.tracks[1], muted: true }] })
+    expect(parsed?.tracks[1]).toEqual({ id: "t2", clips: overlay(p).map((c) => ({ ...c, muted: true })) })
+    expect(parsed?.tracks[0]).toEqual(p.tracks[0])
+  })
+
+  it("rejects a clip muted that isn't a boolean", () => {
+    const p = layered()
+    expect(parseProject({ ...p, tracks: [p.tracks[0], { id: "t2", clips: [{ ...overlay(p)[0], muted: 1 }] }] })).toBeNull()
   })
 
   it("sorts every track by start and keeps gaps on the base", () => {
@@ -421,8 +433,8 @@ describe("parseProject: version 2 files", () => {
     const p = parseProject(v2())
     expect(p?.version).toBe(3)
     expect(p && base(p).map((c) => [c.id, c.start])).toEqual([["c1", 0], ["c2", 3], ["c3", 5]])
-    expect(p && overlay(p)).toEqual([{ id: "o1", asset: "a", in: 4, out: 6, start: 1 }])
-    expect(p?.tracks[1].muted).toBe(true)
+    expect(p && overlay(p)).toEqual([{ id: "o1", asset: "a", in: 4, out: 6, start: 1, muted: true }])
+    expect(p?.tracks[1]).not.toHaveProperty("muted")
   })
 
   it("keeps the same timeline: length and the clip at every time", () => {
@@ -486,9 +498,14 @@ describe("mergeClientProject", () => {
     expect(mergeClientProject(client, stored)).toBeNull()
   })
 
-  it("takes the client's tracks, mute included", () => {
-    const client = { ...stored, tracks: [{ id: "t1", clips: [] }, { id: "t9", muted: true, clips: [{ id: "o", asset: "a1", in: 1, out: 2, start: 3 }] }] }
+  it("takes the client's tracks, clip mute included", () => {
+    const client = { ...stored, tracks: [{ id: "t1", clips: [] }, { id: "t9", clips: [{ id: "o", asset: "a1", in: 1, out: 2, start: 3, muted: true }] }] }
     expect(mergeClientProject(client, stored)?.tracks).toEqual(client.tracks)
+  })
+
+  it("strips a client's track mute instead of muting the track's clips", () => {
+    const client = { ...stored, tracks: [{ id: "t1", clips: [] }, { id: "t9", muted: true, clips: [{ id: "o", asset: "a1", in: 1, out: 2, start: 3 }] }] }
+    expect(mergeClientProject(client, stored)?.tracks[1]).toEqual({ id: "t9", clips: [{ id: "o", asset: "a1", in: 1, out: 2, start: 3 }] })
   })
 
   it("accepts a version 1 or 2 client and returns version 3", () => {
@@ -868,14 +885,30 @@ describe("tracks", () => {
     expect(removeTrack(p, "nope")).toBe(p)
   })
 
-  it("setTrackMuted toggles mute and leaves the rest alone", () => {
+  it("setClipMuted toggles one clip's mute and leaves the rest alone", () => {
     const src = layered()
-    const p = setTrackMuted(src, "t2", true)
-    expect(p.tracks[1].muted).toBe(true)
+    const p = setClipMuted(src, "o1", true)
+    expect(overlay(p)[0].muted).toBe(true)
+    expect(overlay(p)[1]).toBe(overlay(src)[1])
     expect(p.tracks[0]).toBe(src.tracks[0])
-    expect(setTrackMuted(p, "t2", false).tracks[1]).not.toHaveProperty("muted")
-    expect(setTrackMuted(p, "t2", true)).toBe(p)
-    expect(setTrackMuted(p, "nope", true)).toBe(p)
+    expect(setClipMuted(p, "o1", false).tracks[1].clips[0]).toEqual(overlay(src)[0])
+    expect(setClipMuted(p, "o1", false).tracks[1].clips[0]).not.toHaveProperty("muted")
+    expect(setClipMuted(p, "o1", true)).toBe(p)
+    expect(setClipMuted(src, "o1", false)).toBe(src)
+    expect(setClipMuted(p, "nope", true)).toBe(p)
+  })
+
+  it("keeps a clip's mute through split (both halves), moves across tracks and trims, and undo takes it back", () => {
+    const p = setClipMuted(layered(), "c1", true)
+    const clip = (q: Project, id: string) => allClips(q).find((c) => c.id === id)
+    const s = splitClip(p, "c1", 1, "n")
+    expect([clip(s, "c1")?.muted, clip(s, "n")?.muted]).toEqual([true, true])
+    expect(clip(splitClip(layered(), "c1", 1, "n"), "n")).not.toHaveProperty("muted")
+    expect(clip(moveClip(p, "c1", 1, { start: 8 }), "c1")?.muted).toBe(true)
+    expect(clip(moveClip(p, "c1", 2, { start: 0 }), "c1")?.muted).toBe(true)
+    expect(clip(trimClip(p, "c1", "out", 2), "c1")?.muted).toBe(true)
+    const h = commit(createHistory<Edit>({ tracks: layered().tracks }), { tracks: p.tracks })
+    expect(clip({ ...p, ...undo(h).present }, "c1")).not.toHaveProperty("muted")
   })
 })
 
@@ -1224,13 +1257,14 @@ describe("magnetic base track (Snap)", () => {
     expect(starts(a)).toEqual([0])
   })
 
-  it("leaves overlay tracks free, and keeps the flag through mute", () => {
+  it("leaves overlay tracks free, and keeps the flag through a clip mute", () => {
     const p = addClip(packed(), "i", 1, { start: 20 }, "n")
     expect(overlay(p).map((c) => c.start)).toEqual([4, 20])
     expect(setBaseMagnetic({ ...gapped(), tracks: [] }, true).tracks).toEqual([])
-    const muted = setTrackMuted(packed(), "t1", true)
-    expect(muted.tracks[0]).toMatchObject({ muted: true, magnetic: true })
-    expect(setTrackMuted(muted, "t1", false).tracks[0]).toEqual({ id: "t1", magnetic: true, clips: base(packed()) })
+    const id = base(packed())[0].id
+    const muted = setClipMuted(packed(), id, true)
+    expect(muted.tracks[0].magnetic).toBe(true)
+    expect(setClipMuted(muted, id, false).tracks[0]).toEqual({ id: "t1", magnetic: true, clips: base(packed()) })
   })
 
   it("is the free layout everywhere when the flag is off", () => {

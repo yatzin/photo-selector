@@ -9,17 +9,19 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
 /**
  * `start` is where the clip begins on the timeline (seconds), on every track.
  * `transform` moves, scales and crops the picture on the canvas
- * (lib/video/transform); absent means as fit.
+ * (lib/video/transform); absent means as fit. `muted` silences the clip's
+ * sound in the preview and the export (absent when it isn't).
  */
-export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform }
+export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean }
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
  * lower ones. On every track clips sit at their own `start`, sorted by it,
- * with gaps allowed and no overlaps (nothing ripples). `muted` silences a track.
+ * with gaps allowed and no overlaps (nothing ripples). Mute is per clip
+ * (Clip.muted); an older file's track mute is read onto its clips.
  * `magnetic` (the timeline's Snap box, base track only) keeps the base's clips
  * end to end from 0: every edit there inserts, ripples or closes the gap.
  */
-export type Track = { id: string; muted?: boolean; magnetic?: boolean; clips: Clip[] }
+export type Track = { id: string; magnetic?: boolean; clips: Clip[] }
 /**
  * Version 3: every clip has a `start`. Version 2 laid the base track end to
  * end (no starts there) and version 1 had one flat `clips` list; parseProject
@@ -223,7 +225,7 @@ function settle(p: Project, next: Project): Project {
 export function setBaseMagnetic(p: Project, on: boolean): Project {
   const track = p.tracks[0]
   if (!track || isMagnetic(p) === on) return p
-  if (!on) return { ...p, tracks: [{ id: track.id, ...(track.muted ? { muted: true } : {}), clips: track.clips }, ...p.tracks.slice(1)] }
+  if (!on) return { ...p, tracks: [{ id: track.id, clips: track.clips }, ...p.tracks.slice(1)] }
   return packBase({ ...p, tracks: [{ ...track, magnetic: true }, ...p.tracks.slice(1)] })
 }
 
@@ -253,13 +255,13 @@ export function removeTrack(p: Project, id: string): Project {
   return { ...p, tracks: p.tracks.filter((t) => t.id !== id) }
 }
 
-export function setTrackMuted(p: Project, id: string, muted: boolean): Project {
-  const index = p.tracks.findIndex((t) => t.id === id)
-  if (index < 0 || Boolean(p.tracks[index].muted) === muted) return p
-  return {
-    ...p,
-    tracks: p.tracks.map((t, i) => (i !== index ? t : muted ? { ...t, muted: true } : { id: t.id, ...(t.magnetic ? { magnetic: true } : {}), clips: t.clips })),
-  }
+/** Mutes or unmutes one clip's sound (preview and export); unmuted stores no field. The same project when nothing changes. */
+export function setClipMuted(p: Project, clipId: string, muted: boolean): Project {
+  const at = find(p, clipId)
+  if (!at || Boolean(at.clip.muted) === muted) return p
+  const clip: Clip = { ...at.clip, muted: true }
+  if (!muted) delete clip.muted
+  return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? clip : c)))
 }
 
 /** Puts `clip` on track `trackIndex` (one past the top adds a layer) at `start`, slid clear of overlaps; the same project when it can't. */
@@ -275,6 +277,7 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   if (at + clipLength(clip) > MAX_TIMELINE + EPS) return p
   const placed: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out, start: at }
   if (clip.transform) placed.transform = clip.transform
+  if (clip.muted) placed.muted = true
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -369,8 +372,8 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
   const asset = p.assets[clip.asset]
-  // Both halves keep the picture where it was.
-  const second = { start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}) }
+  // Both halves keep the picture where it was, and the mute.
+  const second = { start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}) }
   if (asset && assetKind(asset) === "image") {
     next.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
   } else {
@@ -450,7 +453,9 @@ function isInt(v: unknown, max: number): v is number {
  * every clip needs a finite start >= 0. Each track comes back sorted by start,
  * and clips overlapping on a track, or ending past MAX_TIMELINE, are refused.
  * `magnetic` must be a boolean; it's kept on the base only, whose clips are
- * then packed end to end (gaps and overlaps there aren't refused).
+ * then packed end to end (gaps and overlaps there aren't refused). A clip's
+ * `muted` must be a boolean (kept only when true); an older file's track
+ * `muted: true` is read as `muted: true` on every clip of that track.
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -488,6 +493,7 @@ export function parseProject(json: unknown): Project | null {
       if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
       if (!Object.hasOwn(parsedAssets, c.asset)) return null
       if (ids.has(c.id)) return null
+      if (c.muted !== undefined && typeof c.muted !== "boolean") return null
       const asset = parsedAssets[c.asset]
       if (assetKind(asset) === "image") {
         // The epsilon absorbs float rounding from a split.
@@ -511,6 +517,7 @@ export function parseProject(json: unknown): Project | null {
           clip.transform = { x, y, scale, cropTop, cropBottom, ...(cropLeft ? { cropLeft } : {}), ...(cropRight ? { cropRight } : {}) }
         }
       }
+      if (c.muted === true || raw.muted === true) clip.muted = true
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null
       clips.push(clip)
@@ -525,7 +532,7 @@ export function parseProject(json: unknown): Project | null {
     for (let i = 1; i < clips.length; i++) {
       if (clipEnd(clips[i - 1]) > clips[i].start + EPS) return null
     }
-    tracks.push({ id: raw.id, ...(raw.muted ? { muted: true } : {}), ...(magnetic ? { magnetic: true } : {}), clips })
+    tracks.push({ id: raw.id, ...(magnetic ? { magnetic: true } : {}), clips })
   }
 
   return { version: 3, name, width, height, fps, assets: parsedAssets, tracks }
@@ -535,10 +542,13 @@ export function parseProject(json: unknown): Project | null {
  * A client-sent project laid over the stored one: assets, name and settings
  * are server-owned (a stale tab can't revert a rename), so only the client's
  * tracks are taken. Null when it doesn't validate, holds more than MAX_CLIPS
- * clips, or a clip points at an asset the stored project doesn't have.
+ * clips, or a clip points at an asset the stored project doesn't have. A
+ * track `muted` (the old layer mute, gone from the editor) is stripped, so a
+ * client can't mute a whole track; clips carry their own mute.
  */
 export function mergeClientProject(client: unknown, stored: Project): Project | null {
-  const parsed = parseProject(client)
+  const tracks = isRecord(client) && Array.isArray(client.tracks) ? client.tracks.map((t) => (isRecord(t) ? { ...t, muted: undefined } : t)) : undefined
+  const parsed = parseProject(tracks ? { ...(client as Record<string, unknown>), tracks } : client)
   if (!parsed) return null
   const clips = allClips(parsed)
   if (clips.length > MAX_CLIPS) return null

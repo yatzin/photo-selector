@@ -23,7 +23,7 @@ type Lane = { loaded: (string | null)[]; active: number; index: number; primed: 
 
 const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false] })
 
-/** The same clip for playback: what plays and when (a transform only changes where it shows). */
+/** The same clip for playback: what plays and when (a transform only changes where it shows, a mute only what's heard). */
 const samePlayback = (a: Clip, b: Clip) => a === b || (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start)
 
 /** Whether two lists of track clips play the same lane by lane (an empty lane matches a missing one). */
@@ -56,7 +56,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const heldRef = useRef(false)
   // Per lane, the frame time (ms) of its last corrective seek.
   const lastResync = useRef<number[]>(Array.from({ length: MAX_TRACKS }, () => -Infinity))
-  // The clips the preview last seeked for, to tell a clip edit from a mute toggle.
+  // The clips the preview last seeked for, to tell a clip edit from a mute toggle (samePlayback ignores the mute).
   const shownClips = useRef<Clip[][] | null>(null)
   const [active, setActive] = useState<number[]>(() => Array.from({ length: MAX_TRACKS }, () => 0))
   const [playing, setPlaying] = useState(false)
@@ -74,8 +74,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   /**
    * The ref callback for a lane's video slot. React detaches (null) and
    * reattaches an inline ref on every render, so null is ignored and only a
-   * different element resets the slot: it starts empty, unprimed and with its
-   * track's mute. An unmounted element is paused by the browser and by the
+   * different element resets the slot: it starts empty and unprimed (load
+   * sets its mute from the clip it gets). An unmounted element is paused by the browser and by the
    * next seek (its lane has no track then).
    */
   const attach = useCallback((lane: number, slot: number, v: HTMLVideoElement | null) => {
@@ -83,7 +83,6 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     els.current[lane][slot] = v
     lanes.current[lane].loaded[slot] = null
     lanes.current[lane].primed[slot] = false
-    v.muted = Boolean(projectRef.current.tracks[lane]?.muted)
   }, [])
 
   const isImage = useCallback((clip: Clip | undefined) => {
@@ -111,12 +110,14 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     return i < 0 ? Infinity : i
   }, [])
 
-  const load = useCallback((lane: number, slot: number, assetId: string, at: number) => {
+  /** Loads `clip`'s video into a lane's slot at source time `at`, muted when the clip is. */
+  const load = useCallback((lane: number, slot: number, clip: Clip, at: number) => {
     const v = el(lane, slot)
     if (!v) return
-    if (lanes.current[lane].loaded[slot] !== assetId) {
-      lanes.current[lane].loaded[slot] = assetId
-      v.src = urlRef.current(assetId)
+    v.muted = Boolean(clip.muted)
+    if (lanes.current[lane].loaded[slot] !== clip.asset) {
+      lanes.current[lane].loaded[slot] = clip.asset
+      v.src = urlRef.current(clip.asset)
     }
     try {
       v.currentTime = at
@@ -137,10 +138,10 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       const at = track ? trackClipAt(track, t) : null
       L.index = at ? at.index : -1
       const clip = at && track ? track.clips[at.index] : undefined
-      if (clip && at && !isImage(clip)) load(lane, L.active, clip.asset, at.sourceTime)
+      if (clip && at && !isImage(clip)) load(lane, L.active, clip, at.sourceTime)
       else el(lane, L.active)?.pause()
       const next = nextVideo(lane, upcoming(lane, L.index, t))
-      if (next) load(lane, 1 - L.active, next.asset, next.in)
+      if (next) load(lane, 1 - L.active, next, next.in)
       else el(lane, 1 - L.active)?.pause()
     },
     [load, isImage, nextVideo, upcoming]
@@ -330,17 +331,17 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           // and the waiting slot keeps (or gets) the track's next video clip.
           v?.pause()
           const after = nextVideo(lane, upcoming(lane, index, look))
-          if (after) load(lane, 1 - old, after.asset, after.in)
+          if (after) load(lane, 1 - old, after, after.in)
         } else {
           // Swap to the waiting slot.
           L.active = 1 - old
           swapped = true
-          load(lane, L.active, next.asset, at.sourceTime)
+          load(lane, L.active, next, at.sourceTime)
           // A lane held for a stalled clock starts when the hold ends.
           if (!failedRef.current.has(next.asset) && !(heldRef.current && lane !== master)) playSlot(lane, L.active)
           v?.pause()
           const after = nextVideo(lane, index + 1)
-          if (after) load(lane, old, after.asset, after.in)
+          if (after) load(lane, old, after, after.in)
         }
       }
       if (swapped) setActive(lanes.current.map((l) => l.active))
@@ -382,7 +383,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           const later = p.tracks[lane].clips.slice(Number.isFinite(from) ? from : p.tracks[lane].clips.length).find((c) => !isImage(c) && c.asset !== held)
           const fill = later ?? nextVideo(lane, 0)
           if (!fill) continue
-          load(lane, slot, fill.asset, fill.in)
+          load(lane, slot, fill, fill.in)
         }
         L.primed[slot] = true
         void v.play().catch(() => {})
@@ -401,12 +402,19 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   const hasClips = project.tracks.some((t) => t.clips.length > 0)
 
-  // An edit changed the tracks: apply each track's mute (without a re-seek, which would be heard).
+  // An edit changed the tracks: each slot takes the mute of the clip it holds, the one playing and the
+  // one waiting (without a re-seek, which would be heard).
   useEffect(() => {
     project.tracks.forEach((t, lane) => {
-      for (const v of els.current[lane] ?? []) if (v) v.muted = Boolean(t.muted)
+      const L = lanes.current[lane]
+      const playingClip = t.clips[L.index]
+      const waiting = nextVideo(lane, upcoming(lane, L.index, timeRef.current))
+      const a = el(lane, L.active)
+      const b = el(lane, 1 - L.active)
+      if (a && playingClip) a.muted = Boolean(playingClip.muted)
+      if (b && waiting) b.muted = Boolean(waiting.muted)
     })
-  }, [project.tracks])
+  }, [project.tracks, nextVideo, upcoming])
 
   // An edit changed the clips: show the frame at the current time again.
   useEffect(() => {

@@ -41,7 +41,7 @@ describe("exportFingerprint", () => {
     const trimmed = { ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], out: 3.5 }, p.tracks[0].clips[1]] }, p.tracks[1]] }
     const moved = { ...p, tracks: [p.tracks[0], { ...p.tracks[1], clips: [{ ...p.tracks[1].clips[0], start: 6 }] }] }
     const reordered = { ...p, tracks: [{ ...p.tracks[0], clips: [...p.tracks[0].clips].reverse() }, p.tracks[1]] }
-    const muted = { ...p, tracks: [p.tracks[0], { ...p.tracks[1], muted: true }] }
+    const muted = { ...p, tracks: [p.tracks[0], { ...p.tracks[1], clips: p.tracks[1].clips.map((c) => ({ ...c, muted: true })) }] }
     const otherFile = { ...p, assets: { ...p.assets, a: { ...p.assets.a, file: "b.mp4" } } }
     const fps = { ...p, fps: 25 }
     const size = { ...p, width: 1280, height: 720 }

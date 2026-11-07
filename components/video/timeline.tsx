@@ -1,20 +1,23 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Film, Image as ImageIcon, Magnet, Plus, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
   addClip, addTrack, assetKind, baseInsertion, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, MAX_TRACKS, moveClip, removeTrack, resolveStart,
-  setBaseMagnetic, setTrackMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
+  setBaseMagnetic, setClipMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { newId } from "@/lib/video/ids"
-import { autoPanSpeed, clampRowZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapStart, timelineWidth, trimDelta } from "@/lib/video/timeline-math"
+import {
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapStart, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+} from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
+import { ClipWaveform } from "./clip-waveform"
 import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and stacked tracks (layers), the top layer at
-// the top and the base track (V1) at the bottom. Clips on every track sit at
+// the top and the base track (layer 1) at the bottom. Clips on every track sit at
 // their own start, gaps allowed, and a higher layer draws over the ones below.
 // Drag a clip along or between tracks, drag its edge
 // handles to trim, drop a file from the left panel onto a track to add it (an
@@ -22,8 +25,12 @@ import { Thumb } from "./thumb"
 // The width follows the content (never narrower than the view), grows while
 // something is dragged towards the end, and any drag near the left or right
 // edge scrolls the view. From three layers the rows are half height, with a
-// vertical zoom on the right. V1's Snap box keeps its clips end to end: a drop
-// or drag there shows an insertion line between clips instead of a ghost.
+// vertical zoom on the right. Layer 1's Snap box keeps its clips end to end: a
+// drop or drag there shows an insertion line between clips instead of a ghost.
+// The mouse wheel zooms the rows over the layer numbers, zooms time over the
+// ruler (or with Ctrl/Cmd over the clips) and scrolls sideways over the clips
+// (Shift: up and down). A clip with sound has its own mute button and, when
+// waveforms are on, its waveform over the thumbnail.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -32,7 +39,7 @@ export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
 /** Where a clip lands: a track (one past the top makes a new layer) and its start there. */
 export type DropTarget = { track: number; start: number }
 
-const HEADER = 44 // px, the sticky column with each track's label and mute
+const HEADER = 44 // px, the sticky column with each track's number and buttons
 const TIGHT_HEADER = 60 // px, the same column on short rows, where its controls sit side by side
 const TIGHT_ROW = 56 // px: rows shorter than this use the tight layout
 const NEW_ROW = 36 // px, the add-a-layer drop zone above the top track
@@ -60,15 +67,21 @@ function snapPoints(p: Project, playhead: number, ignore?: string): number[] {
 }
 
 export function Timeline({
-  project, thumbUrl, selectedId, playhead, zoom, onSelect, onSeek, onScrub, onChange, onDropInbox,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox,
 }: {
   project: Project
+  /** The project's folder, for the waveform peaks route. */
+  folder: string
   /** Thumbnail URL for an asset id. */
   thumbUrl: (assetId: string) => string
   selectedId: string | null
   playhead: number
   /** Pixels per second. */
   zoom: number
+  /** Whether clips with sound show their waveform. */
+  waveforms: boolean
+  /** The wheel changed the zoom (px per second, already clamped). */
+  onZoom: (zoom: number) => void
   onSelect: (id: string | null) => void
   onSeek: (t: number) => void
   /** Scrubbing on the ruler started (true) or ended (false). */
@@ -101,6 +114,11 @@ export function Timeline({
   const pan = useRef<{ x: number; onPan: () => void; frame: number | null; last: number; carry: number } | null>(null)
   // The last file drag over a row, so auto-pan can move its ghost along.
   const fileDrag = useRef<{ clientX: number; track: number } | null>(null)
+  // A wheel zoom asked for but not rendered yet: the zoom and the scrollLeft that keeps the pointer's time in place.
+  const pendingZoom = useRef<{ zoom: number; scrollLeft: number } | null>(null)
+  const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
+  // The row zoom the wheel last asked for, so quick notches add up before the next render catches up.
+  const wheelRowZoom = useRef<number | null>(null)
 
   const row = rowHeight(project.tracks.length, rowZoom)
   const tight = row < TIGHT_ROW
@@ -111,7 +129,25 @@ export function Timeline({
   const live = useRef({ project, playhead, zoom, row, header, outside })
   useEffect(() => {
     live.current = { project, playhead, zoom, row, header, outside }
+    onWheelRef.current = onWheel
+    wheelRowZoom.current = null
   })
+
+  // React's onWheel is passive and can't keep the page from scrolling, so the wheel is listened to here.
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const handler = (e: WheelEvent) => onWheelRef.current(e)
+    el.addEventListener("wheel", handler, { passive: false })
+    return () => el.removeEventListener("wheel", handler)
+  }, [])
+
+  // The zoom a wheel asked for has rendered: scroll so the time under the pointer stays there.
+  useLayoutEffect(() => {
+    const p = pendingZoom.current
+    pendingZoom.current = null
+    if (p && scroller.current && p.zoom === zoom) scroller.current.scrollLeft = p.scrollLeft
+  }, [zoom])
 
   // A pointer drag still running when the timeline unmounts mustn't leave its listeners (or its pan loop) behind.
   useEffect(() => () => {
@@ -204,6 +240,60 @@ export function Timeline({
     if (track === 0 && isMagnetic(p)) return { track, start: baseInsertion(p.tracks[0].clips, at, ignore).start }
     const start = snapStart(left, length, snapPoints(p, t, ignore), SNAP_PX, z)
     return { track, start: resolveStart(p.tracks[track]?.clips ?? [], length, start, ignore) }
+  }
+
+  /** Zooms time by `factor` around the pointer at `clientX`; false when the zoom is already at its limit. */
+  function zoomAt(clientX: number, factor: number): boolean {
+    const el = scroller.current
+    if (!el) return false
+    const from = pendingZoom.current ?? { zoom: live.current.zoom, scrollLeft: el.scrollLeft }
+    const next = clampZoom(from.zoom * factor)
+    if (next === from.zoom) return false
+    const x = clientX - el.getBoundingClientRect().left - live.current.header
+    pendingZoom.current = { zoom: next, scrollLeft: zoomAround(from.zoom, next, x, from.scrollLeft) }
+    onZoom(next)
+    return true
+  }
+
+  /**
+   * The mouse wheel. Over the layer numbers it zooms the rows, over the ruler
+   * (or with Ctrl/Cmd anywhere else) it zooms time around the pointer, and
+   * over the clips it scrolls sideways (Shift: up and down). The page keeps
+   * the wheel only when there's nothing here for it to do, and a drag in
+   * progress is left alone.
+   */
+  function onWheel(e: WheelEvent) {
+    if (stopFollowing.current) return
+    const el = scroller.current
+    if (!el) return
+    const d = wheelPixels(e, el.clientHeight)
+    const area = e.target instanceof Element ? e.target.closest("[data-wheel]")?.getAttribute("data-wheel") : null
+    let used = false
+    if (area === "layers") {
+      const now = wheelRowZoom.current ?? rowZoom
+      const next = clampRowZoom(now * wheelZoomFactor(d.y || d.x))
+      if (next !== now) {
+        wheelRowZoom.current = next
+        setRowZoom(next)
+        used = true
+      }
+    } else if (area === "ruler" || e.ctrlKey || e.metaKey) {
+      used = zoomAt(e.clientX, wheelZoomFactor(d.y || d.x))
+    } else if (e.shiftKey) {
+      // Some browsers turn Shift+wheel into a sideways delta.
+      const by = d.y || d.x
+      if (el.scrollHeight > el.clientHeight && by !== 0) {
+        el.scrollTop += by
+        used = true
+      }
+    } else {
+      const by = d.y + d.x
+      if (el.scrollWidth > el.clientWidth && by !== 0) {
+        el.scrollLeft += by
+        used = true
+      }
+    }
+    if (used) e.preventDefault()
   }
 
   function stopPan() {
@@ -445,7 +535,7 @@ export function Timeline({
       <div ref={scroller} className="relative min-h-0 min-w-0 flex-1 overflow-auto" onDragOver={panDragOver} onDragLeave={panDragLeave}>
         <div className="relative" style={{ width: header + width }}>
           <div className="sticky top-0 z-40 flex h-6 border-b border-border/60 bg-card">
-            <div className="sticky left-0 z-50 flex shrink-0 items-center justify-center border-r border-border/60 bg-card" style={{ width: header }}>
+            <div data-wheel="layers" className="sticky left-0 z-50 flex shrink-0 items-center justify-center border-r border-border/60 bg-card" style={{ width: header }}>
               <button
                 type="button"
                 onClick={() => onChange(addTrack)}
@@ -457,7 +547,7 @@ export function Timeline({
                 <span className="sr-only">Add layer</span>
               </button>
             </div>
-            <div ref={origin} className="relative flex-1 cursor-pointer touch-none text-[10px] text-muted-foreground" onPointerDown={startScrub}>
+            <div ref={origin} data-wheel="ruler" className="relative flex-1 cursor-pointer touch-none text-[10px] text-muted-foreground" onPointerDown={startScrub}>
               {ticks.map((t) => (
                 <span key={t} className="pointer-events-none absolute top-0 h-full border-l border-border/60 pl-1 leading-6" style={{ left: t * zoom }}>
                   {formatTimecode(t).slice(0, -2)}
@@ -470,7 +560,7 @@ export function Timeline({
           <span className="sr-only" aria-live="polite">{dragging && canAddTrack ? "Drop on the row above the top layer to add a layer." : ""}</span>
           {canAddTrack && (
             <div className="flex" style={{ height: newRow }}>
-              <div className="sticky left-0 z-30 shrink-0 border-r border-border/60 bg-card" style={{ width: header }} />
+              <div data-wheel="layers" className="sticky left-0 z-30 shrink-0 border-r border-border/60 bg-card" style={{ width: header }} />
               <div
                 ref={newRowEl}
                 role="group"
@@ -495,38 +585,28 @@ export function Timeline({
           {rows.map((i) => {
             const track = shown.tracks[i]
             const isBase = i === 0
-            const muted = Boolean(track.muted)
             const starts = trackStarts(track)
             const label = isBase ? "Layer 1 (base)" : `Layer ${i + 1}`
             return (
               <div key={track.id} className="flex border-b border-border/60" style={{ height: row }}>
                 <div
+                  data-wheel="layers"
                   className={cn(
                     "sticky left-0 z-30 flex shrink-0 items-center justify-center border-r border-border/60 bg-card text-[11px]",
                     tight ? "flex-row gap-0.5 px-0.5" : "flex-col gap-0.5"
                   )}
                   style={{ width: header }}
                 >
-                  <span className={cn("font-medium", muted && "text-muted-foreground")} title={label}>V{i + 1}</span>
+                  <span className="font-medium" title={label}>{i + 1}</span>
                   {isBase && !tight && <span aria-hidden className="rounded bg-muted px-1 text-[9px] leading-tight text-muted-foreground" title={label}>base</span>}
                   <div className="flex items-center gap-0.5">
-                    <button
-                      type="button"
-                      aria-pressed={muted}
-                      title={muted ? `Unmute ${label}` : `Mute ${label}`}
-                      onClick={() => onChange((p) => setTrackMuted(p, track.id, !muted))}
-                      className={cn("flex shrink-0 items-center justify-center rounded hover:bg-muted", tight ? "h-4 w-4" : "h-5 w-5", muted ? "text-destructive" : "text-muted-foreground hover:text-foreground")}
-                    >
-                      {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                      <span className="sr-only">Mute {label}</span>
-                    </button>
                     {isBase && (
                       <button
                         type="button"
                         role="checkbox"
                         aria-checked={magnetic}
-                        aria-label="Snap clips together on V1 (no gaps)"
-                        title="Snap clips together on V1 (no gaps)"
+                        aria-label="Snap clips together on layer 1 (no gaps)"
+                        title="Snap clips together on layer 1 (no gaps)"
                         onClick={() => onChange((p) => setBaseMagnetic(p, !isMagnetic(p)))}
                         className={cn(
                           "flex shrink-0 items-center justify-center rounded border",
@@ -555,7 +635,7 @@ export function Timeline({
                     rowEls.current[i] = el
                   }}
                   role="group"
-                  aria-label={muted ? `${label}, muted` : label}
+                  aria-label={label}
                   className={cn("relative flex-1", !isBase && "bg-muted/20")}
                   onPointerDown={(e) => e.target === e.currentTarget && onSelect(null)}
                   onDragOver={(e) => dragOver(e, i)}
@@ -572,13 +652,17 @@ export function Timeline({
                     const asset = project.assets[clip.asset]
                     const file = asset?.file
                     const image = asset !== undefined && assetKind(asset) === "image"
+                    // Only a video with sound can be muted or show a waveform.
+                    const audible = asset !== undefined && !image && asset.hasAudio
+                    const muted = Boolean(clip.muted)
                     const left = starts[k]
+                    const clipWidth = Math.max(clipLength(clip) * zoom - 2, 8)
                     return (
                       <div
                         key={clip.id}
                         role="button"
                         tabIndex={0}
-                        aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds`}
+                        aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds${muted ? ", muted" : ""}`}
                         aria-pressed={selectedId === clip.id}
                         onPointerDown={(e) => startMove(e, clip, i, starts[k])}
                         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
@@ -592,17 +676,29 @@ export function Timeline({
                             : isBase
                               ? "border-border hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
                               : "border-sky-500/60 hover:border-sky-400 focus-visible:ring-2 focus-visible:ring-ring",
-                          moving ? "pointer-events-none z-20 cursor-grabbing opacity-70 shadow-lg" : "cursor-grab",
-                          muted && "opacity-60"
+                          moving ? "pointer-events-none z-20 cursor-grabbing opacity-70 shadow-lg" : "cursor-grab"
                         )}
                         style={{
                           left: left * zoom,
-                          width: Math.max(clipLength(clip) * zoom - 2, 8),
+                          width: clipWidth,
                           transform: moving ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
                         }}
                         title={file}
                       >
                         <Thumb src={thumbUrl(clip.asset)} className={cn("pointer-events-none h-full w-full object-cover", isBase ? "opacity-80" : "opacity-70")} />
+                        {waveforms && audible && (
+                          <ClipWaveform
+                            folder={folder}
+                            assetId={clip.asset}
+                            inSec={clip.in}
+                            outSec={clip.out}
+                            width={clipWidth - 2}
+                            height={row - (tight ? 8 : 16) - 2}
+                            left={left * zoom}
+                            muted={muted}
+                            scroller={scroller}
+                          />
+                        )}
                         {image ? (
                           <span className="pointer-events-none absolute inset-x-3 bottom-0.5 flex items-center gap-1 truncate text-[10px] font-medium text-white drop-shadow">
                             <ImageIcon className="h-3 w-3 shrink-0" /> {clipLength(clip).toFixed(1)}s image
@@ -612,7 +708,29 @@ export function Timeline({
                             {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
                           </span>
                         )}
-                        {muted && !tight && <VolumeX className="pointer-events-none absolute top-1 right-3 h-3 w-3 text-white drop-shadow" />}
+                        {audible && (
+                          <button
+                            type="button"
+                            aria-pressed={muted}
+                            aria-label={muted ? "Unmute clip" : "Mute clip"}
+                            title={muted ? "Unmute clip" : "Mute clip"}
+                            // Its own press: no drag, no select, and Enter or Space doesn't reach the clip.
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onChange((p) => setClipMuted(p, clip.id, !muted))
+                            }}
+                            className={cn(
+                              "absolute right-3.5 z-10 flex items-center justify-center rounded bg-black/50 text-white outline-none transition-opacity hover:bg-black/70 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+                              // Short rows leave a clip 14 px inside its border at the smallest zoom.
+                              tight ? "top-0 h-3.5 w-3.5" : "top-1 h-4 w-4",
+                              muted || selectedId === clip.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                            )}
+                          >
+                            {muted ? <VolumeX className={cn("text-red-300", tight ? "h-2.5 w-2.5" : "h-3 w-3")} /> : <Volume2 className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />}
+                          </button>
+                        )}
                         {(["in", "out"] as const).map((edge) => (
                           <span
                             key={edge}

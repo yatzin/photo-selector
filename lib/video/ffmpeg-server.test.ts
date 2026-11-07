@@ -101,8 +101,8 @@ describe("buildExportArgs", () => {
     expect(() => buildExportArgs({ ...twoClips(), tracks: [...base([]), { id: "t2", clips: [] }] }, files, "o")).toThrow("Nothing to export")
   })
 
-  it("uses silence for every clip of a muted single track", () => {
-    const g = graph(buildExportArgs({ ...twoClips(), tracks: [{ ...base([])[0], muted: true, clips: twoClips().tracks[0].clips }] }, files, "o"))
+  it("uses silence for every muted clip of a single track", () => {
+    const g = graph(buildExportArgs({ ...twoClips(), tracks: [{ ...base([])[0], clips: twoClips().tracks[0].clips.map((c) => ({ ...c, muted: true })) }] }, files, "o"))
     expect(g).not.toContain(":a]")
     expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:2,asetpts=PTS-STARTPTS[a0]")
     expect(g).toContain("concat=n=2:v=1:a=1[v][a]")
@@ -121,7 +121,7 @@ describe("buildExportArgs with layers", () => {
       tracks: [
         { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] },
         { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1 }] },
-        { id: "t3", muted: true, clips: [{ id: "m", asset: "b", in: 1, out: 2, start: 2.5 }] },
+        { id: "t3", clips: [{ id: "m", asset: "b", in: 1, out: 2, start: 2.5, muted: true }] },
       ],
     }
   }
@@ -143,7 +143,7 @@ describe("buildExportArgs with layers", () => {
     expect(g).toContain("[l1][v2]overlay=enable='between(t,2.5,3.5)':eof_action=pass[v]")
   })
 
-  it("mixes the base audio with silence for the whole length, leaving out images and muted tracks", () => {
+  it("mixes the base audio with silence for the whole length, leaving out images and muted clips", () => {
     const g = graph(buildExportArgs(layered(), layerFiles, "o"))
     expect(g).toContain("[0:a]atrim=0:4")
     expect(g).not.toContain("[1:a]")
@@ -154,7 +154,7 @@ describe("buildExportArgs with layers", () => {
 
   it("delays an unmuted overlay's audio to its start", () => {
     const p = layered()
-    p.tracks[2] = { id: "t3", clips: p.tracks[2].clips }
+    p.tracks[2] = { id: "t3", clips: p.tracks[2].clips.map((c) => ({ ...c, muted: false })) }
     const g = graph(buildExportArgs(p, layerFiles, "o"))
     expect(g).toContain("[2:a]atrim=1:2,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=120000S:all=1[a2]")
     expect(g).toContain("[asil][ba][a2]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]")
@@ -242,7 +242,7 @@ describe("buildExportArgs with transforms", () => {
 
   it("puts every clip on the canvas in track order when only an overlay is transformed", () => {
     const p = project([
-      { id: "t1", muted: true, clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] },
+      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0, muted: true }] },
       { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1, transform: { ...IDENTITY, scale: 0.3, x: -0.3 } }] },
       { id: "t3", clips: [{ id: "v", asset: "a", in: 2, out: 3, start: 2.5 }] },
     ])
@@ -495,6 +495,26 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     expect(Math.max(...(await centre(r.out, 2.5)))).toBeLessThan(40)
     expect((await centre(r.out, 3.5))[0]).toBeGreaterThan(150)
     expect(r.info).toMatch(/Stream #[^\n]*Audio:/)
+  }, 60_000)
+
+  it("makes a muted clip silent and keeps an unmuted overlay clip heard", async () => {
+    const volume = async (file: string, from: number, to: number) => {
+      const r = await ffmpeg(["-ss", String(from), "-to", String(to), "-i", file, "-map", "0:a", "-af", "volumedetect", "-f", "null", "-"])
+      const m = /max_volume:\s*(-?[\d.]+|-inf) dB/.exec(r.stderr)
+      return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : NaN
+    }
+    const p: Project = {
+      ...newProject("Muted"),
+      assets: { v: { file: "v", duration: 2, hasAudio: true } },
+      tracks: [
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 1.5, start: 0, muted: true }] },
+        { id: "t2", clips: [{ id: "2", asset: "v", in: 0, out: 1, start: 2 }] },
+      ],
+    }
+    const r = await exportProject(p, { v: portrait }, "muted.mp4")
+    expect(Math.abs(r.duration - 3)).toBeLessThan(0.3)
+    expect(await volume(r.out, 0.2, 1.3)).toBeLessThan(-60)
+    expect(await volume(r.out, 2.2, 2.8)).toBeGreaterThan(-30)
   }, 60_000)
 
   it("scales, moves and crops a base clip over black, keeping its length and audio", async () => {

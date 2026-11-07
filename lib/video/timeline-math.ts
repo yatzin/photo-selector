@@ -67,7 +67,43 @@ export function clampRowZoom(z: number): number {
   return Number.isFinite(z) ? Math.min(MAX_ROW_ZOOM, Math.max(MIN_ROW_ZOOM, z)) : 1
 }
 
-/** A track row's height for `tracks` layers: full with one or two, from three half that times the vertical `zoom`. */
+/** A track row's height for `tracks` layers: full with one or two, half that from three, times the vertical `zoom`. */
 export function rowHeight(tracks: number, zoom: number): number {
-  return tracks >= 3 ? Math.round(COMPACT_ROW * clampRowZoom(zoom)) : FULL_ROW
+  return Math.round((tracks >= 3 ? COMPACT_ROW : FULL_ROW) * clampRowZoom(zoom))
+}
+
+/** The horizontal zoom's range (px per second) and its default. */
+export const MIN_ZOOM = 20
+export const MAX_ZOOM = 200
+export const DEFAULT_ZOOM = 60
+
+/** The horizontal zoom kept between MIN_ZOOM and MAX_ZOOM; DEFAULT_ZOOM for anything not a number. */
+export function clampZoom(z: number): number {
+  return Number.isFinite(z) ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) : DEFAULT_ZOOM
+}
+
+/**
+ * The scrollLeft that keeps the timeline time under the pointer in place when
+ * the zoom goes from `zoom` to `nextZoom` (px per second). `pointerX` is the
+ * pointer's distance (px) from the left of the time area in view; never below 0.
+ */
+export function zoomAround(zoom: number, nextZoom: number, pointerX: number, scrollLeft: number): number {
+  return Math.max(0, ((scrollLeft + pointerX) * nextZoom) / zoom - pointerX)
+}
+
+const LINE_PX = 40
+
+/** A wheel event's deltas in pixels, whatever its deltaMode (lines, or pages `pagePx` high). */
+export function wheelPixels(e: { deltaX: number; deltaY: number; deltaMode: number }, pagePx: number): { x: number; y: number } {
+  const unit = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? pagePx : 1
+  return { x: e.deltaX * unit, y: e.deltaY * unit }
+}
+
+const NOTCH = 100 // px: one mouse wheel notch
+const ZOOM_STEP = 1.08 // per notch
+
+/** How much a wheel turn of `deltaY` px zooms: about 8% in per notch up (negative), out per notch down; at most three notches at once. */
+export function wheelZoomFactor(deltaY: number): number {
+  const notches = Math.max(-3, Math.min(3, deltaY / NOTCH))
+  return notches === 0 ? 1 : ZOOM_STEP ** -notches
 }

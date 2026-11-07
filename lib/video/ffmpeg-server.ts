@@ -80,9 +80,10 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const total = num(totalLength(p))
   parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
   const mix = ["[asil]"]
-  const clips = p.tracks.flatMap((track) => track.clips.map((c) => ({ c, start: c.start, muted: Boolean(track.muted) })))
+  const clips = allClips(p)
   let under = "[bg]"
-  clips.forEach(({ c, start, muted }, n) => {
+  clips.forEach((c, n) => {
+    const start = c.start
     const i = inputs.length
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
@@ -103,7 +104,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
-      if (!muted && p.assets[c.asset]?.hasAudio !== false) {
+      if (!c.muted && p.assets[c.asset]?.hasAudio !== false) {
         parts.push(
           `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=${Math.round(start * 48000)}S:all=1[a${i}]`
         )
@@ -128,7 +129,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * with nothing on the overlay tracks that is the whole graph. With overlays,
  * the base stream goes over a black canvas the timeline's length, and every
  * overlay clip (shifted to its start) over that, lower tracks first, enabled
- * for its own span. Audio is the base track's plus each unmuted overlay clip's
+ * for its own span. Audio is the base track's (silence for a muted clip) plus each unmuted overlay clip's
  * (delayed to its start), mixed over silence the timeline's length. When any
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
@@ -151,7 +152,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   }
   if (allClips(p).some((c) => !isIdentity(c.transform)) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
 
-  // The base track: one concatenated stream, with silence where a clip has no sound (or the track is muted).
+  // The base track: one concatenated stream, with silence where a clip has no sound (or is muted).
   const [baseTrack, ...overlays] = p.tracks
   const layered = overlays.some((t) => t.clips.length > 0)
   const labels: string[] = []
@@ -170,7 +171,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
     inputs.push(["-i", file])
     parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${frame}[v${i}]`)
     parts.push(
-      p.assets[c.asset]?.hasAudio === false || baseTrack.muted
+      p.assets[c.asset]?.hasAudio === false || c.muted
         ? silence
         : `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a${i}]`
     )
@@ -192,8 +193,8 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
     under = "[l0]"
     mix.push("[ba]")
   }
-  const overlayClips = overlays.flatMap((t) => t.clips.map((c) => ({ c, muted: Boolean(t.muted) })))
-  overlayClips.forEach(({ c, muted }, n) => {
+  const overlayClips = overlays.flatMap((t) => t.clips)
+  overlayClips.forEach((c, n) => {
     const i = inputs.length
     const file = fileFor(c)
     const start = c.start
@@ -204,7 +205,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${frame},${shift}[v${i}]`)
-      if (!muted && p.assets[c.asset]?.hasAudio !== false) {
+      if (!c.muted && p.assets[c.asset]?.hasAudio !== false) {
         parts.push(
           `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=${Math.round(start * 48000)}S:all=1[a${i}]`
         )
