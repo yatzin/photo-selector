@@ -322,6 +322,10 @@ Not while the project is exporting, or while that file is being imported.
   comes from each font's stored letter widths, the same numbers on both
   sides, with room for script swashes. Letters a font lacks (emoji, some
   scripts, Orbitron's ^) come from a fallback font and may differ.
+- **Colours.** Under Colour, Edit text shows a round swatch for each colour
+  the project's other text clips use (most used first, up to 12); click one
+  to use it. The font sample sits on a dark or light backdrop, whichever
+  shows the chosen colour better.
 - **Text animation.** The Animation tab of Edit text (or **Animation...** in
   a text clip's menu) sets an **In** animation, played from the clip's start,
   and an **Out** one, played up to its end, each with its own type and length
