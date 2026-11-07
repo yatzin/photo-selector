@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { ChevronDown, ChevronRight, Folder, Loader2, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { formatTimecode } from "@/lib/video/time"
 import { assetKind, type Project } from "@/lib/video/project"
@@ -11,19 +10,18 @@ import { Thumb } from "./thumb"
 import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
-// Inbox, where files can be imported from (or dragged straight onto the timeline).
+// Inbox, whose files are dragged onto the timeline (that copies them into Project media).
 
 export type InboxFolder = { folder: string; files: { name: string; size: number; kind: "image" | "video" }[] }
 
 export function FileTree({
-  inbox, project, thumbUrl, importing, onImport, onAdd,
+  inbox, project, thumbUrl, importing, onAdd,
 }: {
   inbox: InboxFolder[]
   project: Project
   thumbUrl: (assetId: string) => string
   /** "folder/name" of the Inbox file being imported, if any. */
   importing: string | null
-  onImport: (folder: string, name: string) => void
   /** Puts an imported asset on the end of the timeline. */
   onAdd: (assetId: string) => void
 }) {
@@ -33,7 +31,7 @@ export function FileTree({
   return (
     <div className="flex h-full flex-col overflow-y-auto text-sm">
       <p className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Project media</p>
-      {assets.length === 0 && <p className="px-3 pb-2 text-xs text-muted-foreground">Import clips from the Inbox below.</p>}
+      {assets.length === 0 && <p className="px-3 pb-2 text-xs text-muted-foreground">Drag files from the Inbox below onto the timeline.</p>}
       <ul className="px-2">
         {assets.map(([id, a]) => (
           <li
@@ -60,7 +58,8 @@ export function FileTree({
         ))}
       </ul>
 
-      <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Inbox</p>
+      <p className="mt-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Inbox</p>
+      <p className="px-3 pb-1 text-xs text-muted-foreground">Drag clips onto the timeline</p>
       {inbox.length === 0 && <p className="px-3 text-xs text-muted-foreground">No videos or images in the Video Editing Inbox yet.</p>}
       {inbox.map((f) => {
         const expanded = open[f.folder] ?? true
@@ -84,23 +83,16 @@ export function FileTree({
                         e.dataTransfer.setData(INBOX_DRAG_TYPE, JSON.stringify({ folder: f.folder, name: file.name }))
                         e.dataTransfer.effectAllowed = "copy"
                       }}
-                      className="group flex cursor-grab items-center gap-2 rounded-md p-1 hover:bg-muted/60 active:cursor-grabbing"
+                      className="flex cursor-grab items-center gap-2 rounded-md p-1 hover:bg-muted/60 active:cursor-grabbing"
                     >
                       <Thumb src={mediaUrl("video-inbox", [f.folder], file.name, "thumb", String(file.size))} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate" title={file.name}>{file.name}</span>
                         <span className="block text-[11px] text-muted-foreground">{formatBytes(file.size)}</span>
                       </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className={cn("h-7 px-2 text-xs", importing !== key && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
-                        disabled={importing !== null}
-                        onClick={() => onImport(f.folder, file.name)}
-                      >
-                        {importing === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Import"}
-                      </Button>
+                      {importing === key && (
+                        <Loader2 className="mr-1 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Importing" role="status" />
+                      )}
                     </li>
                   )
                 })}

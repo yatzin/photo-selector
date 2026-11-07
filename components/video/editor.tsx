@@ -99,9 +99,9 @@ export function Editor({
   }
 
   /** Copies an Inbox file into Project media (or finds the copy already there); its asset id, or null when it failed. */
-  async function importFile(inboxFolder: string, name: string, fromDrop = false): Promise<string | null> {
+  async function importFile(inboxFolder: string, name: string): Promise<string | null> {
     if (importingRef.current) {
-      if (fromDrop) toast.info("Wait for the current import to finish.")
+      toast.info("Wait for the current import to finish.")
       return null
     }
     importingRef.current = true
@@ -114,7 +114,6 @@ export function Editor({
       }
       // The server owns assets: take the new one from its reply.
       setProject((p) => ({ ...p, assets: { ...p.assets, [r.id]: r.asset } }))
-      if (r.reused && !fromDrop) toast.info(`${name} is already in Project media.`)
       return r.id
     } catch {
       toast.error("Something went wrong importing that file.")
@@ -127,7 +126,7 @@ export function Editor({
 
   /** An Inbox file dropped on the timeline: import it, then put it where it was dropped. */
   async function dropFromInbox(inboxFolder: string, name: string, index: number) {
-    const assetId = await importFile(inboxFolder, name, true)
+    const assetId = await importFile(inboxFolder, name)
     if (!assetId) return
     const id = newId()
     // Clips may have changed while importing; addClip clamps the index to the current timeline.
@@ -239,7 +238,7 @@ export function Editor({
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
-          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onImport={(f, n) => void importFile(f, n)} onAdd={addToTimeline} />
+          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <Preview player={player} project={project} imageUrl={imageUrl} />

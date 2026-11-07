@@ -170,10 +170,10 @@ pick whose folder. You can copy instead of move.
 - `output/`: exported videos
 - `config/export.json`: export size and frame rate
 
-Importing copies a file from the Inbox into `assets/`. The original stays in the Inbox.
-The Inbox list shows a thumbnail for each video and image. Dragging an Inbox
-file onto the timeline imports it and adds it where you drop it. Importing the
-same Inbox file again (button or drag) reuses the copy already in the project
+The Inbox list in the editor shows a thumbnail for each video and image. Its
+files are drag-only: dragging one onto the timeline copies it into `assets/`
+(Project media) and adds it where you drop it. The original stays in the Inbox.
+Dragging the same Inbox file again reuses the copy already in the project
 instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
 under the same name reuses the existing copy (delete that copy from `assets/`
 to import the new one).
