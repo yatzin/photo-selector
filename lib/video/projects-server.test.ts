@@ -298,6 +298,14 @@ describe("deleteAsset", () => {
     expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual(["deep.mp4"])
   })
 
+  it("removes the file's waveform peaks cache with it, and leaves the other file's", async () => {
+    const { a, b } = await twoAssets()
+    await fs.writeFile(path.join(user, "P", "assets", `.${a.asset.file}.peaks`), "peaks")
+    await fs.writeFile(path.join(user, "P", "assets", `.${b.asset.file}.peaks`), "peaks")
+    await deleteAsset("mike", "P", a.id)
+    expect((await fs.readdir(path.join(user, "P", "assets"))).sort()).toEqual([".deep.mp4.peaks", "deep.mp4"])
+  })
+
   it("lets the same Inbox file be imported fresh afterwards", async () => {
     const { a } = await twoAssets()
     await deleteAsset("mike", "P", a.id)

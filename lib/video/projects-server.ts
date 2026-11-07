@@ -6,6 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
+import { peaksFileName } from "./peaks"
 import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
@@ -261,7 +262,7 @@ export async function reusableAsset(userFolder: string, folder: string, p: Proje
 /**
  * Takes a media item out of the stored project (call it under the project
  * lock): the asset entry, every clip on every track that uses it, and its file
- * in assets/ when no other asset names that file. Removing the file is best
+ * in assets/ (with its waveform peaks cache) when no other asset names that file. Removing the file is best
  * effort and only for a regular file (not a link) inside assets/; a failure
  * there still returns ok. An id the project doesn't have changes nothing.
  */
@@ -278,6 +279,12 @@ export async function deleteAsset(userFolder: string, folder: string, assetId: s
       if (target && (await fs.lstat(target)).isFile()) await fs.rm(target, { force: true })
     } catch {
       // Already gone, or the OS won't let go of it yet: the project no longer points at it either way.
+    }
+    const peaks = assetPath(userFolder, folder, peaksFileName(file))
+    try {
+      if (peaks && (await fs.lstat(peaks)).isFile()) await fs.rm(peaks, { force: true })
+    } catch {
+      // Never made (no waveform was shown), or already gone.
     }
   }
   return { ok: true, removedClips }
