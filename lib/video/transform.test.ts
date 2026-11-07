@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  clipRect, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, isValidTransform, normalizeTransform, scaleAbout, snapCorner, snapToCanvas, type Transform,
+  clipRect, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, isValidTransform, normalizeTransform, scaleAbout, snapCorner, snapEdge, snapToCanvas, type Transform,
 } from "./transform"
 
 const W = 1920
@@ -251,6 +251,45 @@ describe("snapToCanvas", () => {
 
   it("leaves a rect far from every line alone", () => {
     expect(snapToCanvas({ x: 100, y: 100, w: 500, h: 200 }, W, H, 6)).toEqual({ dx: 0, dy: 0, guides: { x: [], y: [] } })
+  })
+
+  it("snaps the centre onto the vertical centre line from either side", () => {
+    // Centre 955 -> 960 and 964 -> 960; the y is far from every line.
+    expect(snapToCanvas({ x: 755, y: 100, w: 400, h: 200 }, W, H, 6)).toEqual({ dx: 5, dy: 0, guides: { x: [960], y: [] } })
+    expect(snapToCanvas({ x: 764, y: 100, w: 400, h: 200 }, W, H, 6)).toEqual({ dx: -4, dy: 0, guides: { x: [960], y: [] } })
+    // Just outside the threshold.
+    expect(snapToCanvas({ x: 753, y: 100, w: 400, h: 200 }, W, H, 6).guides.x).toEqual([])
+  })
+
+  it("reports every line a snapped rect sits on, so a full-width picture shows the vertical centre line too", () => {
+    // A picture as wide and tall as the canvas, nudged 3 px: its left edge, centre and right edge all land on lines.
+    expect(snapToCanvas({ x: 3, y: -2, w: W, h: H }, W, H, 6)).toEqual({ dx: -3, dy: 2, guides: { x: [0, 960, W], y: [0, 540, H] } })
+    // A centred half-width picture: only the centre is on a line.
+    expect(snapToCanvas({ x: 482, y: 100, w: 960, h: 200 }, W, H, 6).guides.x).toEqual([960])
+  })
+})
+
+describe("snapEdge", () => {
+  it("snaps a dragged crop edge onto the vertical centre line", () => {
+    // Full-size picture: the left edge dragged 957 px in lands on 960.
+    const { t: snapped, guides } = snapEdge(IDENTITY, "left", 16 / 9, W, H, 957, 6)
+    const v = clipRect(16 / 9, W, H, snapped).visible
+    expect(v.x).toBeCloseTo(960)
+    expect(guides).toEqual({ x: [960], y: [] })
+  })
+
+  it("snaps the right edge to the canvas edge and a bottom edge to the horizontal centre", () => {
+    const half = t({ scale: 0.5 })
+    // Right edge at 1440 dragged out 476 px: 1916, near 1920 but the picture ends at 1440, so it can only un-crop to 1440.
+    expect(snapEdge(half, "right", 16 / 9, W, H, 476, 6).guides.x).toEqual([])
+    const r = snapEdge(half, "bottom", 16 / 9, W, H, -266, 6)
+    // Bottom edge 810 -> 544 snaps to 540.
+    expect(clipRect(16 / 9, W, H, r.t).visible.y + clipRect(16 / 9, W, H, r.t).visible.h).toBeCloseTo(540)
+    expect(r.guides).toEqual({ x: [], y: [540] })
+  })
+
+  it("is a plain dragEdge away from the lines", () => {
+    expect(snapEdge(IDENTITY, "top", 16 / 9, W, H, 100, 6)).toEqual({ t: dragEdge(IDENTITY, "top", 16 / 9, W, H, 100), guides: { x: [], y: [] } })
   })
 })
 

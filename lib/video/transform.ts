@@ -179,15 +179,57 @@ function nearest(values: number[], lines: number[], threshold: number): { d: num
   return best
 }
 
+/** The lines (of `lines`) that one of `values` sits on, within half a pixel. */
+const linesUnder = (values: number[], lines: number[]) => lines.filter((l) => values.some((v) => Math.abs(v - l) < 0.5))
+
 /**
  * How far to shift `rect` (canvas px) so its nearest edge or centre lands on
  * the canvas's edge or centre line, per axis, when within `thresholdPx`; and
- * the lines it snapped to, to draw.
+ * every line the shifted rect then sits on, to draw (a picture as wide as the
+ * canvas sits on the left edge, the centre and the right edge at once).
  */
 export function snapToCanvas(rect: Rect, canvasW: number, canvasH: number, thresholdPx: number): { dx: number; dy: number; guides: Guides } {
-  const sx = nearest([rect.x, rect.x + rect.w / 2, rect.x + rect.w], [0, canvasW / 2, canvasW], thresholdPx)
-  const sy = nearest([rect.y, rect.y + rect.h / 2, rect.y + rect.h], [0, canvasH / 2, canvasH], thresholdPx)
-  return { dx: sx ? sx.d : 0, dy: sy ? sy.d : 0, guides: { x: sx ? [sx.line] : [], y: sy ? [sy.line] : [] } }
+  const xs = [0, canvasW / 2, canvasW]
+  const ys = [0, canvasH / 2, canvasH]
+  const sx = nearest([rect.x, rect.x + rect.w / 2, rect.x + rect.w], xs, thresholdPx)
+  const sy = nearest([rect.y, rect.y + rect.h / 2, rect.y + rect.h], ys, thresholdPx)
+  const dx = sx ? sx.d : 0
+  const dy = sy ? sy.d : 0
+  return {
+    dx,
+    dy,
+    guides: {
+      x: sx ? linesUnder([rect.x + dx, rect.x + dx + rect.w / 2, rect.x + dx + rect.w], xs) : [],
+      y: sy ? linesUnder([rect.y + dy, rect.y + dy + rect.h / 2, rect.y + dy + rect.h], ys) : [],
+    },
+  }
+}
+
+/** Where `edge` of a visible strip is (canvas px, x for left/right, y for top/bottom). */
+function edgeOf(v: Rect, edge: Edge): number {
+  if (edge === "left") return v.x
+  if (edge === "right") return v.x + v.w
+  if (edge === "top") return v.y
+  return v.y + v.h
+}
+
+/**
+ * An edge handle dragged by `d` canvas px (see dragEdge), with the cropped
+ * edge pulled onto the nearest canvas edge or centre line within
+ * `thresholdPx`; and the line it then sits on (none when the crop limits kept
+ * it off the line).
+ */
+export function snapEdge(
+  t0: Transform, edge: Edge, contentAspect: number, canvasW: number, canvasH: number, d: number, thresholdPx: number
+): { t: Transform; guides: Guides } {
+  const vertical = edge === "left" || edge === "right"
+  const lines = vertical ? [0, canvasW / 2, canvasW] : [0, canvasH / 2, canvasH]
+  const from = edgeOf(clipRect(contentAspect, canvasW, canvasH, t0).visible, edge)
+  const s = nearest([from + d], lines, thresholdPx)
+  const t = dragEdge(t0, edge, contentAspect, canvasW, canvasH, s ? d + s.d : d)
+  if (!s) return { t, guides: { x: [], y: [] } }
+  const on = linesUnder([edgeOf(clipRect(contentAspect, canvasW, canvasH, t).visible, edge)], lines)
+  return { t, guides: vertical ? { x: on, y: [] } : { x: [], y: on } }
 }
 
 /**
