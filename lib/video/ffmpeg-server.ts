@@ -1,7 +1,8 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { allClips, assetKind, clipLength, isContiguousFromZero, totalLength, type Clip, type Project } from "./project"
+import { allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { baseFontPx, textLayout, textSize } from "./text"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Transform } from "./transform"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
@@ -100,6 +101,31 @@ function transformFilters(t: Transform): string[] {
   return [...flips, "format=rgba", ...cropBoxes(t), `rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=black@0`, "setsar=1", "format=yuva420p"]
 }
 
+/** The key a text clip's rasterised PNG has in buildExportGraph's `files`. */
+export const textFileKey = (c: Clip) => `text:${c.id}`
+
+/** Largest side (px) a text clip's PNG is drawn at; a bigger box is drawn smaller and scaled up. */
+const MAX_TEXT_RASTER = 8192
+/** Text is drawn at a multiple of this font size (px), which makes its content box whole pixels (lib/video/text's fractions are twentieths). */
+const TEXT_FONT_STEP = 20
+
+/**
+ * A text clip's picture in the export: the font size (px) its PNG is drawn
+ * at (rasteriseText), the first multiple of TEXT_FONT_STEP at or above its
+ * size on the canvas (so it's scaled down, never up, unless the PNG would pass
+ * MAX_TEXT_RASTER), and the frame it's scaled to: its content box at its
+ * scale, in even pixels, as a scaled image is.
+ */
+export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }): { fontPx: number; w: number; h: number } {
+  const scale = (c.transform ?? IDENTITY).scale
+  const box = textSize(c.text, p.height)
+  const unit = textLayout(c.text, TEXT_FONT_STEP)
+  const most = Math.max(1, Math.floor(MAX_TEXT_RASTER / Math.max(unit.w, unit.h)))
+  const fontPx = TEXT_FONT_STEP * Math.min(most, Math.max(1, Math.ceil((baseFontPx(p.height) * scale) / TEXT_FONT_STEP - 1e-9)))
+  const even = (v: number) => Math.max(2, Math.round(v / 2) * 2)
+  return { fontPx, w: even(box.w * scale), h: even(box.h * scale) }
+}
+
 /**
  * The uniform graph, used when any clip is moved, scaled or cropped or the
  * base track has a gap: every clip, base track included, is overlaid on a
@@ -109,7 +135,9 @@ function transformFilters(t: Transform): string[] {
  * and placed as clipRect says; an untransformed one fills the canvas
  * letterboxed in black as it always has, so it hides what's under it in both
  * graphs. A flipped or turned clip follows the canonical order
- * (transformFilters). Audio as in the layered graph: each heard clip's sound delayed to
+ * (transformFilters). A text clip is its PNG (an image input) scaled to its
+ * frame (textRaster), then flipped, cropped and turned the same way, keeping
+ * its transparency. Audio as in the layered graph: each heard clip's sound delayed to
  * its start, over silence.
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
@@ -126,8 +154,11 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const i = inputs.length
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
+    const text = isTextClip(c) ? textRaster(p, c) : null
     // The overlay position below puts a full-canvas frame at 0, 0.
-    const place = isIdentity(c.transform)
+    const place = text
+      ? [`scale=${text.w}:${text.h}`, `setsar=1,fps=${fps},format=rgba`, ...transformFilters(t)].join(",")
+      : isIdentity(c.transform)
       ? frame
       : [
           `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
@@ -137,8 +168,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const shift = `setpts=PTS+${num(start)}/TB`
     if (isImage(c)) {
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
-      // A turned still keeps its transparent corners.
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"},${shift}[v${i}]`)
+      // A turned still keeps its transparent corners, and text its transparency.
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
@@ -171,7 +202,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * (delayed to its start), mixed over silence the timeline's length. When any
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
- * the graph is the same as it always was.
+ * the graph is the same as it always was. A text clip (its PNG in `files`
+ * under textFileKey) always takes the uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -180,15 +212,13 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   const parts: string[] = []
   const frame = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
   const fileFor = (c: Clip) => {
-    const file = files[c.asset]
-    if (!file) throw new Error("Missing asset file")
+    const file = files[isTextClip(c) ? textFileKey(c) : c.asset]
+    if (!file) throw new Error(isTextClip(c) ? "Missing text picture" : "Missing asset file")
     return file
   }
-  const isImage = (c: Clip) => {
-    const asset = p.assets[c.asset]
-    return asset !== undefined && assetKind(asset) === "image"
-  }
-  if (allClips(p).some((c) => !isIdentity(c.transform)) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
+  // A still: an image's clip or a text clip's PNG.
+  const isImage = (c: Clip) => isStill(p, c)
+  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c)) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or is muted).
   const [baseTrack, ...overlays] = p.tracks

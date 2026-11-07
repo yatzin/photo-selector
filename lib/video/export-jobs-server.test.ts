@@ -364,6 +364,40 @@ describe("startExport with images", () => {
   })
 })
 
+const FFMPEG = path.resolve(".data/ffmpeg.exe")
+const hasFfmpeg = fsSync.existsSync(FFMPEG)
+
+;(hasFfmpeg ? describe : describe.skip)(hasFfmpeg ? "startExport with text" : "startExport with text (SKIPPED: .data/ffmpeg.exe not found)", () => {
+  it("draws each distinct text once into a PNG fed in like a still, and removes the PNGs with the job", async () => {
+    process.env.FFMPEG_PATH = FFMPEG
+    const folder = await makeProject()
+    const p = (await readProject("mike", folder))!
+    const text = { content: "Hi", color: "#ffcc00", orientation: "horizontal" as const }
+    await writeProject("mike", folder, {
+      ...p,
+      tracks: [
+        p.tracks[0],
+        { id: "t2", clips: [{ id: "x", asset: "", in: 0, out: 1, start: 0, text }, { id: "y", asset: "", in: 0, out: 1, start: 2, text }] },
+      ],
+    })
+    let pngs: string[] = []
+    runExport.mockImplementation(async (args: string[], outFile: string) => {
+      pngs = args.filter((a) => a.endsWith(".png"))
+      // Drawn while ffmpeg runs: a real PNG with transparency.
+      for (const png of pngs) expect((await sharp(png).metadata()).hasAlpha).toBe(true)
+      await fs.writeFile(outFile, "video")
+    })
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    expect(await waitDone("mike", r.jobId)).toMatchObject({ state: "done" })
+    // Two clips with the same text and size share one PNG.
+    expect(pngs).toHaveLength(2)
+    expect(pngs[0]).toBe(pngs[1])
+    await eventually(() => !fsSync.existsSync(pngs[0]))
+    expect(fsSync.existsSync(path.dirname(pngs[0]))).toBe(false)
+  }, 60_000)
+})
+
 describe("sanitizeError", () => {
   it("strips drive, UNC, rooted and relative paths", () => {
     expect(sanitizeError("C:\\a\\b.mp4: bad")).toBe("file: bad")

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { exportFingerprint } from "./export-state"
 import { newProject, removeAsset, type Project } from "./project"
+import type { ClipText } from "./text"
 
 function project(): Project {
   return {
@@ -92,5 +93,17 @@ describe("exportFingerprint", () => {
   it("treats a video asset with no kind like one with kind video", () => {
     const p = project()
     expect(exportFingerprint({ ...p, assets: { ...p.assets, a: { ...p.assets.a, kind: "video" } } })).toBe(exportFingerprint(p))
+  })
+
+  it("changes with a text clip's content, colour and orientation, and ignores its empty asset", () => {
+    const text = { content: "Hi", color: "#ffffff", orientation: "horizontal" as const }
+    const withText = (t: ClipText = text): Project => {
+      const p = project()
+      return { ...p, tracks: [p.tracks[0], { ...p.tracks[1], clips: [...p.tracks[1].clips, { id: "x", asset: "", in: 0, out: 2, start: 5, text: t }] }] }
+    }
+    const base = exportFingerprint(withText())
+    expect(base).not.toBe(exportFingerprint(project()))
+    expect(exportFingerprint(withText())).toBe(base)
+    for (const t of [{ ...text, content: "Ho" }, { ...text, color: "#ff0000" }, { ...text, orientation: "vertical" as const }]) expect(exportFingerprint(withText(t))).not.toBe(base)
   })
 })

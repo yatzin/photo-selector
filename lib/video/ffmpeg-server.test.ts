@@ -4,8 +4,10 @@ import os from "os"
 import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
+import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport, textRaster } from "./ffmpeg-server"
 import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
+import type { ClipText } from "./text"
+import { rasteriseText } from "./text-raster-server"
 import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
 
 describe("parseProbe", () => {
@@ -394,6 +396,58 @@ describe("buildExportArgs with transforms", () => {
   })
 })
 
+describe("buildExportArgs with text clips", () => {
+  const text = (over: Partial<ClipText> = {}): ClipText => ({ content: "Hi", color: "#ffffff", orientation: "horizontal", ...over })
+  function project(clip: Partial<Clip>): Project {
+    return {
+      ...newProject("Text"),
+      assets: { a: { file: "a.mp4", duration: 5, hasAudio: true } },
+      tracks: [
+        { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] },
+        { id: "t2", clips: [{ id: "x", asset: "", in: 0, out: 2, start: 1, text: text(), ...clip }] },
+      ],
+    }
+  }
+  const tFiles = { a: "/x/a.mp4", "text:x": "/x/text.png" }
+
+  it("sizes the frame from the content box at the clip's scale (even px), drawn at a font size step above it", () => {
+    // "Hi" at 108 px: 2 x 0.6 + 0.5 = 1.7 font sizes wide (183.6), 1.3 + 0.5 = 1.8 tall (194.4).
+    expect(textRaster(project({}), { ...project({}).tracks[1].clips[0], text: text() })).toEqual({ fontPx: 120, w: 184, h: 194 })
+    const big = project({ transform: { ...IDENTITY, scale: 2 } }).tracks[1].clips[0]
+    expect(textRaster(project({}), { ...big, text: text() })).toEqual({ fontPx: 220, w: 368, h: 388 })
+  })
+
+  it("feeds the text's PNG in like a still and overlays it, transparent, centred, over the layers below (always the uniform graph)", () => {
+    const args = buildExportArgs(project({}), tFiles, "o")
+    expect(args.slice(args.indexOf("/x/text.png") - 7, args.indexOf("/x/text.png") + 1)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2", "-i", "/x/text.png"])
+    const g = graph(args)
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=4,format=yuv420p[bg]")
+    expect(g).toContain("[1:v]setpts=PTS-STARTPTS,scale=184:194,setsar=1,fps=30,format=rgba,setsar=1,format=yuva420p,setpts=PTS+1/TB[v1]")
+    expect(g).toContain("[l1][v1]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,1,3)':eof_action=pass[v]")
+    // No sound from it.
+    expect(g).not.toContain("[1:a]")
+  })
+
+  it("flips, crops and turns the text's frame like a picture's", () => {
+    const g = graph(buildExportArgs(project({ transform: { ...IDENTITY, scale: 2, rotation: 90, flipH: true, cropTop: 0.1 } }), tFiles, "o"))
+    expect(g).toContain(
+      "[1:v]setpts=PTS-STARTPTS,scale=368:388,setsar=1,fps=30,format=rgba,hflip,format=rgba,drawbox=x=0:y=0:w=iw:h=round(ih*0.1):color=black@0:t=fill:replace=1," +
+        "rotate=1.570796:ow=rotw(1.570796):oh=roth(1.570796):c=black@0,setsar=1,format=yuva420p,format=yuva420p,setpts=PTS+1/TB[v1]"
+    )
+    expect(g).toContain("[l1][v1]overlay=x=(W-w)/2+0*W:y=(H-h)/2+0*H:eval=init")
+  })
+
+  it("gives vertical text a tall frame", () => {
+    // "Hey" stacked: 0.6 + 0.5 = 1.1 font sizes wide (118.8), 3 x 1.3 + 0.5 = 4.4 tall (475.2).
+    const g = graph(buildExportArgs(project({ text: text({ content: "Hey", orientation: "vertical" }) }), tFiles, "o"))
+    expect(g).toContain("scale=118:476,setsar=1,fps=30,format=rgba,setsar=1,format=yuva420p")
+  })
+
+  it("refuses a text clip with no PNG", () => {
+    expect(() => buildExportArgs(project({}), { a: "/x/a.mp4" }, "o")).toThrow("Missing text picture")
+  })
+})
+
 describe("parseProgressLine", () => {
   it("reads out_time_ms and out_time_us (both microseconds) as a fraction", () => {
     expect(parseProgressLine("out_time_ms=2500000", 10)).toBe(0.25)
@@ -714,6 +768,49 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     expect(await level(1.3, 0.9)).toBeLessThan(-60)
     expect(await level(0.2, 0.6)).toBeGreaterThan(-40)
     expect(await level(2.7, 0.6)).toBeGreaterThan(-40)
+  }, 60_000)
+
+  /** The brightest luma in canvas rect x, y, w, h one second into `file`. */
+  async function brightest(file: string, x: number, y: number, w: number, h: number): Promise<number> {
+    const px = await ffmpeg(["-ss", "1", "-i", file, "-frames:v", "1", "-vf", `crop=${w}:${h}:${x}:${y},format=gray`, "-f", "rawvideo", "-"])
+    return px.stdout.reduce((m, v) => Math.max(m, v), 0)
+  }
+
+  /** A blue base video 0-2 s and a white text clip over it, its PNG drawn by rasteriseText. */
+  async function textExport(text: ClipText, transform: Transform, name: string) {
+    const { blue } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Text"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true } },
+      tracks: [
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 2, start: 0 }] },
+        { id: "t2", clips: [{ id: "x", asset: "", in: 0, out: 2, start: 0, text, transform }] },
+      ],
+    }
+    const png = path.join(dir, `${name}.png`)
+    await rasteriseText(text, textRaster(p, { ...p.tracks[1].clips[0], text }).fontPx, png, dir)
+    return exportProject(p, { v: blue, "text:x": png }, `${name}.mp4`)
+  }
+
+  it("draws horizontal text where the preview has it: inside its box, the lower layer through its padding", async () => {
+    const t: Transform = { ...IDENTITY, x: -0.25, scale: 2 }
+    const r = await textExport({ content: "HI", color: "#ffffff", orientation: "horizontal" }, t, "text-h")
+    // The box at scale 2: 1.7 x 216 = 367 wide, 1.8 x 216 = 389 tall, centred at 480, 540.
+    const v = clipRect({ w: 1.7 * 108, h: 1.8 * 108 }, 1920, 1080, t).visible
+    expect(await brightest(r.out, Math.round(v.x + 60), Math.round(v.y + 60), Math.round(v.w - 120), Math.round(v.h - 120))).toBeGreaterThan(200)
+    // The top padding (a quarter font size, 54 px) shows the blue base; so does the rest of the canvas.
+    expect(await brightest(r.out, Math.round(v.x), Math.round(v.y + 4), Math.round(v.w), 40)).toBeLessThan(100)
+    expect(await brightest(r.out, 1100, 100, 700, 800)).toBeLessThan(100)
+  }, 60_000)
+
+  it("draws vertical text turned 90 degrees across the canvas", async () => {
+    const t: Transform = { ...IDENTITY, scale: 2, rotation: 90 }
+    const r = await textExport({ content: "HI", color: "#ffffff", orientation: "vertical" }, t, "text-v")
+    // Stacked, the box is 1.1 x 216 = 238 wide and 3.1 x 216 = 670 tall; turned, it lies across the centre.
+    expect(await brightest(r.out, 680, 480, 560, 120)).toBeGreaterThan(200)
+    // Above and below that band (where it would be unturned) is the blue base.
+    expect(await brightest(r.out, 900, 120, 120, 280)).toBeLessThan(100)
+    expect(await brightest(r.out, 900, 700, 120, 280)).toBeLessThan(100)
   }, 60_000)
 
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {

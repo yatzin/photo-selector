@@ -1,5 +1,5 @@
 import { createHash } from "crypto"
-import { assetKind, type Project } from "./project"
+import { assetKind, isTextClip, type Project } from "./project"
 import { isIdentity, type Transform } from "./transform"
 
 // What the last export was made from. output/.export-state.json names the one
@@ -24,7 +24,7 @@ function canonical(value: unknown): string {
  * SHA-256 (hex) of everything that changes the exported video: size, frame
  * rate, the tracks in order (clips with ids, assets, trims, starts and
  * transforms, an identity one counting as none and a zero left or right crop
- * as an absent one, as are a zero rotation and a false flip, and each clip's mute) and the file, kind, length and audio of each
+ * as an absent one, as are a zero rotation and a false flip, each clip's mute and a text clip's text) and the file, kind, length and audio of each
  * asset a clip uses. The project's name and unused assets don't count, so
  * deleting an asset no clip used keeps the kept export.
  */
@@ -34,7 +34,7 @@ const transformKey = (t: Transform | undefined) =>
     : { ...t, cropLeft: t.cropLeft || undefined, cropRight: t.cropRight || undefined, rotation: t.rotation || undefined, flipH: t.flipH || undefined, flipV: t.flipV || undefined }
 
 export function exportFingerprint(p: Project): string {
-  const used = new Set(p.tracks.flatMap((t) => t.clips.map((c) => c.asset)))
+  const used = new Set(p.tracks.flatMap((t) => t.clips.filter((c) => !isTextClip(c)).map((c) => c.asset)))
   const assets: Record<string, unknown> = {}
   for (const id of used) {
     const a = p.assets[id]
@@ -42,7 +42,7 @@ export function exportFingerprint(p: Project): string {
   }
   const tracks = p.tracks.map((t) => ({
     id: t.id,
-    clips: t.clips.map((c) => ({ id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start, transform: transformKey(c.transform), muted: c.muted === true })),
+    clips: t.clips.map((c) => ({ id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start, transform: transformKey(c.transform), muted: c.muted === true, text: c.text })),
   }))
   return createHash("sha256").update(canonical({ width: p.width, height: p.height, fps: p.fps, tracks, assets })).digest("hex")
 }

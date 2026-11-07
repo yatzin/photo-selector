@@ -1,5 +1,5 @@
 import "server-only"
-import { randomBytes } from "crypto"
+import { createHash, randomBytes } from "crypto"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -7,8 +7,9 @@ import { numberedName, projectFolderName } from "@/lib/media"
 import { ensureVariant } from "@/lib/thumbs-server"
 import { EXPORT_STATE_FILE, exportFingerprint } from "./export-state"
 import { cleanOutputs, reusableExport, writeExportState } from "./export-state-server"
-import { buildExportArgs, buildExportGraph, runExport } from "./ffmpeg-server"
-import { allClips, assetKind, totalLength } from "./project"
+import { buildExportArgs, buildExportGraph, runExport, textFileKey, textRaster } from "./ffmpeg-server"
+import { allClips, assetKind, isTextClip, totalLength } from "./project"
+import { rasteriseText } from "./text-raster-server"
 import { assetPath, outputDir, readProject } from "./projects-server"
 
 // Exports run in this server process (the table is in-process, so a second
@@ -17,6 +18,8 @@ import { assetPath, outputDir, readProject } from "./projects-server"
 // started them, so another user's job id looks like an unknown one.
 // output/ keeps one copy: a finished export replaces the earlier ones, and an
 // export of an unchanged project hands back the kept copy without rendering.
+// Text clips are drawn into PNGs (rasteriseText) in a temporary folder, one
+// per distinct text and font size, removed with the job.
 
 type Job = {
   user: string
@@ -75,6 +78,7 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
   jobs.set(jobId, job)
 
   let prepared: Prepared
+  let textDir: string | null = null
   try {
     const project = await readProject(user, folder)
     if (!project) throw new Error("Project not found.")
@@ -95,6 +99,15 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
     }
     const files: Record<string, string> = {}
     for (const clip of clips) {
+      if (isTextClip(clip)) {
+        const { fontPx } = textRaster(project, clip)
+        const name = createHash("sha256").update(JSON.stringify([fontPx, clip.text.content, clip.text.color, clip.text.orientation])).digest("hex").slice(0, 32)
+        textDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "ps-text-"))
+        const png = path.join(textDir, `${name}.png`)
+        if (!(await exists(png))) await rasteriseText(clip.text, fontPx, png, textDir)
+        files[textFileKey(clip)] = png
+        continue
+      }
       if (files[clip.asset]) continue
       const asset = project.assets[clip.asset]
       const file = asset && assetPath(user, folder, asset.file)
@@ -115,9 +128,10 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
     const script = path.join(os.tmpdir(), `ps-export-${randomBytes(8).toString("hex")}.txt`)
     const args = buildExportArgs(project, files, tmp, script)
     await fs.writeFile(script, buildExportGraph(project, files).graph)
-    prepared = { args, tmp, script, final: (n) => numberedName(base, n), total: totalLength(project), dir, fingerprint }
+    prepared = { args, tmp, script, textDir, final: (n) => numberedName(base, n), total: totalLength(project), dir, fingerprint }
   } catch (error) {
     jobs.delete(jobId)
+    if (textDir) await quietRmDir(textDir)
     return { error: safeMessage(error) }
   }
 
@@ -129,9 +143,10 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
   return { jobId }
 }
 
-type Prepared = { args: string[]; tmp: string; script: string; final: (n: number) => string; total: number; dir: string; fingerprint: string }
+type Prepared = { args: string[]; tmp: string; script: string; textDir: string | null; final: (n: number) => string; total: number; dir: string; fingerprint: string }
 
 const quietRm = (file: string) => fs.rm(file, { force: true }).catch(() => {})
+const quietRmDir = (dir: string) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {})
 
 /**
  * Records the new copy in the state file, then removes every other file in
@@ -149,7 +164,7 @@ async function keepOnly(dir: string, name: string, fingerprint: string) {
   await cleanOutputs(dir, [name, EXPORT_STATE_FILE])
 }
 
-async function run(job: Job, { args, tmp, script, final, total, dir, fingerprint }: Prepared) {
+async function run(job: Job, { args, tmp, script, textDir, final, total, dir, fingerprint }: Prepared) {
   try {
     await runExport(args, tmp, total, (f) => {
       job.progress = Math.max(job.progress, f)
@@ -174,6 +189,7 @@ async function run(job: Job, { args, tmp, script, final, total, dir, fingerprint
   } finally {
     job.finishedAt = Date.now()
     await quietRm(script)
+    if (textDir) await quietRmDir(textDir)
   }
 }
 
