@@ -2,7 +2,7 @@ import "server-only"
 import { execFile } from "child_process"
 import fs from "fs/promises"
 import path from "path"
-import { fontById } from "./fonts"
+import { DEFAULT_FONT, fontById } from "./fonts"
 import { textLayout, type ClipText } from "./text"
 
 // A text clip's picture for the export: its text drawn by ffmpeg's drawtext
@@ -31,11 +31,16 @@ export async function rasteriseText(text: ClipText, fontPx: number, outFile: str
   try {
     await fs.copyFile(textFontPath(text.font), path.join(dir, "font.ttf"))
     const filters = [`color=c=black@0:s=${w}x${h}:r=1:d=1`, "format=rgba"]
+    // drawtext cuts the ink at the line's advances, so a script's swash past its first or last
+    // letter would be lost; spaces on both ends (at least the font's pad) widen what it keeps
+    // and leave the line's centre where it was. Mono's ink stays inside its advances: as it was.
+    const font = fontById(text.font)
+    const ends = font.id === DEFAULT_FONT ? "" : " ".repeat(Math.ceil((font.pad * font.upm) / font.advances[0]))
     let n = 0
     for (const line of layout.lines) {
       if (line.text.trim() === "") continue
       const file = `l${n++}.txt`
-      await fs.writeFile(path.join(dir, file), line.text)
+      await fs.writeFile(path.join(dir, file), ends + line.text + ends)
       // expansion=none: the text is drawn as it is (no %{...} sequences).
       filters.push(
         `drawtext=fontfile=font.ttf:textfile=${file}:expansion=none:fontsize=${fontPx}:fontcolor=0x${text.color.slice(1)}:x=(w-text_w)/2:y=${Number(line.baseline.toFixed(3))}:y_align=baseline`

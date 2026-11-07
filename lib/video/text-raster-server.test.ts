@@ -3,7 +3,7 @@ import os from "os"
 import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { fontById, FONTS } from "./fonts"
+import { fontById, FONTS, lineWidth } from "./fonts"
 import { textLayout, type ClipText } from "./text"
 import { rasteriseText, textFontPath } from "./text-raster-server"
 
@@ -132,8 +132,8 @@ describe("textFontPath", () => {
     expect(rb.solid).toBeGreaterThan(50)
   }, 30_000)
 
-  // drawtext cuts a glyph that crosses the frame edge a few px inside it, so ink within 4 px of the edge was cut.
-  const MIN_MARGIN = 4
+  // Ink on the PNG's outermost pixels was cut by its edge; a swash may come within a pixel or two of it (the pad is its reach rounded up to a twentieth).
+  const MIN_MARGIN = 0
   /** The least distance (px) from any drawn pixel to the PNG's edge. */
   const margin = (r: Awaited<ReturnType<typeof read>>) => {
     let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
@@ -159,6 +159,20 @@ describe("textFontPath", () => {
       expect([r.w, r.h], font).toEqual([Math.ceil(box.w - 1e-6), Math.ceil(box.h - 1e-6)])
       expect(r.solid, font).toBeGreaterThan(2000)
       expect(margin(r), font).toBeGreaterThan(MIN_MARGIN)
+    }
+  }, 60_000)
+
+  it("draws a script's swashes past the line's advances, as the preview does (drawtext alone cuts them there)", async () => {
+    // Great Vibes' j reaches 0.4 of the font size left of its advance, its T 0.48 right; Monsieur La Doulaise's further.
+    for (const font of ["great-vibes", "monsieur-la-doulaise"]) {
+      const text: ClipText = { content: "jJY QfNKT", color: "#ffffff", orientation: "horizontal", font }
+      const out = path.join(dir, `sw-${font}.png`)
+      await rasteriseText(text, 100, out, dir)
+      const r = await read(out)
+      const half = (lineWidth(fontById(font), text.content) * 100) / 2
+      const i = ink(r)
+      expect(i.left, font).toBeLessThan(r.w / 2 - half - 30)
+      expect(i.right, font).toBeGreaterThan(r.w / 2 + half + 30)
     }
   }, 60_000)
 
