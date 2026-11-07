@@ -503,6 +503,86 @@ describe("buildExportArgs with text clips", () => {
   })
 })
 
+describe("buildExportArgs with transitions", () => {
+  const assets: Project["assets"] = {
+    v: { file: "v.mp4", duration: 10, hasAudio: true },
+    w: { file: "w.mp4", duration: 10, hasAudio: true },
+    i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" },
+    j: { file: "j.jpg", duration: 5, hasAudio: false, kind: "image" },
+  }
+  const xFiles = { v: "/x/v.mp4", w: "/x/w.mp4", i: "/x/i.jpg", j: "/x/j.jpg", "text:t": "/x/t.png" }
+  const fade = (duration = 1, type: "fade" | "wipeleft" | "slideup" = "fade") => ({ type, duration })
+  const project = (...tracks: Clip[][]): Project => ({ ...newProject("X"), assets, tracks: tracks.map((clips, k) => ({ id: `t${k + 1}`, clips })) })
+
+  it("joins two images with xfade at the start of the transition, each held half of it past its cut", () => {
+    const g = graph(buildExportArgs(project([{ id: "a", asset: "i", in: 0, out: 4, start: 0 }, { id: "b", asset: "j", in: 0, out: 4, start: 4, transition: fade() }]), xFiles, "o"))
+    expect(g).toContain("format=yuv420p,tpad=start_duration=0:stop_duration=0.5:start_mode=clone:stop_mode=clone,setpts=PTS+0/TB[v0]")
+    expect(g).toContain("format=yuv420p,tpad=start_duration=0.5:stop_duration=0:start_mode=clone:stop_mode=clone,setpts=PTS+3.5/TB[v1]")
+    expect(g).toContain("color=c=black@0:s=1920x1080:r=30:d=4.5,format=yuva420p,setpts=PTS+0/TB[tc0]")
+    expect(g).toContain("color=c=black@0:s=1920x1080:r=30:d=4.5,format=yuva420p,setpts=PTS+3.5/TB[tc1]")
+    expect(g).toContain("[tc0][v0]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:eof_action=pass:format=auto,setpts=PTS-STARTPTS[ts0]")
+    expect(g).toContain("[ts0][ts1]xfade=transition=fade:duration=1:offset=3.5[tx1]")
+    expect(g).toContain("[tx1]setpts=PTS+0/TB[u0];[bg][u0]overlay=x=0:y=0:enable='between(t,0,8)':eof_action=pass[v]")
+    // The timeline keeps its length.
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=8,format=yuv420p[bg]")
+  })
+
+  it("plays two videos' footage beyond the cut and crossfades their sound (equal power)", () => {
+    const g = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0 }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: fade(2, "wipeleft") }]), xFiles, "o"))
+    expect(g).toContain("[0:v]trim=1:5,setpts=PTS-STARTPTS,")
+    expect(g).toContain("[1:v]trim=1:5,setpts=PTS-STARTPTS,")
+    expect(g).toContain("[0:a]atrim=1:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=2:d=2:curve=qsin,adelay=delays=0S:all=1[a0]")
+    expect(g).toContain("[1:a]atrim=1:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=2:curve=qsin,adelay=delays=96000S:all=1[a1]")
+    expect(g).toContain("[ts0][ts1]xfade=transition=wipeleft:duration=2:offset=2[tx1]")
+    expect(g).toContain("amix=inputs=3")
+  })
+
+  it("goes from an image to a text clip", () => {
+    const text = { content: "Hi", color: "#ffffff", orientation: "horizontal" as const }
+    const g = graph(buildExportArgs(project([{ id: "a", asset: "i", in: 0, out: 3, start: 0 }, { id: "t", asset: "", in: 0, out: 3, start: 3, text, transition: fade(1, "slideup") }]), xFiles, "o"))
+    expect(g).toContain("format=yuva420p,tpad=start_duration=0.5:stop_duration=0:start_mode=clone:stop_mode=clone,setpts=PTS+2.5/TB[v1]")
+    expect(g).toContain("[ts0][ts1]xfade=transition=slideup:duration=1:offset=2.5[tx1]")
+  })
+
+  it("chains three clips, the middle one extended on both sides", () => {
+    const g = graph(buildExportArgs(project([
+      { id: "a", asset: "v", in: 1, out: 4, start: 0 },
+      { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: fade(1) },
+      { id: "c", asset: "v", in: 6, out: 8, start: 6, transition: fade(2, "wipeleft") },
+    ]), xFiles, "o"))
+    expect(g).toContain("[1:v]trim=1.5:6,")
+    expect(g).toContain("[2:v]trim=5:8,")
+    expect(g).toContain("[1:a]atrim=1.5:6,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=1:curve=qsin,afade=t=out:st=2.5:d=2:curve=qsin,adelay=delays=120000S:all=1[a1]")
+    expect(g).toContain("[ts0][ts1]xfade=transition=fade:duration=1:offset=2.5[tx1]")
+    expect(g).toContain("[tx1][ts2]xfade=transition=wipeleft:duration=2:offset=5[tx2]")
+    expect(g).toContain("[tx2]setpts=PTS+0/TB[u0];[bg][u0]overlay=x=0:y=0:enable='between(t,0,8)':eof_action=pass[v]")
+  })
+
+  it("places a moved, scaled and turned clip on its canvas where it would be without the transition", () => {
+    const t: Transform = { ...IDENTITY, x: 0.1, scale: 0.5, rotation: 45 }
+    const g = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0, transform: t }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: fade() }]), xFiles, "o"))
+    expect(g).toContain("rotate=0.785398:ow=rotw(0.785398):oh=roth(0.785398):c=black@0,setsar=1,format=yuva420p,setpts=PTS+0/TB[v0]")
+    expect(g).toContain(`[tc0][v0]overlay=x=${overlayPosition(t).x}:y=${overlayPosition(t).y}:eval=init:eof_action=pass:format=auto`)
+  })
+
+  it("keeps a muted clip silent through its transition, and leaves other layers' clips as they were", () => {
+    const plain = [{ id: "o", asset: "v", in: 0, out: 2, start: 1 }]
+    const p = project([{ id: "a", asset: "v", in: 1, out: 4, start: 0, muted: true }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: fade() }], plain)
+    const g = graph(buildExportArgs(p, xFiles, "o"))
+    expect(g).not.toContain("[0:a]")
+    expect(g).toContain("[0:v]trim=1:4.5,")
+    expect(g).toContain("[1:a]atrim=1.5:5,")
+    expect(g).toContain("[2:v]trim=0:2,setpts=PTS-STARTPTS,")
+    expect(g).toContain("[l1][v2]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,1,3)':eof_action=pass[v]")
+  })
+
+  it("builds the same graph as before once the transition is gone", () => {
+    const clips: Clip[] = [{ id: "a", asset: "i", in: 0, out: 4, start: 0 }, { id: "b", asset: "j", in: 0, out: 4, start: 4 }]
+    // No transition and no transform: the old concat graph, untouched.
+    expect(graph(buildExportArgs(project(clips), xFiles, "o"))).toMatch(/concat=n=2:v=1:a=1\[v\]\[a\]$/)
+  })
+})
+
 describe("parseProgressLine", () => {
   it("reads out_time_ms and out_time_us (both microseconds) as a fraction", () => {
     expect(parseProgressLine("out_time_ms=2500000", 10)).toBe(0.25)
@@ -1004,5 +1084,105 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     ).rejects.toThrow("The export timed out.")
     expect(existedWhileRunning).toBe(true)
     expect(fs.existsSync(out)).toBe(false)
+  }, 60_000)
+})
+
+// Transitions with real ffmpeg: only .data/ffmpeg.exe is needed (the clips are generated).
+const hasFfmpeg = fs.existsSync(FFMPEG)
+;(hasFfmpeg ? describe : describe.skip)(hasFfmpeg ? "transitions with real ffmpeg" : "transitions with real ffmpeg (SKIPPED: .data/ffmpeg.exe not found)", () => {
+  const dir = path.join(os.tmpdir(), `ps-xfade-${process.pid}-${Date.now()}`)
+  const red = path.join(dir, "red.mp4")
+  const blue = path.join(dir, "blue.mp4")
+
+  beforeAll(async () => {
+    process.env.FFMPEG_PATH = FFMPEG
+    fs.mkdirSync(dir, { recursive: true })
+    for (const [file, colour, hz] of [[red, "red", 440], [blue, "blue", 660]] as const) {
+      await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=320x180:r=30:d=6`, "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=6`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", file])
+    }
+  }, 60_000)
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  // Red from source 1 to 4 at 0-3 s, blue from 1 to 4 at 3-6 s: a 1 s transition runs from 2.5 to 3.5 s.
+  async function render(type: "fade" | "wipeleft" | "slideleft") {
+    const p: Project = {
+      ...newProject("X"),
+      assets: { r: { file: "r", duration: 6, hasAudio: true }, b: { file: "b", duration: 6, hasAudio: true } },
+      tracks: [{ id: "t1", clips: [{ id: "1", asset: "r", in: 1, out: 4, start: 0 }, { id: "2", asset: "b", in: 1, out: 4, start: 3, transition: { type, duration: 1 } }] }],
+    }
+    const out = path.join(dir, `${type}.mp4`)
+    const script = path.join(dir, `${type}.graph.txt`)
+    const files = { r: red, b: blue }
+    fs.writeFileSync(script, buildExportGraph(p, files).graph)
+    await runExport(buildExportArgs(p, files, out, script), out, totalLength(p), () => {})
+    return out
+  }
+  /** RGB at x, y (1920x1080) of the frame at `t` seconds. */
+  async function pixel(file: string, t: number, x = 960, y = 540): Promise<number[]> {
+    const px = await ffmpeg(["-ss", String(t), "-i", file, "-frames:v", "1", "-vf", `crop=2:2:${x}:${y},format=rgb24`, "-f", "rawvideo", "-"])
+    return [px.stdout[0], px.stdout[1], px.stdout[2]]
+  }
+  const isRed = ([r, , b]: number[]) => r > 200 && b < 60
+  const isBlue = ([r, , b]: number[]) => b > 200 && r < 60
+
+  it("crossfades: red before, a mix in the middle, blue after, the same length, sound across the cut", async () => {
+    const out = await render("fade")
+    expect(isRed(await pixel(out, 2))).toBe(true)
+    const mid = await pixel(out, 3)
+    expect(mid[0]).toBeGreaterThan(70)
+    expect(mid[0]).toBeLessThan(190)
+    expect(mid[2]).toBeGreaterThan(70)
+    expect(mid[2]).toBeLessThan(190)
+    expect(isBlue(await pixel(out, 4))).toBe(true)
+    expect(Math.abs((await probeMedia(out)).duration - 6)).toBeLessThan(0.15)
+    // Sound at the cut: the loudest sample from 2.9 to 3.1 s is well above silence.
+    const pcm = (await ffmpeg(["-ss", "2.9", "-t", "0.2", "-i", out, "-map", "0:a", "-ac", "1", "-f", "s16le", "-"])).stdout
+    let peak = 0
+    for (let k = 0; k + 1 < pcm.length; k += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(k)))
+    expect(peak).toBeGreaterThan(3000)
+  }, 60_000)
+
+  it("wipes left: half and half at the middle, blue coming in on the right", async () => {
+    const out = await render("wipeleft")
+    expect(isRed(await pixel(out, 2, 1440))).toBe(true)
+    expect(isRed(await pixel(out, 3, 480))).toBe(true)
+    expect(isBlue(await pixel(out, 3, 1440))).toBe(true)
+    expect(isBlue(await pixel(out, 4, 480))).toBe(true)
+  }, 60_000)
+
+  it("chains three clips (a turned, muted video, an image, a video) over a lower layer and keeps the length", async () => {
+    const image = path.join(dir, "green.png")
+    await sharp({ create: { width: 400, height: 300, channels: 3, background: "#0c0" } }).png().toFile(image)
+    const p: Project = {
+      ...newProject("Chain"),
+      assets: { r: { file: "r", duration: 6, hasAudio: true }, b: { file: "b", duration: 6, hasAudio: true }, g: { file: "g", duration: 5, hasAudio: false, kind: "image" } },
+      tracks: [
+        { id: "t1", clips: [{ id: "base", asset: "b", in: 0, out: 6, start: 0 }] },
+        {
+          id: "t2",
+          clips: [
+            { id: "1", asset: "r", in: 1, out: 3, start: 0, muted: true, transform: { ...IDENTITY, scale: 0.5, rotation: 30 } },
+            { id: "2", asset: "g", in: 0, out: 2, start: 2, transition: { type: "circleopen", duration: 1 } },
+            { id: "3", asset: "r", in: 2, out: 4, start: 4, transition: { type: "dissolve", duration: 1 } },
+          ],
+        },
+      ],
+    }
+    const out = path.join(dir, "chain.mp4")
+    const files = { r: red, b: blue, g: image }
+    await runExport(buildExportArgs(p, files, out), out, totalLength(p), () => {})
+    expect(Math.abs((await probeMedia(out)).duration - 6)).toBeLessThan(0.15)
+    // Mid-image the picture is the green still, and the turned red clip's corner shows the blue base around it before.
+    const g = await pixel(out, 3)
+    expect(g[1]).toBeGreaterThan(150)
+    expect(isBlue(await pixel(out, 0.5, 40, 40))).toBe(true)
+  }, 60_000)
+
+  it("slides left: red pushed out on the left, blue in on the right", async () => {
+    const out = await render("slideleft")
+    expect(isRed(await pixel(out, 2.4, 1800))).toBe(true)
+    expect(isRed(await pixel(out, 3, 480))).toBe(true)
+    expect(isBlue(await pixel(out, 3, 1440))).toBe(true)
+    expect(isBlue(await pixel(out, 3.6, 100))).toBe(true)
   }, 60_000)
 })

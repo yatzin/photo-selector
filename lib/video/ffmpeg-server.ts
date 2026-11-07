@@ -1,7 +1,7 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { adjoins, allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
@@ -177,6 +177,16 @@ export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"
  * frame (textRaster), then flipped, cropped and turned the same way, keeping
  * its transparency. Audio as in the layered graph: each heard clip's sound delayed to
  * its start, over silence.
+ *
+ * Transitions: clips a track joins with transitions are one run. Each clip
+ * of a run is extended by half of each of its transitions (centred on the
+ * cut: the footage past its out point, before its in point, a still's frame
+ * held), placed on a transparent canvas of its own as above, and xfade joins
+ * the canvases one after another (the type is xfade's own name), each at the
+ * start of its transition, so the run keeps its clips' places and length;
+ * the run is overlaid like one clip. The sounds overlap by the same spans,
+ * fading out and in (equal power). A clip in no run is placed as before, so a
+ * project without transitions builds the same graph.
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
   const { width: W, height: H, fps } = p
@@ -185,10 +195,15 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const total = num(totalLength(p))
   parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
   const mix = ["[asil]"]
-  const clips = allClips(p)
-  let under = "[bg]"
-  clips.forEach((c, n) => {
-    const start = c.start
+  /**
+   * A clip's picture as stream [v<i>] on the timeline's time, and its sound
+   * into the mix; the overlay's x, y options for it. `pre` and `post` extend it
+   * (s) before its start and past its end for a transition: a video plays the
+   * footage beyond its in and out points, a still holds its first and last
+   * frame (tpad), and the sound fades in over 2 x pre and out over 2 x post
+   * (equal power, qsin).
+   */
+  const source = (c: Clip, pre = 0, post = 0) => {
     const i = inputs.length
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
@@ -208,27 +223,72 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
           `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
           ...transformFilters(t),
         ].join(",")
-    const shift = `setpts=PTS+${num(start)}/TB`
+    const shift = `setpts=PTS+${num(c.start - pre)}/TB`
     if (isImage(c)) {
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
+      const hold = pre > 0 || post > 0 ? `,tpad=start_duration=${num(pre)}:stop_duration=${num(post)}:start_mode=clone:stop_mode=clone` : ""
       // A turned still keeps its transparent corners, and text its transparency.
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"},${shift}[v${i}]`)
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
-      parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
+      parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
       if (!c.muted && p.assets[c.asset]?.hasAudio !== false) {
+        const fades = [
+          ...(pre > 0 ? [`afade=t=in:st=0:d=${num(2 * pre)}:curve=qsin`] : []),
+          ...(post > 0 ? [`afade=t=out:st=${num(clipLength(c) + pre - post)}:d=${num(2 * post)}:curve=qsin`] : []),
+        ].map((f) => `${f},`).join("")
         parts.push(
-          `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=${Math.round(start * 48000)}S:all=1[a${i}]`
+          `[${i}:a]atrim=${num(c.in - pre)}:${num(c.out + post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - pre) * 48000)}S:all=1[a${i}]`
         )
         mix.push(`[a${i}]`)
       }
     }
     const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
-    const out = n === clips.length - 1 ? "[v]" : `[l${n + 1}]`
     // A text that moves or changes size is placed afresh every frame.
     const moving = anim !== null && (anim.x !== null || anim.y !== null || anim.scale !== null)
     const at = moving ? `x='${x}${anim.x ? `+${anim.x}` : ""}':y='${y}${anim.y ? `+${anim.y}` : ""}':eval=frame` : `x=${x}:y=${y}:eval=init`
-    parts.push(`${under}[v${i}]overlay=${at}:enable='between(t,${num(start)},${num(start + clipLength(c))})':eof_action=pass${out}`)
+    return { label: `[v${i}]`, i, at }
+  }
+  // Each track's clips in runs joined by transitions; a clip with none is a run of its own.
+  const runs: Clip[][] = []
+  for (const track of p.tracks) {
+    track.clips.forEach((c, k) => {
+      if (k > 0 && c.transition && adjoins(track.clips[k - 1], c)) runs[runs.length - 1].push(c)
+      else runs.push([c])
+    })
+  }
+  let under = "[bg]"
+  runs.forEach((run, n) => {
+    const out = n === runs.length - 1 ? "[v]" : `[l${n + 1}]`
+    const first = run[0]
+    const last = run[run.length - 1]
+    const end = last.start + clipLength(last)
+    if (run.length === 1) {
+      const s = source(first)
+      parts.push(`${under}${s.label}overlay=${s.at}:enable='between(t,${num(first.start)},${num(end)})':eof_action=pass${out}`)
+      under = out
+      return
+    }
+    // A run with transitions: each clip, extended by half of each of its transitions, is placed on a
+    // transparent canvas of its own, and xfade joins them, each at the start of its transition.
+    let joined = ""
+    run.forEach((c, k) => {
+      const pre = c.transition && k > 0 ? c.transition.duration / 2 : 0
+      const next = run[k + 1]
+      const post = next?.transition ? next.transition.duration / 2 : 0
+      const s = source(c, pre, post)
+      const from = c.start - pre
+      parts.push(`color=c=black@0:s=${W}x${H}:r=${fps}:d=${num(clipLength(c) + pre + post)},format=yuva420p,setpts=PTS+${num(from)}/TB[tc${s.i}]`)
+      parts.push(`[tc${s.i}]${s.label}overlay=${s.at}:eof_action=pass:format=auto,setpts=PTS-STARTPTS[ts${s.i}]`)
+      if (k === 0) {
+        joined = `[ts${s.i}]`
+        return
+      }
+      parts.push(`${joined}[ts${s.i}]xfade=transition=${c.transition!.type}:duration=${num(c.transition!.duration)}:offset=${num(from - first.start)}[tx${s.i}]`)
+      joined = `[tx${s.i}]`
+    })
+    parts.push(`${joined}setpts=PTS+${num(first.start)}/TB[u${n}]`)
+    parts.push(`${under}[u${n}]overlay=x=0:y=0:enable='between(t,${num(first.start)},${num(end)})':eof_action=pass${out}`)
     under = out
   })
   parts.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[asil]`)
@@ -249,7 +309,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
  * the graph is the same as it always was. A text clip (its PNG in `files`
- * under textFileKey) always takes the uniform graph.
+ * under textFileKey) or a transition always takes the uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -264,7 +324,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   }
   // A still: an image's clip or a text clip's PNG.
   const isImage = (c: Clip) => isStill(p, c)
-  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c)) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
+  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or is muted).
   const [baseTrack, ...overlays] = p.tracks
