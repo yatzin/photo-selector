@@ -5,14 +5,17 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { ArrowLeft, Check, Download, Loader2, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { addClip, assetKind, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
 import { clipIdAt } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview } from "./preview"
+import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline } from "./timeline"
 import { useAutosave } from "./use-autosave"
@@ -22,6 +25,9 @@ import { useAutosave } from "./use-autosave"
 // with the timeline interactions, playback with the preview player.
 
 const DEFAULT_ZOOM = 60 // px per second
+const MIN_PREVIEW = 120 // px
+const MIN_TIMELINE = 160 // px
+const HANDLE = 8 // px, the resize handle's height
 
 export function Editor({
   folder, userFolder, initial, inbox,
@@ -41,6 +47,26 @@ export function Editor({
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const exportTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const resumeAfterScrub = useRef(false)
+
+  // Preview height: none stored (the default) lets the preview take what the timeline leaves.
+  // The server and first paint use the default; a stored height takes over on hydration.
+  const [storedHeight, setStoredHeight] = useStoredValue("ps.video.previewHeight")
+  const [dragHeight, setDragHeight] = useState<number | null>(null)
+  const parsedHeight = storedHeight ? Number(storedHeight) : NaN
+  const previewHeight = dragHeight ?? (parsedHeight >= MIN_PREVIEW ? parsedHeight : null)
+  const column = useRef<HTMLDivElement>(null)
+  const previewBox = useRef<HTMLDivElement>(null)
+  const [sizes, setSizes] = useState({ preview: 0, column: 0 })
+  useEffect(() => {
+    const col = column.current
+    const pre = previewBox.current
+    if (!col || !pre) return
+    const ro = new ResizeObserver(() => setSizes({ preview: Math.round(pre.offsetHeight), column: col.clientHeight }))
+    ro.observe(col)
+    ro.observe(pre)
+    return () => ro.disconnect()
+  }, [])
+  const maxPreview = Math.max(MIN_PREVIEW, sizes.column - HANDLE - MIN_TIMELINE)
 
   useEffect(() => () => {
     if (exportTimer.current) clearInterval(exportTimer.current)
@@ -240,9 +266,31 @@ export function Editor({
         <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
           <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} />
         </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Preview player={player} project={project} imageUrl={imageUrl} />
-          <div className="shrink-0 border-t border-border/60 bg-card">
+        <div ref={column} className="flex min-w-0 flex-1 flex-col">
+          {/* With a set height the preview gives way first (flex-shrink) and the timeline grows; CSS keeps both minimums. */}
+          <div
+            ref={previewBox}
+            className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
+            style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
+          >
+            <Preview player={player} project={project} imageUrl={imageUrl} />
+          </div>
+          <ResizeHandle
+            label="Resize preview"
+            value={Math.min(maxPreview, Math.max(MIN_PREVIEW, sizes.preview))}
+            min={MIN_PREVIEW}
+            max={maxPreview}
+            onResize={(px, done) => {
+              if (!done) return setDragHeight(px)
+              setStoredHeight(String(px))
+              setDragHeight(null)
+            }}
+            onReset={() => {
+              setStoredHeight("")
+              setDragHeight(null)
+            }}
+          />
+          <div className={cn("bg-card", previewHeight === null ? "shrink-0" : "min-h-[160px] flex-1 overflow-y-auto")}>
             <div className="flex h-9 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
               <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project.clips))}</span>
               <span className="hidden sm:inline">Space play · S split · Delete remove · drag edges to trim</span>
