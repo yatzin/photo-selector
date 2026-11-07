@@ -223,6 +223,12 @@ Not while the project is exporting, or while that file is being imported.
   playhead, the start and other clips' edges. Clips on one track never
   overlap: a clip dropped on another slides to the free space after it.
   Trimming a clip's left edge keeps the picture where it was.
+- **Snap (V1).** The magnet box in V1's header, off by default, snaps the
+  base layer's clips together: ticking it closes every gap on V1 (one undo
+  step), and while it's on V1 stays end to end. A clip dropped or dragged onto
+  V1 goes in between two clips (a line shows where), trimming ripples the
+  clips after it, and deleting or moving a clip away closes its gap. Unticking
+  it frees V1 again; clips stay where they are. Layers above V1 are always free.
 - **Move, resize and crop on screen.** Click a clip in the preview to select
   it (the topmost one under the pointer; empty canvas deselects). The
   timeline highlights the same clip. Drag it to move it. Drag a corner to
