@@ -77,11 +77,11 @@ export function ResizeHandle({
       onKeyDown={onKeyDown}
       onDoubleClick={onReset}
       className={cn(
-        "group relative flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center bg-border/60 outline-none hover:bg-primary/30 focus-visible:bg-primary/40",
+        "group relative flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center bg-border/60 outline-none hover:bg-editor-accent/30 focus-visible:bg-editor-accent/40",
         className
       )}
     >
-      <span aria-hidden="true" className="h-0.5 w-10 rounded-full bg-muted-foreground/50 group-hover:bg-primary" />
+      <span aria-hidden="true" className="h-0.5 w-10 rounded-full bg-muted-foreground/50 group-hover:bg-editor-accent" />
     </div>
   )
 }

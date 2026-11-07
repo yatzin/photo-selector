@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -407,7 +407,7 @@ export function Editor({
     return true
   }
 
-  /** Puts the selected clip's picture back as fit (the toolbar's Reset). One undo step. */
+  /** Puts the selected clip's picture back as fit, unturned and unflipped (the toolbar's Reset). One undo step. */
   function resetTransform() {
     if (!selectedId) return
     const id = selectedId
@@ -524,43 +524,62 @@ export function Editor({
           />
           {/* The tracks scroll inside the timeline (vertically too, with several layers); the bar above stays put. */}
           <div className={cn("flex flex-col bg-card", previewHeight === null ? "max-h-[60%] shrink-0" : "min-h-[160px] flex-1")}>
-            <div role="toolbar" aria-label="Timeline tools" className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 px-3 text-xs text-muted-foreground">
-              <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
-              <div aria-hidden className="mx-2 h-5 w-px bg-border" />
-              <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
-                <Undo2 className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
-                <Redo2 className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
-                <SquareSplitHorizontal className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
-                <Trash2 className="h-4 w-4" />
-              </Button>
+            {/* Three parts: the edit tools, Play/Pause in the middle of the bar whatever the sides hold, the view settings. */}
+            <div
+              role="toolbar"
+              aria-label="Timeline tools"
+              className="grid h-9 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b border-border/60 px-3 text-xs text-muted-foreground"
+            >
+              <div className="flex h-full min-w-0 items-center gap-1 overflow-hidden px-0.5">
+                <span className="shrink-0 tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
+                <div aria-hidden className="mx-2 h-5 w-px bg-border" />
+                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
+                  <Undo2 className="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
+                  <Redo2 className="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
+                  <SquareSplitHorizontal className="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                {transformed && (
+                  <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
+                    <RotateCcw className="h-4 w-4" /> Reset
+                  </Button>
+                )}
+              </div>
               <Button
                 type="button"
-                size="icon-sm"
-                variant="ghost"
-                onClick={() => setStoredWaveforms(waveforms ? "0" : "1")}
-                aria-pressed={waveforms}
-                title={waveforms ? "Hide audio waveforms" : "Show audio waveforms"}
-                aria-label="Audio waveforms"
-                className={cn(waveforms && "bg-muted text-foreground")}
+                size="icon"
+                onClick={toggle}
+                disabled={totalLength(project) === 0}
+                title={player.playing ? "Pause (Space)" : "Play (Space)"}
+                aria-label={player.playing ? "Pause" : "Play"}
+                className="rounded-full bg-editor-accent text-editor-accent-foreground hover:bg-editor-accent/85"
               >
-                <AudioWaveform className="h-4 w-4" />
+                {player.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
               </Button>
-              {transformed && (
-                <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position and crop">
-                  <RotateCcw className="h-4 w-4" /> Reset
+              <div className="flex h-full min-w-0 items-center justify-end gap-1 overflow-hidden px-0.5">
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setStoredWaveforms(waveforms ? "0" : "1")}
+                  aria-pressed={waveforms}
+                  title={waveforms ? "Hide audio waveforms" : "Show audio waveforms"}
+                  aria-label="Audio waveforms"
+                  className={cn(waveforms && "bg-muted text-foreground")}
+                >
+                  <AudioWaveform className="h-4 w-4" />
                 </Button>
-              )}
-              <div className="flex-1" />
-              <label className="flex items-center gap-2">
-                Zoom
-                <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
-              </label>
+                <label className="flex min-w-0 items-center gap-2">
+                  Zoom
+                  <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 min-w-0 accent-editor-accent" />
+                </label>
+              </div>
             </div>
             <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} />
           </div>

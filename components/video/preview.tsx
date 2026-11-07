@@ -1,10 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState, type CSSProperties } from "react"
-import { Pause, Play, TriangleAlert } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { TriangleAlert } from "lucide-react"
 import { assetKind, clipsAt, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { clipRect, cropLeftOf, cropRightOf, IDENTITY, isIdentity, type Transform } from "@/lib/video/transform"
+import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
 import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
@@ -19,8 +18,8 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // The player above the timeline: a black canvas the project's shape. Each
 // track has two stacked <video> elements that take turns (see
 // use-preview-player). Every track with a clip at the playhead shows it,
-// lowest track first, each picture fit to the canvas and then moved, scaled
-// and cropped by its clip's transform (lib/video/transform), so a lower layer
+// lowest track first, each picture fit to the canvas and then moved, scaled,
+// flipped, cropped and turned by its clip's transform (lib/video/transform), so a lower layer
 // shows wherever an upper one doesn't cover and black shows where nothing
 // does. A clip with no transform fills the canvas letterboxed in black, as it
 // always has (and as the export draws it). An image clip shows as a still in its track's place. Clicking the
@@ -29,12 +28,16 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // panel onto the canvas is added at the playhead (onDrop). The area around
 // the canvas is light gray. A clip the
 // browser can't decode shows a message here and still exports, one whose file
-// is missing says so (export fails on it).
+// is missing says so (export fails on it). Play/Pause lives in the timeline's toolbar.
 
 /**
  * Where a picture sits in the canvas box: its full rect in percent, the crop
- * as a clip-path inset of its own box. With no transform it fills the canvas,
- * letterboxed in black (object-contain).
+ * as a clip-path inset of its own box, flips and the rotation as a CSS
+ * transform about the box's centre (the content centre). The clip-path is cut
+ * in the element's own, unflipped box before its transform, so a flip swaps
+ * the insets it mirrors: the cut stays on the side the user sees, as the
+ * canonical order says (flip, then a screen-axis crop, then the turn). With no
+ * transform it fills the canvas, letterboxed in black (object-contain).
  */
 function placement(aspect: number, W: number, H: number, t: Transform): CSSProperties {
   if (isIdentity(t)) return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
@@ -42,12 +45,17 @@ function placement(aspect: number, W: number, H: number, t: Transform): CSSPrope
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
   const cropped = t.cropTop > 0 || t.cropBottom > 0 || cl > 0 || cr > 0
+  const [top, bottom] = t.flipV ? [t.cropBottom, t.cropTop] : [t.cropTop, t.cropBottom]
+  const [left, right] = t.flipH ? [cr, cl] : [cl, cr]
+  const deg = rotationOf(t)
+  const turn = [deg !== 0 ? `rotate(${deg}deg)` : "", t.flipH || t.flipV ? `scale(${t.flipH ? -1 : 1}, ${t.flipV ? -1 : 1})` : ""].filter(Boolean).join(" ")
   return {
     left: `${(r.x / W) * 100}%`,
     top: `${(r.y / H) * 100}%`,
     width: `${(r.w / W) * 100}%`,
     height: `${(r.h / H) * 100}%`,
-    clipPath: cropped ? `inset(${t.cropTop * 100}% ${cr * 100}% ${t.cropBottom * 100}% ${cl * 100}%)` : undefined,
+    clipPath: cropped ? `inset(${top * 100}% ${right * 100}% ${bottom * 100}% ${left * 100}%)` : undefined,
+    transform: turn || undefined,
   }
 }
 
@@ -74,8 +82,8 @@ export function Preview({
   const [draft, setDraft] = useState<{ id: string; transform: Transform } | null>(null)
   // The canvas box's size on screen: the project's shape fit inside the area.
   const area = useRef<HTMLDivElement>(null)
-  // `below`: the px between the canvas's bottom and the pane's (the gray margin and the padding).
-  const [box, setBox] = useState<{ w: number; h: number; below: number } | null>(null)
+  // `below`: the px between the canvas's bottom and the pane's (the gray margin and the padding); `side` the same to the left or right.
+  const [box, setBox] = useState<{ w: number; h: number; below: number; side: number } | null>(null)
   const { width: W, height: H } = project
 
   useEffect(() => {
@@ -88,8 +96,8 @@ export function Preview({
       const w = Math.min(aw, (ah * W) / H)
       const h = Math.floor((w * H) / W)
       // The area is centred in the pane with 16 px (p-4) of padding all round.
-      const next = { w: Math.floor(w), h, below: Math.floor((ah - h) / 2) + 16 }
-      setBox((b) => (b && b.w === next.w && b.h === next.h && b.below === next.below ? b : next))
+      const next = { w: Math.floor(w), h, below: Math.floor((ah - h) / 2) + 16, side: Math.floor((aw - Math.floor(w)) / 2) + 16 }
+      setBox((b) => (b && b.w === next.w && b.h === next.h && b.below === next.below && b.side === next.side ? b : next))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -128,14 +136,14 @@ export function Preview({
   })
   const selectedHit = hits.find((h) => h?.clip.id === selectedId)
   const selected = selectedHit ? target(selectedHit.clip, selectedHit.track) : null
-  /** The topmost clip at the playhead that covers canvas point x, y (its visible strip; with no transform, the whole canvas). */
+  /** The topmost clip at the playhead that covers canvas point x, y (its visible strip as it shows, turned too; with no transform, the whole canvas). */
   const hitTest = (x: number, y: number): TransformTarget | null => {
     for (let lane = hits.length - 1; lane >= 0; lane--) {
       const hit = hits[lane]
       if (!hit) continue
       const t = transformOf(hit.clip)
-      const v = isIdentity(t) ? { x: 0, y: 0, w: W, h: H } : clipRect(aspectOf(hit.clip.asset), W, H, t).visible
-      if (x >= v.x && x <= v.x + v.w && y >= v.y && y <= v.y + v.h) return target(hit.clip, lane)
+      const on = isIdentity(t) ? x >= 0 && x <= W && y >= 0 && y <= H : containsPoint(aspectOf(hit.clip.asset), W, H, t, x, y)
+      if (on) return target(hit.clip, lane)
     }
     return null
   }
@@ -194,7 +202,7 @@ export function Preview({
     }
   }
 
-  // The Alt hint: below the canvas when the gray margin has room for it, else inside at the bottom (above the play button).
+  // The Alt hint: below the canvas when the gray margin has room for it, else inside at the bottom.
   // The overlay (and any drag on it) goes when the last clip does.
   if (!hasClips && gesture) setGesture(null)
   const hint = hasClips && gesture ? (gesture.snapping ? "Hold Alt to turn snapping off" : "Snapping off") : null
@@ -215,7 +223,7 @@ export function Preview({
           onDragLeave={dragLeave}
           onDrop={drop}
         >
-          {/* isolate: the layers' z-index stays inside the canvas, under the overlay and the play button. */}
+          {/* isolate: the layers' z-index stays inside the canvas, under the overlay. */}
           <div className="absolute inset-0 isolate overflow-hidden rounded-md bg-black">
             {lanes.map((track, lane) =>
               [0, 1].map((slot) => {
@@ -280,6 +288,7 @@ export function Preview({
               width={W}
               height={H}
               displayWidth={box?.w}
+              room={box ? { x: box.side, y: box.below } : undefined}
               selected={selected}
               hitTest={hitTest}
               onSelect={onSelect}
@@ -288,25 +297,12 @@ export function Preview({
               onGesture={setGesture}
             />
           )}
-          {hint && !hintOutside && hintPill("bottom-14")}
+          {hint && !hintOutside && hintPill("bottom-3")}
           {dropOver && (
             // Above the overlay, and never in the way of the drop itself.
-            <div className="pointer-events-none absolute -inset-1 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-sky-500 bg-sky-500/10">
+            <div className="pointer-events-none absolute -inset-1 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-sky-500 bg-sky-500/10 dark:border-editor-accent dark:bg-editor-accent/10">
               <span className="rounded-md bg-neutral-900/80 px-2.5 py-1 text-xs text-white shadow">Drop to add at {formatTimecode(player.time)}</span>
             </div>
-          )}
-          {hasClips && (
-            <Button
-              type="button"
-              size="icon"
-              variant="secondary"
-              onClick={player.toggle}
-              className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full opacity-80 hover:opacity-100"
-              title={player.playing ? "Pause (Space)" : "Play (Space)"}
-            >
-              {player.playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              <span className="sr-only">{player.playing ? "Pause" : "Play"}</span>
-            </Button>
           )}
         </div>
       </div>

@@ -36,6 +36,8 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-link: var(--link);
+  --color-editor-accent: var(--editor-accent);
+  --color-editor-accent-foreground: var(--editor-accent-foreground);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -62,6 +64,11 @@
   /* Blue for text and icons (links, counts, active tabs). Same as primary in
      light mode; lighter in dark mode, where primary is too dark to read. */
   --link: oklch(0.488 0.243 264.376);
+  /* The video editor's accent (playhead, selection, handles, Snap): primary in
+     light mode; a light sky in dark mode, where primary reads as dark blue on
+     the dark timeline and the black canvas. Its foreground goes on top of it. */
+  --editor-accent: oklch(0.488 0.243 264.376);
+  --editor-accent-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.93 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.93 0 0);
@@ -99,6 +106,8 @@
   --primary: oklch(0.488 0.243 264.376);
   --primary-foreground: oklch(0.985 0 0);
   --link: oklch(0.75 0.14 264);
+  --editor-accent: oklch(0.828 0.111 230.318);
+  --editor-accent-foreground: oklch(0.21 0.034 264.665);
   --secondary: oklch(0.36 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.36 0 0);

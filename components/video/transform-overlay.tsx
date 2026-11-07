@@ -1,9 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { FlipHorizontal2, FlipVertical2, RotateCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
-  clipRect, dragCorner, dragEdge, dragMove, scaleAbout, snapCorner, snapEdge, snapToCanvas, type Corner, type Edge, type Guides, type Transform,
+  angleFrom, clipRect, contentCentre, dragCorner, dragEdge, dragMove, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
+  snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Corner, type Edge, type Guides, type Transform,
 } from "@/lib/video/transform"
 
 // The layer over the preview canvas that edits where a clip's picture sits.
@@ -16,15 +18,22 @@ import {
 // canvas centre lines and edges, each line drawn while snapped; holding Alt
 // (pressed or released mid-drag too) turns snapping off, and onGesture tells
 // the preview so its hint can say so. A focused handle takes the arrow keys
-// too (1%, Shift 5%).
+// too (1%, Shift 5%). The frame and its handles turn with a rotated clip, and
+// drags on them work in the clip's own axes (a rotated clip's move snaps its
+// bounding box; its corner and crop drags don't snap). Floating white buttons
+// sit outside the frame: Rotate at the top right (drag round the centre,
+// 15 degree steps unless Alt is held, double-click for 0, arrows 1 degree,
+// Shift 15) and the two flips at the top left (each click one undo step).
 
 const DRAG_THRESHOLD = 3 // screen px before a press becomes a drag
 const SNAP_PX = 6 // screen px within which an edge or centre snaps to the canvas's
 const MIN_SIDE_FOR_MIDDLE = 48 // screen px: a shorter side hides its middle crop handle, which would crowd the corners
+const FLOAT_OFFSET = 22 // screen px out from a frame corner, along the frame's own axes, to a floating button's centre
+const FLOAT_SIZE = 24 // screen px, a floating button's diameter
 
 export type TransformTarget = { id: string; label: string; aspect: number; transform: Transform }
 
-type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge }
+type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge } | { kind: "rotate" }
 
 /** A canvas drag in progress, for the preview's hint: whether snapping is on (Alt held turns it off). */
 export type GestureState = { snapping: boolean } | null
@@ -46,13 +55,15 @@ const isSide = (edge: Edge) => edge === "left" || edge === "right"
 const pct = (v: number, of: number) => `${(v / of) * 100}%`
 
 export function TransformOverlay({
-  width: W, height: H, displayWidth, selected, hitTest, onSelect, onDraft, onCommit, onGesture,
+  width: W, height: H, displayWidth, room, selected, hitTest, onSelect, onDraft, onCommit, onGesture,
 }: {
   /** The canvas (project) size in px; the overlay covers the canvas on screen. */
   width: number
   height: number
   /** The canvas's width on screen (px), when measured: a frame side shorter than MIN_SIDE_FOR_MIDDLE there hides its middle handle. */
   displayWidth?: number
+  /** Screen px visible around the canvas on each side (x: left and right, y: top and bottom): the floating buttons stay inside it. */
+  room?: { x: number; y: number }
   /** The selected clip when it's showing at the playhead, with its transform as shown (a draft while dragging). */
   selected: TransformTarget | null
   /** The topmost clip whose visible strip holds this canvas point, or null. */
@@ -68,6 +79,8 @@ export function TransformOverlay({
   const root = useRef<HTMLDivElement>(null)
   const stopGesture = useRef<(() => void) | null>(null)
   const [guides, setGuides] = useState<Guides | null>(null)
+  // The angle while the rotate handle is dragged (degrees), for the readout by it.
+  const [angle, setAngle] = useState<number | null>(null)
 
   // A drag still running when the preview unmounts mustn't leave its listeners behind.
   useEffect(() => () => stopGesture.current?.(), [])
@@ -94,8 +107,12 @@ export function TransformOverlay({
     stopGesture.current?.()
     const k = canvasScale()
     const { id, aspect, transform: t0 } = target
+    const rot0 = rotationOf(t0)
     const sx = e.clientX
     const sy = e.clientY
+    // The rotate handle turns the clip about its content centre by the pointer's angle round it since the press.
+    const pivot = contentCentre(W, H, t0)
+    const a0 = angleFrom(pivot, toCanvas(sx, sy))
     const pointerId = e.pointerId
     let moved = false
     let current: Transform | null = null
@@ -118,17 +135,25 @@ export function TransformOverlay({
       if (gesture.kind === "move") {
         t = dragMove(t0, dx / W, dy / H)
         if (snap) {
-          const s = snapToCanvas(clipRect(aspect, W, H, t).visible, W, H, threshold)
+          // A turned clip snaps its bounding box (rotatedBounds is the strip itself when it isn't turned).
+          const s = snapToCanvas(rotatedBounds(aspect, W, H, t), W, H, threshold)
           t = dragMove(t, s.dx / W, s.dy / H)
           g = s.guides
         }
       } else if (gesture.kind === "corner") {
+        // dragCorner takes the drag in the clip's own axes and keeps the opposite corner where it shows.
         t = dragCorner(t0, gesture.corner, aspect, W, H, dx, dy, { anchor: "opposite" })
-        if (snap) ({ t, guides: g } = snapCorner(t0, gesture.corner, aspect, W, H, t, threshold))
-      } else {
-        const d = isSide(gesture.edge) ? dx : dy
-        if (snap) ({ t, guides: g } = snapEdge(t0, gesture.edge, aspect, W, H, d, threshold))
+        if (snap && rot0 === 0) ({ t, guides: g } = snapCorner(t0, gesture.corner, aspect, W, H, t, threshold))
+      } else if (gesture.kind === "edge") {
+        // Along the clip's own axis: a turned clip's crop handle follows its side.
+        const local = toLocal(dx, dy, rot0)
+        const d = isSide(gesture.edge) ? local.x : local.y
+        if (snap && rot0 === 0) ({ t, guides: g } = snapEdge(t0, gesture.edge, aspect, W, H, d, threshold))
         else t = dragEdge(t0, gesture.edge, aspect, W, H, d)
+      } else {
+        const turned = normalizeAngle(rot0 + angleFrom(pivot, toCanvas(lastX, lastY)) - a0)
+        t = withRotation(t0, snap ? snapAngle(turned) : turned)
+        setAngle(rotationOf(t))
       }
       current = t
       onDraft({ id, transform: t })
@@ -146,6 +171,7 @@ export function TransformOverlay({
       stop()
       onDraft(null)
       setGuides(null)
+      setAngle(null)
       if (moved) onGesture?.(null)
       if (commit && moved && current) onCommit(id, current)
       else if (commit && !moved && ev) onClick?.(ev)
@@ -222,10 +248,19 @@ export function TransformOverlay({
   /**
    * Arrow keys on a focused handle: a corner scales by 1% (Shift 5%), up and
    * right grow; the top or bottom handle moves its edge by 1% of the height
-   * (up, down), the left or right handle by 1% of the width (left, right).
+   * (up, down), the left or right handle by 1% of the width (left, right);
+   * the rotate handle turns by 1 degree (Shift 15), right clockwise.
    */
   function handleKey(e: React.KeyboardEvent, gesture: Gesture) {
     if (!selected || e.altKey || e.ctrlKey || e.metaKey) return
+    if (gesture.kind === "rotate") {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+      e.preventDefault()
+      e.stopPropagation()
+      const { id, transform: t0 } = selected
+      onCommit(id, withRotation(t0, rotationOf(t0) + (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 15 : 1)), `rotate-key-${id}`)
+      return
+    }
     const up = e.key === "ArrowUp" || e.key === "ArrowRight"
     const down = e.key === "ArrowDown" || e.key === "ArrowLeft"
     if (!up && !down) return
@@ -249,10 +284,51 @@ export function TransformOverlay({
     onCommit(id, t, `transform-key-${id}`)
   }
 
+  /** Rotate handle and flip buttons: the press is theirs alone (no move, no select). */
+  const own = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    if (e.button === 0) e.preventDefault()
+  }
+
   const v = selected ? clipRect(selected.aspect, W, H, selected.transform).visible : null
+  const rot = selected ? rotationOf(selected.transform) : 0
   // Screen px per canvas px; unknown (not measured yet) shows every handle.
   const px = displayWidth && displayWidth > 0 ? displayWidth / W : null
   const showEdge = (edge: Edge) => !v || px === null || (isSide(edge) ? v.h : v.w) * px >= MIN_SIDE_FOR_MIDDLE
+  // The frame turns about the content centre, given as a point of its own box.
+  const pivot = selected ? contentCentre(W, H, selected.transform) : null
+  const origin = v && pivot && v.w > 0 && v.h > 0 ? `${((pivot.x - v.x) / v.w) * 100}% ${((pivot.y - v.y) / v.h) * 100}%` : undefined
+
+  /**
+   * Floating buttons' centres (screen px from the canvas's top left), each
+   * `local` px out from the frame's `corner` (in the frame's own axes, so they
+   * stay with a turned frame), shifted together as a group to stay inside the
+   * visible area round the canvas (so a pair never lands on itself).
+   */
+  const floating = (corner: { x: number; y: number }, locals: { x: number; y: number }[]) => {
+    if (px === null) return null
+    const pts = locals.map((local) => {
+      const off = rotatePoint(local, { x: 0, y: 0 }, rot)
+      return { x: corner.x * px + off.x, y: corner.y * px + off.y }
+    })
+    if (!room) return pts
+    const r = FLOAT_SIZE / 2 + 2
+    const shift = (vals: number[], lo: number, hi: number) => {
+      const min = Math.min(...vals)
+      const max = Math.max(...vals)
+      return min < lo ? lo - min : max > hi ? hi - max : 0
+    }
+    const sx = shift(pts.map((q) => q.x), -room.x + r, W * px + room.x - r)
+    const sy = shift(pts.map((q) => q.y), -room.y + r, H * px + room.y - r)
+    return pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))
+  }
+  const corners = v && pivot ? rotatedCorners(v, pivot, rot) : null
+  const rotateAt = corners ? floating(corners[1], [{ x: FLOAT_OFFSET, y: -FLOAT_OFFSET }])?.[0] ?? null : null
+  const flips = corners ? floating(corners[0], [{ x: -FLOAT_OFFSET, y: -FLOAT_OFFSET }, { x: FLOAT_SIZE + 4 - FLOAT_OFFSET, y: -FLOAT_OFFSET }]) : null
+  const flipHAt = flips?.[0] ?? null
+  const flipVAt = flips?.[1] ?? null
+  const floatClass =
+    "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full bg-white text-neutral-900 shadow-[0_1px_4px_rgb(0_0_0/0.45)] ring-1 ring-black/25 outline-none hover:bg-neutral-100 focus-visible:ring-2 focus-visible:ring-ring"
 
   return (
     <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas}>
@@ -267,9 +343,12 @@ export function TransformOverlay({
         <div
           role="group"
           aria-label={`${selected.label}: drag to move, arrow keys nudge`}
-          // Sky with a dark halo inside and out: it reads on the black canvas and on the light gray around it.
-          className="absolute cursor-move touch-none shadow-[0_0_0_3px_rgb(0_0_0/0.5),inset_0_0_0_1px_rgb(0_0_0/0.5)] outline outline-2 outline-sky-400"
-          style={{ left: pct(v.x, W), top: pct(v.y, H), width: pct(v.w, W), height: pct(v.h, H) }}
+          // Sky with a dark halo inside and out: it reads on the black canvas and on the light gray around it (lighter in dark mode).
+          className="absolute cursor-move touch-none shadow-[0_0_0_3px_rgb(0_0_0/0.5),inset_0_0_0_1px_rgb(0_0_0/0.5)] outline outline-2 outline-sky-400 dark:outline-editor-accent"
+          style={{
+            left: pct(v.x, W), top: pct(v.y, H), width: pct(v.w, W), height: pct(v.h, H),
+            transform: rot !== 0 ? `rotate(${rot}deg)` : undefined, transformOrigin: rot !== 0 ? origin : undefined,
+          }}
           onPointerDown={pressFrame}
         >
           {CORNERS.map((c) => (
@@ -304,6 +383,56 @@ export function TransformOverlay({
             </button>
           ))}
         </div>
+      )}
+      {selected && rotateAt && (
+        <>
+          <button
+            type="button"
+            aria-label="Rotate"
+            title="Rotate (drag; double-click to straighten)"
+            className={cn(floatClass, angle === null ? "cursor-grab" : "cursor-grabbing")}
+            style={{ left: rotateAt.x, top: rotateAt.y, width: FLOAT_SIZE, height: FLOAT_SIZE }}
+            onPointerDown={(e) => {
+              own(e)
+              if (e.button === 0) startGesture(e, selected, { kind: "rotate" })
+            }}
+            onDoubleClick={() => rot !== 0 && onCommit(selected.id, withRotation(selected.transform, 0))}
+            onKeyDown={(e) => handleKey(e, { kind: "rotate" })}
+          >
+            <RotateCw className="h-3.5 w-3.5" strokeWidth={2.5} />
+          </button>
+          {angle !== null && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded bg-neutral-900/85 px-1.5 py-0.5 text-[11px] tabular-nums text-white shadow"
+              style={{ left: rotateAt.x, top: rotateAt.y - FLOAT_SIZE / 2 - 4 }}
+            >
+              {`${Math.round(angle)}°`}
+            </div>
+          )}
+        </>
+      )}
+      {selected && flipHAt && flipVAt && (
+        <>
+          {([
+            { axis: "h", at: flipHAt, label: "Flip horizontally", title: "Flip horizontally (mirror left and right)", on: Boolean(selected.transform.flipH), Icon: FlipHorizontal2 },
+            { axis: "v", at: flipVAt, label: "Flip vertically", title: "Flip vertically (mirror top and bottom)", on: Boolean(selected.transform.flipV), Icon: FlipVertical2 },
+          ] as const).map((f) => (
+            <button
+              key={f.axis}
+              type="button"
+              aria-label={f.label}
+              aria-pressed={f.on}
+              title={f.title}
+              className={cn(floatClass, "cursor-pointer aria-pressed:ring-2 aria-pressed:ring-sky-500")}
+              style={{ left: f.at.x, top: f.at.y, width: FLOAT_SIZE, height: FLOAT_SIZE }}
+              onPointerDown={own}
+              onClick={() => onCommit(selected.id, toggleFlip(selected.transform, f.axis))}
+            >
+              <f.Icon className="h-3.5 w-3.5" strokeWidth={2.5} />
+            </button>
+          ))}
+        </>
       )}
     </div>
   )
