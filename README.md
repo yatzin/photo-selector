@@ -317,9 +317,29 @@ Not while the project is exporting, or while that file is being imported.
   export draws the text where the preview does: the box comes from each font's
   stored letter widths, the same numbers on both sides. Letters a font lacks
   (emoji, some scripts) come from a fallback font and may differ.
+- **Text animation.** The Animation tab of Edit text (or **Animation...** in
+  a text clip's menu) sets an **In** animation, played from the clip's start,
+  and an **Out** one, played up to its end, each with its own type and length
+  in seconds. Types: Fade; Slide from (In) or to (Out) the left, right, top or
+  bottom, the whole text travelling in from beyond that edge of the frame;
+  Sweep from or to a side, a wipe inside the text's own box that never leaves
+  it; Explode (In lands from twice the size as it fades in, Out bursts to
+  twice the size as it fades); Implode (Out shrinks to nothing, In grows from
+  a point); Pop (scales up with a small overshoot); Spin (a full turn as it
+  grows or shrinks); Bounce (drops in from above with bounces, Out falls off
+  the bottom); Typewriter (letters appear one by one, top to bottom for
+  vertical text; Out takes them away from the end). In eases out, Out eases
+  in. In and Out together can't run longer than the clip: Apply shortens both
+  in proportion (the dialog says to what), and trimming the clip shorter does
+  the same. Splitting a text keeps the In on the first piece and the Out on
+  the second. Animations play on top of the text's position, size, turn,
+  flip and crop; the selection handles stay where the text rests. A ramp at
+  each end of the timeline block shows how long each runs. Apply is one undo
+  step with the rest of the dialog.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
-  an image or text, Edit length... The arrow keys, Home and End move through it,
+  an image or text, Edit length... (text also has Edit text..., Animation...
+  and Horizontal / Vertical). The arrow keys, Home and End move through it,
   Enter runs an item and Esc closes it. The menu shows each item's shortcut.
 - **Edit length** opens a box with Start, End and Length in seconds.
   Changing Length keeps Start and moves End; changing End changes Length;
@@ -352,7 +372,10 @@ with no changes since (renaming the project or importing an unused file
 doesn't count) skips the render and downloads the copy already there.
 Each text clip is drawn into a transparent PNG first (ffmpeg's drawtext with
 the clip's bundled font file from `public/fonts`), in a temporary folder
-removed with the export, and placed like an image.
+removed with the export, and placed like an image. Its animations are drawn
+by ffmpeg from the same maths the preview uses, frame by frame; a typewriter
+on a text of more than 100 characters reveals it in 100 equal steps of a few
+characters each, in the preview too.
 
 **Limits in this version**
 - No transitions or audio import yet. Text has no size box (use the corner
