@@ -165,7 +165,7 @@ export async function listInboxAction(): Promise<{ folder: string; files: InboxF
   return out
 }
 
-export async function startExportAction(folder: string): Promise<{ jobId: string } | { error: string }> {
+export async function startExportAction(folder: string): Promise<{ jobId: string; reused?: true; output?: string } | { error: string }> {
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   if (!f.success) return { error: "Invalid request." }

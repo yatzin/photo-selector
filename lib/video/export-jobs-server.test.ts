@@ -12,6 +12,8 @@ vi.mock("./ffmpeg-server", async () => {
 })
 
 import { exportRunning, exportStatus, sanitizeError, startExport } from "./export-jobs-server"
+import { EXPORT_STATE_FILE, exportFingerprint } from "./export-state"
+import { writeExportState } from "./export-state-server"
 import { createProject, readProject, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-export-${process.pid}-${Date.now()}`)
@@ -53,6 +55,18 @@ async function makeProject(withClips = true, withFile = true): Promise<string> {
   return r.folder
 }
 
+/** Sets the first clip's out point, an edit that changes the export. */
+async function trim(folder: string, out: number) {
+  const p = (await readProject("mike", folder))!
+  await writeProject("mike", folder, { ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], out }] }] })
+}
+
+async function exportAndWait(folder: string) {
+  const r = await startExport("mike", folder)
+  if ("error" in r) throw new Error(r.error)
+  return { started: r, status: await waitDone("mike", r.jobId) }
+}
+
 beforeEach(() => {
   runExport.mockReset()
   runExport.mockImplementation(async (_args: string[], outFile: string, _total: number, onProgress: (f: number) => void) => {
@@ -86,7 +100,7 @@ describe("startExport", () => {
     expect(runExport).not.toHaveBeenCalled()
   })
 
-  it("writes a .tmp file, renames it on success and never overwrites an earlier output", async () => {
+  it("writes a .tmp file, renames it on success without overwriting, then keeps only the new copy", async () => {
     const folder = await makeProject()
     const seen: string[] = []
     runExport.mockImplementation(async (_a: string[], outFile: string) => {
@@ -96,6 +110,7 @@ describe("startExport", () => {
     const first = await startExport("mike", folder)
     if ("error" in first) throw new Error(first.error)
     const a = await waitDone("mike", first.jobId)
+    await trim(folder, 3)
     const second = await startExport("mike", folder)
     if ("error" in second) throw new Error(second.error)
     const b = await waitDone("mike", second.jobId)
@@ -104,9 +119,8 @@ describe("startExport", () => {
     expect(b.state).toBe("done")
     expect(a.output).toMatch(/^.+ \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.mp4$/)
     expect(b.output).not.toBe(a.output)
-    expect(b.output).toMatch(/ \(1\)\.mp4$/)
     expect(seen.every((f) => f.endsWith(".tmp"))).toBe(true)
-    expect((await fs.readdir(outDir(folder))).sort()).toEqual([a.output, b.output].sort())
+    expect((await fs.readdir(outDir(folder))).sort()).toEqual([b.output, EXPORT_STATE_FILE].sort())
   })
 
   it("passes the project size and total length to ffmpeg, with the filtergraph in a script file", async () => {
@@ -221,6 +235,89 @@ describe("startExport", () => {
     if ("error" in r) throw new Error(r.error)
     const s = await waitDone("mike", r.jobId)
     expect(s.error).toBe("file: No such file or directory")
+  })
+})
+
+describe("startExport keeps one copy", () => {
+  const stateOf = async (folder: string) => JSON.parse(await fs.readFile(path.join(outDir(folder), EXPORT_STATE_FILE), "utf8"))
+
+  it("writes the state file and deletes earlier outputs but not folders on the first export", async () => {
+    const folder = await makeProject()
+    await fs.writeFile(path.join(outDir(folder), "old.mp4"), "old")
+    await fs.mkdir(path.join(outDir(folder), "keep"))
+    await fs.writeFile(path.join(outDir(folder), "keep", "inner.mp4"), "x")
+    const { started, status } = await exportAndWait(folder)
+    expect(started).not.toHaveProperty("reused")
+    expect(status).toMatchObject({ state: "done", progress: 1 })
+    expect(status.reused).toBeUndefined()
+    expect((await fs.readdir(outDir(folder))).sort()).toEqual([status.output, EXPORT_STATE_FILE, "keep"].sort())
+    expect(await fs.readdir(path.join(outDir(folder), "keep"))).toEqual(["inner.mp4"])
+    const state = await stateOf(folder)
+    expect(state).toMatchObject({ file: status.output, fingerprint: exportFingerprint((await readProject("mike", folder))!) })
+    expect(typeof state.createdAt).toBe("number")
+  })
+
+  it("reuses the copy for an unchanged project without running ffmpeg, done at once", async () => {
+    const folder = await makeProject()
+    const first = await exportAndWait(folder)
+    runExport.mockClear()
+    const again = await startExport("mike", folder)
+    if ("error" in again) throw new Error(again.error)
+    expect(again).toMatchObject({ reused: true, output: first.status.output })
+    expect(exportStatus("mike", again.jobId)).toEqual({ state: "done", progress: 1, output: first.status.output, reused: true })
+    expect(exportRunning("mike", folder)).toBe(false)
+    expect(runExport).not.toHaveBeenCalled()
+    expect((await fs.readdir(outDir(folder))).sort()).toEqual([first.status.output, EXPORT_STATE_FILE].sort())
+  })
+
+  it("renaming the project or importing an unused asset still reuses", async () => {
+    const folder = await makeProject()
+    await exportAndWait(folder)
+    const p = (await readProject("mike", folder))!
+    await writeProject("mike", folder, { ...p, name: "Other", assets: { ...p.assets, z: { file: "z.mp4", duration: 2, hasAudio: false } } })
+    runExport.mockClear()
+    expect(await startExport("mike", folder)).toMatchObject({ reused: true })
+    expect(runExport).not.toHaveBeenCalled()
+  })
+
+  it("exports again after an edit and removes the previous copy", async () => {
+    const folder = await makeProject()
+    runExport.mockImplementation(async (_a: string[], outFile: string) => fs.writeFile(outFile, `video ${runExport.mock.calls.length}`))
+    const first = await exportAndWait(folder)
+    await fs.rename(path.join(outDir(folder), first.status.output!), path.join(outDir(folder), "first.mp4"))
+    const p = (await readProject("mike", folder))!
+    await writeExportState(outDir(folder), { file: "first.mp4", fingerprint: exportFingerprint(p), createdAt: 1 })
+    await trim(folder, 2)
+    const second = await exportAndWait(folder)
+    expect(second.started).not.toHaveProperty("reused")
+    expect(runExport).toHaveBeenCalledTimes(2)
+    expect((await fs.readdir(outDir(folder))).sort()).toEqual([second.status.output, EXPORT_STATE_FILE].sort())
+    expect(await stateOf(folder)).toMatchObject({ file: second.status.output, fingerprint: exportFingerprint((await readProject("mike", folder))!) })
+  })
+
+  it("exports again when the kept copy is gone", async () => {
+    const folder = await makeProject()
+    const first = await exportAndWait(folder)
+    await fs.rm(path.join(outDir(folder), first.status.output!))
+    const second = await exportAndWait(folder)
+    expect(second.started).not.toHaveProperty("reused")
+    expect(runExport).toHaveBeenCalledTimes(2)
+  })
+
+  it("leaves the previous copy and state alone when an export fails", async () => {
+    const folder = await makeProject()
+    const first = await exportAndWait(folder)
+    const before = await stateOf(folder)
+    await trim(folder, 2)
+    runExport.mockImplementation(async (_a: string[], outFile: string) => {
+      await fs.writeFile(outFile, "partial")
+      throw new Error("Invalid argument")
+    })
+    const second = await exportAndWait(folder)
+    expect(second.status).toMatchObject({ state: "failed" })
+    await eventually(async () => (await fs.readdir(outDir(folder))).length === 2)
+    expect((await fs.readdir(outDir(folder))).sort()).toEqual([first.status.output, EXPORT_STATE_FILE].sort())
+    expect(await stateOf(folder)).toEqual(before)
   })
 })
 
