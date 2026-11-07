@@ -140,11 +140,11 @@ export function Timeline({
 
   const timeAt = (clientX: number) => Math.max(0, (clientX - (origin.current?.getBoundingClientRect().left ?? 0)) / live.current.zoom)
 
-  /** The track under the pointer: the nearest row, or one past the top for the add-a-layer row. */
+  /** The track under the pointer: the nearest row (the top one above the rows), or one past the top on and just above the add-a-layer row. */
   function rowAt(clientY: number): number {
     const count = live.current.project.tracks.length
     const zone = newRowEl.current?.getBoundingClientRect()
-    if (zone && clientY < zone.bottom) return count
+    if (zone && clientY >= zone.top - ROW / 2 && clientY < zone.bottom) return count
     for (let i = count - 1; i >= 0; i--) {
       const r = rowEls.current[i]?.getBoundingClientRect()
       if (r && clientY < r.bottom) return i
@@ -184,6 +184,7 @@ export function Timeline({
   }
 
   function startTrim(e: React.PointerEvent, clip: Clip, edge: "in" | "out") {
+    if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
     const startX = e.clientX
@@ -286,10 +287,10 @@ export function Timeline({
     }
   }
 
-  const ghost = (start: number) => (
+  const ghost = (start: number, shift = 0) => (
     <div
       className="pointer-events-none absolute top-2 bottom-2 z-10 rounded-lg border-2 border-dashed border-primary bg-primary/10"
-      style={{ left: start * zoom, width: Math.max(targetLength * zoom - 2, 8) }}
+      style={{ left: start * zoom + shift, width: Math.max(targetLength * zoom - 2, 8) }}
     />
   )
 
@@ -331,7 +332,7 @@ export function Timeline({
               role="group"
               aria-label="Drop here to add a layer"
               className={cn(
-                "relative m-1 flex-1 rounded-md border-2 border-dashed text-[11px]",
+                "relative my-1 flex-1 rounded-md border-2 border-dashed text-[11px]",
                 dragging ? "border-primary/60 bg-primary/5 text-foreground" : "border-transparent text-muted-foreground/60"
               )}
               onDragOver={(e) => dragOver(e, project.tracks.length)}
@@ -341,7 +342,8 @@ export function Timeline({
               <span className="pointer-events-none sticky left-2 inline-flex h-full items-center px-2">
                 {dragging ? "Drop here to add a layer" : "Drag media here for a new layer"}
               </span>
-              {target?.track === project.tracks.length && ghost(target.start ?? 0)}
+              {/* -2 px: the ghost sits inside this row's border, and lines up with the time grid. */}
+              {target?.track === project.tracks.length && ghost(target.start ?? 0, -2)}
             </div>
           </div>
         )}
@@ -361,7 +363,8 @@ export function Timeline({
           return (
             <div key={track.id} className="flex border-b border-border/60" style={{ height: ROW }}>
               <div className="sticky left-0 z-30 flex shrink-0 flex-col items-center justify-center gap-0.5 border-r border-border/60 bg-card text-[11px]" style={{ width: HEADER }}>
-                <span className={cn("font-medium", muted && "text-muted-foreground")}>V{i + 1}</span>
+                <span className={cn("font-medium", muted && "text-muted-foreground")} title={label}>V{i + 1}</span>
+                {isBase && <span aria-hidden className="rounded bg-muted px-1 text-[9px] leading-tight text-muted-foreground" title={label}>base</span>}
                 <button
                   type="button"
                   aria-pressed={muted}
