@@ -35,7 +35,7 @@ feel like a polished consumer editor (iPhone / CapCut class), not a form.
 ```
 project.json   the timeline: tracks, clips, trims, order, settings (the only file the editor reads and writes)
 assets/        clips imported from the Inbox (copied in)
-output/        rendered videos, one file per export, never overwritten
+output/        the latest rendered video and .export-state.json (see Decisions)
 config/        export.json: resolution, fps, codec presets (reusable when templating)
 ```
 
@@ -68,6 +68,7 @@ Writes are atomic (temp file then rename).
 - Preview with layers: each track has its own pair of video elements (8 at most); all play from one clock, the topmost track with a clip is shown and the others are heard. The lowest track playing a healthy video drives the clock; other tracks are re-seeked if they drift more than 0.3 s.
 - `config/export.json` is written when a project is created, but export reads width, height and fps from `project.json`. The config file is kept for export templating later.
 - Projects are keyed by the user's display-name folder (`Projects/<display name>/`), the same way User Temp Storage keys its folders.
+- ~~Outputs are kept per export, never overwritten.~~ Superseded: `output/` keeps one copy. A successful export writes `output/.export-state.json` (`{ file, fingerprint, createdAt }`, the fingerprint a SHA-256 of what affects the video: size, fps, tracks and the used assets) and deletes every other file in `output/`; a failed one changes nothing. An export whose fingerprint matches a copy still there reuses it without running ffmpeg. Either way the browser downloads the copy from `/api/video-projects/<project>/download`.
 - In the library, Video Editing Projects is read-only: no move, delete or rotate, and Move to Video Editing/Temp only copies from it. The editor owns those files.
 
 ## Constraints

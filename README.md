@@ -169,7 +169,8 @@ pick whose folder. You can copy instead of move.
   saved before layers (version 1, one list of clips) opens with those clips on
   the base track and is saved as version 2 from the next edit
 - `assets/`: the clips and images the project uses
-- `output/`: exported videos
+- `output/`: the latest export, and `.export-state.json`, which records what it
+  was made from
 - `config/export.json`: export size and frame rate
 
 The Inbox list in the editor shows a thumbnail for each video and image. Its
@@ -199,9 +200,13 @@ to import the new one).
   dropped on another slides to the free space after it. Trimming a layer
   clip's left edge keeps the picture where it was.
 - The speaker button beside a track mutes it in the preview and the export.
-- **S** splits the selected clip at the playhead (or the top clip there),
-  **Delete** removes the selected clip, **Esc** deselects, **Space** plays.
-- Undo and redo (top bar, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Shift+Z** or **Ctrl+Y**)
+- The toolbar above the timeline shows the time, then Undo, Redo, Split and
+  Delete (each button's tooltip names its shortcut), and the zoom slider at
+  the right.
+- **S** or Split cuts the selected clip at the playhead (or the top clip
+  there), **Delete** removes the selected clip, **Esc** deselects, **Space**
+  plays.
+- Undo and redo (toolbar, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Shift+Z** or **Ctrl+Y**)
   cover the last 50 timeline edits. Imports aren't undone: an undone clip's
   file stays in Project media.
 - Drag the bar between the preview and the timeline to resize the preview
@@ -213,7 +218,11 @@ to import the new one).
   choice is remembered in this browser.
 
 **Export.** Renders an MP4 into `output/` on the server with ffmpeg, at
-1920x1080 and 30 fps. It never overwrites: a name already taken gets a new one.
+1920x1080 and 30 fps, then your browser downloads it. `output/` keeps one
+copy: a finished export deletes the files there before it (subfolders are left
+alone). A failed export leaves the previous copy. Exporting again
+with no changes since (renaming the project or importing an unused file
+doesn't count) skips the render and downloads the copy already there.
 
 **Limits in this version**
 - No text, transitions or audio import yet.
