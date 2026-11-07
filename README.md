@@ -291,9 +291,24 @@ Not while the project is exporting, or while that file is being imported.
   the middle; the waveform button and the zoom slider at the right.
 - In the dark theme the editor's accent (playhead, selection, trim handles,
   the Snap box, drop markers) is a light sky blue so it stands out.
+- **Text.** **Add text** in the toolbar puts a 5 s "Text" clip at the
+  playhead, white and centred, selects it and opens **Edit text**: the text
+  (Enter starts a new line; nothing wraps), its colour and its direction. It
+  goes on the selected clip's layer; with nothing selected (or a clip on a
+  snapped layer 1) on the lowest layer above the base that's free there, or a
+  new layer. Double-click a text clip on the timeline or the preview, or
+  right-click it and choose Edit text..., to change it. A text clip works like
+  an image: trim or stretch it, Edit length, split it, move it between layers,
+  and move, resize (the corner handles are its size), crop, turn and flip it
+  in the preview. Its menu also has **Horizontal** and **Vertical** (one
+  letter a line, stacked; a space leaves a gap), with a check on the current
+  one. On the timeline it's a violet block showing its text. The font is
+  Geist Mono Bold, bundled with the app, so the export draws it exactly where
+  the preview does; letters it lacks (emoji, some scripts) come from a
+  fallback font and may differ.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
-  an image, Edit length... The arrow keys, Home and End move through it,
+  an image or text, Edit length... The arrow keys, Home and End move through it,
   Enter runs an item and Esc closes it. The menu shows each item's shortcut.
 - **Edit length** opens a box with Start, End and Length in seconds.
   Changing Length keeps Start and moves End; changing End changes Length;
@@ -324,14 +339,19 @@ copy: a finished export deletes the files there before it (subfolders are left
 alone). A failed export leaves the previous copy. Exporting again
 with no changes since (renaming the project or importing an unused file
 doesn't count) skips the render and downloads the copy already there.
+Each text clip is drawn into a transparent PNG first (ffmpeg's drawtext with
+the bundled font, `public/fonts/GeistMono-Bold.ttf`, SIL Open Font License
+1.1), in a temporary folder removed with the export, and placed like an image.
 
 **Limits in this version**
-- No text, transitions or audio import yet.
+- No transitions or audio import yet. Text has one font and no size box (use
+  the corner handles).
 - Cuts only.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 
-**Requirements.** ffmpeg 7 or newer on the server (the Docker image has it).
+**Requirements.** ffmpeg 7 or newer on the server, with drawtext (libfreetype)
+for text clips (the Docker image has both).
 Set the folders with `PHOTOS_VIDEO_INBOX_DIR` and `PHOTOS_VIDEO_PROJECTS_DIR`.
 They default to `/data/VideoEditing/Inbox` and `/data/VideoEditing/Projects`,
 beside the cache.
