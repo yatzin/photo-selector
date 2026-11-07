@@ -165,9 +165,10 @@ pick whose folder. You can copy instead of move.
 
 **Projects.** Each one is a folder, `Projects/<user>/<project>/`:
 
-- `project.json`: the timeline. Version 2 stores tracks (layers); a project
-  saved before layers (version 1, one list of clips) opens with those clips on
-  the base track and is saved as version 2 from the next edit
+- `project.json`: the timeline. Version 3 stores tracks (layers) and every
+  clip's start. Older projects (version 2, and version 1 with one list of
+  clips) open with the same timeline, their base clips end to end from 0, and
+  are saved as version 3 from the next edit
 - `assets/`: the clips and images the project uses
 - `output/`: the latest export, and `.export-state.json`, which records what it
   was made from
@@ -178,14 +179,20 @@ files are drag-only: dragging one onto the timeline copies it into `assets/`
 (Project media) and adds it where you drop it. The original stays in the Inbox.
 Dragging the same Inbox file again reuses the copy already in the project
 instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
-under the same name reuses the existing copy (delete that copy from `assets/`
-to import the new one).
+under the same name reuses the existing copy (delete that copy from Project
+media to import the new one).
+
+**Deleting media.** Right-click an item in Project media and choose Delete.
+After a warning it leaves the project: every clip of it comes off the
+timeline (leaving gaps), its copy in `assets/` is deleted and undo history
+starts over. The Inbox original isn't touched, so you can import it again.
+Not while the project is exporting.
 
 **Editing.**
 - Drag a clip or image onto the timeline.
 - An image starts as a 5 s clip. Drag either edge to stretch or shorten it,
   from 0.2 s up to 10 minutes. It exports letterboxed with silence.
-- Drag a clip's edges to trim it, or drag the clip to reorder.
+- Drag a clip's edges to trim it, or drag the clip along its track to move it.
 - **Layers.** The timeline has up to four tracks: V1 at the bottom is the
   base, V2 to V4 above it are layers. The preview shows every layer with a
   clip at the playhead, the higher ones on top, and every layer's sound is
@@ -195,18 +202,19 @@ to import the new one).
   the top layer (it shows while you drag) to make a new layer. The **+** at
   the left of the ruler adds an empty layer; an empty layer has an **×** to
   remove it. Drag a clip up or down to move it to another layer.
-- The base track (V1) keeps its clips end to end: removing or trimming a clip
-  closes the gap. On a layer, clips stay where you put them and gaps are fine.
-  Dragging a layer clip sideways moves it freely; it snaps to the playhead,
-  the start and other clips' edges. Clips on one layer never overlap: a clip
-  dropped on another slides to the free space after it. Trimming a layer
-  clip's left edge keeps the picture where it was.
+- **Free placement.** On every track, the base (V1) included, clips stay where
+  you put them and gaps are fine: removing, trimming or moving a clip leaves
+  the rest where they are. A gap shows black and is silent, in the preview
+  and the export. Dragging a clip sideways moves it freely; it snaps to the
+  playhead, the start and other clips' edges. Clips on one track never
+  overlap: a clip dropped on another slides to the free space after it.
+  Trimming a clip's left edge keeps the picture where it was.
 - **Move, resize and crop on screen.** Click a clip in the preview to select
   it (the topmost one under the pointer; empty canvas deselects). The
   timeline highlights the same clip. Drag it to move it. Drag a corner to
   enlarge or shrink it with its shape kept; the opposite corner stays put.
-  Drag the top or bottom handle to crop the picture from that edge (drag
-  back out to undo the crop). While you drag, the picture snaps to the
+  Drag the top, bottom, left or right handle to crop the picture from that
+  edge (drag back out to undo the crop). While you drag, the picture snaps to the
   frame's centre and edges and a thin line shows it; hold **Alt** to stop
   snapping. **Esc** during a drag cancels it, and each drag is one undo step.
   Once a clip is moved, shrunk or cropped, the layers below show around it,
