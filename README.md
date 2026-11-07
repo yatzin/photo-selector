@@ -184,6 +184,16 @@ to import the new one).
   from 0.2 s up to 10 minutes. It exports letterboxed with silence.
 - Drag a clip's edges to trim it, or drag the clip to reorder.
 - **S** splits at the playhead, **Delete** removes the selected clip, **Space** plays.
+- Undo and redo (top bar, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Shift+Z** or **Ctrl+Y**)
+  cover the last 50 timeline edits. Imports aren't undone: an undone clip's
+  file stays in Project media.
+- Drag the bar between the preview and the timeline to resize the preview
+  (or focus it and use the arrow keys). Double-click it to reset. The size is
+  remembered in this browser.
+- The project saves itself after 1.5 s without changes (at least every 5 s
+  while you keep editing), and before an export.
+- The main navigation collapses to icons with the button at its bottom; the
+  choice is remembered in this browser.
 
 **Export.** Renders an MP4 into `output/` on the server with ffmpeg, at
 1920x1080 and 30 fps. It never overwrites: a name already taken gets a new one.

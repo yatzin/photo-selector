@@ -15,6 +15,9 @@ export type Project = {
   clips: Clip[]
 }
 
+/** The part of a project that undo/redo covers; assets, name and settings are server-owned and never undone. */
+export type Edit = { clips: Clip[] }
+
 export const MIN_CLIP = 0.2
 /** Default and longest length of an image clip, in seconds. */
 export const DEFAULT_IMAGE = 5

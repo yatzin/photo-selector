@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeft, Check, Download, Loader2, TriangleAlert } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ArrowLeft, Check, Download, Loader2, Redo2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -10,7 +10,8 @@ import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/
 import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
-import { addClip, assetKind, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
+import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
+import { addClip, assetKind, removeClip, splitClip, totalLength, type Edit, type Project } from "@/lib/video/project"
 import { clipIdAt } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
@@ -29,6 +30,17 @@ const MIN_PREVIEW = 120 // px
 const MIN_TIMELINE = 160 // px
 const HANDLE = 8 // px, the resize handle's height
 
+/**
+ * Server-owned fields (assets, name, settings) and the undoable edit, in one
+ * state so an edit queued right after an import sees the new asset.
+ */
+type EditorState = { meta: Omit<Project, keyof Edit>; history: History<Edit> }
+
+function initialState(p: Project): EditorState {
+  const { clips, ...meta } = p
+  return { meta, history: createHistory<Edit>({ clips }) }
+}
+
 export function Editor({
   folder, userFolder, initial, inbox,
 }: {
@@ -37,8 +49,20 @@ export function Editor({
   initial: Project
   inbox: InboxFolder[]
 }) {
-  const [project, setProject] = useState(initial)
+  const [editor, setEditor] = useState(() => initialState(initial))
+  const project = useMemo<Project>(() => ({ ...editor.meta, ...editor.history.present }), [editor.meta, editor.history.present])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Undo can take away the selected clip: drop a selection that no longer exists.
+  if (selectedId !== null && !project.clips.some((c) => c.id === selectedId)) setSelectedId(null)
+
+  /** One user gesture: one undo step. Repeats with the same `group` in quick succession make one step together. */
+  const edit = useCallback((change: (p: Project) => Project, group?: string) => {
+    setEditor((s) => {
+      const next = change({ ...s.meta, ...s.history.present })
+      const history = commit(s.history, { clips: next.clips }, group)
+      return history === s.history ? s : { ...s, history }
+    })
+  }, [])
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
   // The guard against a second import: a ref, so two quick drops in one render can't both start.
@@ -139,7 +163,7 @@ export function Editor({
         return null
       }
       // The server owns assets: take the new one from its reply.
-      setProject((p) => ({ ...p, assets: { ...p.assets, [r.id]: r.asset } }))
+      setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
       return r.id
     } catch {
       toast.error("Something went wrong importing that file.")
@@ -156,7 +180,7 @@ export function Editor({
     if (!assetId) return
     const id = newId()
     // Clips may have changed while importing; addClip clamps the index to the current timeline.
-    setProject((p) => addClip(p, assetId, index, id))
+    edit((p) => addClip(p, assetId, index, id))
   }
 
   async function startExport() {
@@ -208,16 +232,39 @@ export function Editor({
 
   function addToTimeline(assetId: string) {
     const id = newId()
-    setProject((p) => addClip(p, assetId, p.clips.length, id))
+    edit((p) => addClip(p, assetId, p.clips.length, id))
   }
 
-  // Keyboard: Space plays, S splits the clip under the playhead, Delete removes the selection.
+  const { pause } = player
+  /** Undo or redo one step. Playback stops; the player shows the frame at the playhead in the new timeline. */
+  const step = useCallback(
+    (dir: "undo" | "redo") => {
+      pause()
+      setEditor((s) => {
+        const history = dir === "undo" ? undo(s.history) : redo(s.history)
+        return history === s.history ? s : { ...s, history }
+      })
+    },
+    [pause]
+  )
+
+  // Keyboard: Space plays, S splits the clip under the playhead, Delete removes the selection,
+  // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target instanceof Element ? e.target : null
       // A handler that already acted (a clip's own Enter/Space select) prevents the default.
-      if (e.defaultPrevented || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.defaultPrevented) return
       if (t?.closest("input, textarea, select, [contenteditable=true], [role=dialog], [role=menu]")) return
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        const key = e.key.toLowerCase()
+        if (key === "z" || (key === "y" && e.ctrlKey && !e.shiftKey)) {
+          e.preventDefault()
+          step(key === "z" && !e.shiftKey ? "undo" : "redo")
+        }
+        return
+      }
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === " ") {
         // Space already activates a focused button, link or slider.
         if (t?.closest("button, a, [role=button], [role=menuitem], [role=slider]")) return
@@ -228,16 +275,16 @@ export function Editor({
         if (!id) return
         e.preventDefault()
         const splitId = newId()
-        setProject((p) => splitClip(p, id, playhead, splitId))
+        edit((p) => splitClip(p, id, playhead, splitId), "split")
       } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
         e.preventDefault()
-        setProject((p) => removeClip(p, selectedId))
+        edit((p) => removeClip(p, selectedId), "delete")
         setSelectedId(null)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [project.clips, playhead, selectedId, toggle])
+  }, [project.clips, playhead, selectedId, toggle, edit, step])
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
@@ -256,6 +303,14 @@ export function Editor({
           </span>
         </span>
         <div className="flex-1" />
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)">
+          <Undo2 className="h-4 w-4" />
+          <span className="sr-only">Undo</span>
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)">
+          <Redo2 className="h-4 w-4" />
+          <span className="sr-only">Redo</span>
+        </Button>
         <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
@@ -300,7 +355,7 @@ export function Editor({
                 <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
               </label>
             </div>
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={setProject} onDropInbox={(f, n, i) => void dropFromInbox(f, n, i)} />
+            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, i) => void dropFromInbox(f, n, i)} />
           </div>
         </div>
       </div>
