@@ -1,7 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { describe, expect, it } from "vitest"
-import { CHARSET, DEFAULT_FONT, fontById, fontFamily, FONT_MOODS, FONTS, isFontId, lineWidth } from "./fonts"
+import { CHARSET, DEFAULT_FONT, fontById, fontFamily, FONT_MOODS, FONTS, fontsForMood, isFontId, lineWidth, typeAhead } from "./fonts"
 
 const FONT_DIR = path.resolve("public/fonts")
 
@@ -177,5 +177,34 @@ describe("isFontId, fontById and lineWidth", () => {
     expect(lineWidth(f, "a😀")).toBeCloseTo((adv("a") + f.other) / f.upm, 12)
     expect(lineWidth(f, "")).toBe(0)
     expect(lineWidth(fontById("mono"), "Hello")).toBeCloseTo(3, 12)
+  })
+})
+
+describe("fontsForMood and typeAhead (the font picker)", () => {
+  it("lists every font for All, grouped in the moods' order with Mono first, and one mood's fonts alone", () => {
+    const all = fontsForMood("All")
+    expect(all.length).toBe(FONTS.length)
+    expect(new Set(all.map((f) => f.id)).size).toBe(FONTS.length)
+    expect(all[0].id).toBe(DEFAULT_FONT)
+    expect(all.map((f) => FONT_MOODS.indexOf(f.mood))).toEqual([...all.map((f) => FONT_MOODS.indexOf(f.mood))].sort((a, b) => a - b))
+    const elegant = fontsForMood("Elegant")
+    expect(elegant.length).toBeGreaterThanOrEqual(5)
+    expect(elegant.every((f) => f.mood === "Elegant")).toBe(true)
+    expect(elegant.map((f) => f.id)).toContain("great-vibes")
+  })
+
+  it("finds the next name starting with a letter, wrapping, and a longer prefix from the current one", () => {
+    const list = ["Anton", "Archivo Black", "Bangers", "Bungee", "Alex Brush"].map((name) => ({ name }))
+    expect(typeAhead(list, 0, "b")).toBe(2)
+    expect(typeAhead(list, 2, "b")).toBe(3)
+    expect(typeAhead(list, 3, "b")).toBe(2)
+    expect(typeAhead(list, 0, "a")).toBe(1)
+    expect(typeAhead(list, 4, "a")).toBe(0)
+    expect(typeAhead(list, 1, "ar")).toBe(1)
+    expect(typeAhead(list, 0, "AL")).toBe(4)
+    // The same letter again moves on, as one letter does.
+    expect(typeAhead(list, 2, "bb")).toBe(3)
+    expect(typeAhead(list, 0, "z")).toBe(-1)
+    expect(typeAhead(list, 0, "")).toBe(-1)
   })
 })

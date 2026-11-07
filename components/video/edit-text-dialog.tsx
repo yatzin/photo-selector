@@ -1,20 +1,21 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { DEFAULT_FONT, fontById, fontFamily, FONTS } from "@/lib/video/fonts"
+import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
 import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
 import { ANIM_GROUPS } from "@/lib/video/text-animation"
 import { cn } from "@/lib/utils"
+import { FontPicker } from "./font-picker"
 
 // A text clip's "Edit text...": the content (new lines where you press
 // Enter; nothing wraps), its colour, whether the letters run across or
-// stack down, and its font (a scrolling list, each font's name drawn in it
-// with its mood, arrow keys moving through it; a sample above shows the text
-// in the chosen font and colour). An Animation tab (the clip menu's
+// stack down, and its font (components/video/font-picker: 50 fonts filtered
+// by mood, each name drawn in its font as it scrolls into view; a sample
+// above shows the text in the chosen font and colour). An Animation tab (the clip menu's
 // "Animation..." opens on it) sets how the text comes in at the clip's start
 // and goes out at its end, each a type and a length in seconds; in and out
 // together longer than the clip are shortened to fit (lib/video/text
@@ -99,7 +100,6 @@ export function EditTextDialog({ text, length, section = "text", onApply, onClos
   const [inSeconds, setInSeconds] = useState(String(text.animIn?.duration ?? DEFAULT_ANIM_SECONDS))
   const [outType, setOutType] = useState<AnimType | "none">(text.animOut?.type ?? "none")
   const [outSeconds, setOutSeconds] = useState(String(text.animOut?.duration ?? DEFAULT_ANIM_SECONDS))
-  const fontButtons = useRef<(HTMLButtonElement | null)[]>([])
 
   /** One end's animation as typed, its length kept from MIN_ANIM to the clip's; null when the length isn't a number. */
   const animOf = (type: AnimType | "none", seconds: string): TextAnim | undefined | null => {
@@ -158,7 +158,7 @@ export function EditTextDialog({ text, length, section = "text", onApply, onClos
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-xl" finalFocus={false}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl" finalFocus={false}>
         <DialogHeader>
           <DialogTitle>Edit text</DialogTitle>
           <DialogDescription>
@@ -259,46 +259,7 @@ export function EditTextDialog({ text, length, section = "text", onApply, onClos
               >
                 {content.split("\n")[0] || " "}
               </div>
-              <div
-                role="radiogroup"
-                aria-labelledby="edit-text-font-label"
-                className="grid max-h-56 grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border border-input p-1.5"
-              >
-                {FONTS.map((f, i) => {
-                  const on = f.id === font
-                  return (
-                    <button
-                      key={f.id}
-                      ref={(el) => {
-                        fontButtons.current[i] = el
-                      }}
-                      type="button"
-                      role="radio"
-                      aria-checked={on}
-                      aria-label={`${f.name}, ${f.mood}`}
-                      tabIndex={on ? 0 : -1}
-                      onClick={() => setFont(f.id)}
-                      onKeyDown={(e) => {
-                        const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key]
-                        const to = e.key === "Home" ? 0 : e.key === "End" ? FONTS.length - 1 : step ? (i + step + FONTS.length) % FONTS.length : -1
-                        if (to < 0) return
-                        e.preventDefault()
-                        setFont(FONTS[to].id)
-                        fontButtons.current[to]?.focus()
-                      }}
-                      className={cn(
-                        "flex min-w-0 flex-col items-start gap-0.5 rounded-md border px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        on ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted"
-                      )}
-                    >
-                      <span className="w-full truncate text-base leading-normal text-foreground" style={{ fontFamily: `"${fontFamily(f)}"` }}>
-                        {f.name}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{f.mood}</span>
-                    </button>
-                  )
-                })}
-              </div>
+              <FontPicker font={font} labelledBy="edit-text-font-label" onChange={setFont} />
             </div>
           </div>
           <DialogFooter>

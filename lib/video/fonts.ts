@@ -35,12 +35,12 @@
 // clips had before fonts could be chosen: a clip with no `font` uses it.
 //
 // Every font has a glyph for each printable ASCII character (letters, digits
-// and punctuation) but Orbitron's "^". Bangers, Creepster, Bungee, Graduate
-// and Luckiest Guy are caps-only designs: their lower case letters are
-// capitals too, so the text is kept as typed and shows in capitals (Amatic SC
-// and Black Ops One draw lower case as small capitals). Press Start 2P and
-// VT323 are monospaced pixel fonts. All work with any text; they just look
-// that way.
+// and punctuation) but Orbitron's "^". Bangers, Creepster, Nosifer, Bungee,
+// Graduate, Luckiest Guy, Eater and Butcherman are caps-only designs: their
+// lower case letters are capitals too, so the text is kept as typed and shows
+// in capitals (Amatic SC and Metal Mania draw lower case as small capitals).
+// Press Start 2P and VT323 are monospaced pixel fonts. All work with any text;
+// they just look that way.
 
 /** The font picker's filters, in the order its chips show them; each font has one. */
 export const FONT_MOODS = ["Clean", "Bold", "Happy", "Fun", "Elegant", "Handwritten", "Retro", "Tech", "Scary", "Creepy"] as const
@@ -348,4 +348,27 @@ export function lineWidth(font: TextFont, line: string): number {
     units += i === undefined ? font.other : font.advances[i]
   }
   return units / font.upm
+}
+
+/** The font picker's list for a mood chip: All is every font, grouped in FONT_MOODS order (Mono first), each mood's in registry order. */
+export const fontsForMood = (mood: FontMood | "All"): TextFont[] =>
+  mood === "All" ? FONT_MOODS.flatMap((m) => FONTS.filter((f) => f.mood === m)) : FONTS.filter((f) => f.mood === mood)
+
+/**
+ * Type-ahead in a list of names: the index of the first whose name starts
+ * with `typed` (any case), from `current` on and wrapping; -1 for none. One
+ * letter (or the same letter typed again) moves on past `current`, so it
+ * steps through the names starting with it.
+ */
+export function typeAhead(list: { name: string }[], current: number, typed: string): number {
+  const text = typed.toLowerCase()
+  if (!text) return -1
+  const one = [...text].every((c) => c === text[0])
+  const prefix = one ? text[0] : text
+  const from = one ? current + 1 : current
+  for (let k = 0; k < list.length; k++) {
+    const i = (from + k) % list.length
+    if (list[i].name.toLowerCase().startsWith(prefix)) return i
+  }
+  return -1
 }
