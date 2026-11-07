@@ -11,14 +11,13 @@ import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
-import { addClip, assetKind, removeClip, splitClip, totalLength, type Edit, type Project } from "@/lib/video/project"
-import { clipIdAt } from "@/lib/video/timeline-math"
+import { addClip, allClips, assetKind, clipsAt, removeClip, splitClip, totalLength, type Edit, type Project } from "@/lib/video/project"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
-import { Timeline } from "./timeline"
+import { Timeline, type DropTarget } from "./timeline"
 import { useAutosave } from "./use-autosave"
 
 // The editor: file tree on the left, preview in the middle, timeline below.
@@ -37,8 +36,8 @@ const HANDLE = 8 // px, the resize handle's height
 type EditorState = { meta: Omit<Project, keyof Edit>; history: History<Edit> }
 
 function initialState(p: Project): EditorState {
-  const { clips, ...meta } = p
-  return { meta, history: createHistory<Edit>({ clips }) }
+  const { tracks, ...meta } = p
+  return { meta, history: createHistory<Edit>({ tracks }) }
 }
 
 export function Editor({
@@ -53,13 +52,13 @@ export function Editor({
   const project = useMemo<Project>(() => ({ ...editor.meta, ...editor.history.present }), [editor.meta, editor.history.present])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Undo can take away the selected clip: drop a selection that no longer exists.
-  if (selectedId !== null && !project.clips.some((c) => c.id === selectedId)) setSelectedId(null)
+  if (selectedId !== null && !allClips(project).some((c) => c.id === selectedId)) setSelectedId(null)
 
   /** One user gesture: one undo step. Repeats with the same `group` in quick succession make one step together. */
   const edit = useCallback((change: (p: Project) => Project, group?: string) => {
     setEditor((s) => {
       const next = change({ ...s.meta, ...s.history.present })
-      const history = commit(s.history, { clips: next.clips }, group)
+      const history = commit(s.history, { tracks: next.tracks }, group)
       return history === s.history ? s : { ...s, history }
     })
   }, [])
@@ -175,12 +174,12 @@ export function Editor({
   }
 
   /** An Inbox file dropped on the timeline: import it, then put it where it was dropped. */
-  async function dropFromInbox(inboxFolder: string, name: string, index: number) {
+  async function dropFromInbox(inboxFolder: string, name: string, target: DropTarget) {
     const assetId = await importFile(inboxFolder, name)
     if (!assetId) return
     const id = newId()
-    // Clips may have changed while importing; addClip clamps the index to the current timeline.
-    edit((p) => addClip(p, assetId, index, id))
+    // Clips may have changed while importing; addClip clamps the index and slides an overlay clip clear of the others.
+    edit((p) => addClip(p, assetId, target.track, target, id))
   }
 
   async function startExport() {
@@ -232,7 +231,7 @@ export function Editor({
 
   function addToTimeline(assetId: string) {
     const id = newId()
-    edit((p) => addClip(p, assetId, p.clips.length, id))
+    edit((p) => addClip(p, assetId, 0, { index: p.tracks[0].clips.length }, id))
   }
 
   const { pause } = player
@@ -248,8 +247,8 @@ export function Editor({
     [pause]
   )
 
-  // Keyboard: Space plays, S splits the clip under the playhead, Delete removes the selection,
-  // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo.
+  // Keyboard: Space plays, S splits the selected clip under the playhead (else the topmost one there),
+  // Delete removes the selection, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target instanceof Element ? e.target : null
@@ -271,7 +270,8 @@ export function Editor({
         e.preventDefault()
         toggle()
       } else if (e.key === "s" || e.key === "S") {
-        const id = clipIdAt(project.clips, playhead)
+        const hits = clipsAt(project, playhead)
+        const id = hits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? hits.top?.clip.id
         if (!id) return
         e.preventDefault()
         const splitId = newId()
@@ -280,11 +280,13 @@ export function Editor({
         e.preventDefault()
         edit((p) => removeClip(p, selectedId), "delete")
         setSelectedId(null)
+      } else if (e.key === "Escape" && selectedId) {
+        setSelectedId(null)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [project.clips, playhead, selectedId, toggle, edit, step])
+  }, [project, playhead, selectedId, toggle, edit, step])
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
@@ -311,7 +313,7 @@ export function Editor({
           <Redo2 className="h-4 w-4" />
           <span className="sr-only">Redo</span>
         </Button>
-        <Button type="button" size="sm" onClick={startExport} disabled={project.clips.length === 0 || exportProgress !== null}>
+        <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
         </Button>
@@ -345,17 +347,18 @@ export function Editor({
               setDragHeight(null)
             }}
           />
-          <div className={cn("bg-card", previewHeight === null ? "shrink-0" : "min-h-[160px] flex-1 overflow-y-auto")}>
-            <div className="flex h-9 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
-              <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project.clips))}</span>
-              <span className="hidden sm:inline">Space play · S split · Delete remove · drag edges to trim</span>
+          {/* The tracks scroll inside the timeline (vertically too, with several layers); the bar above stays put. */}
+          <div className={cn("flex flex-col bg-card", previewHeight === null ? "max-h-[60%] shrink-0" : "min-h-[160px] flex-1")}>
+            <div className="flex h-9 shrink-0 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
+              <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
+              <span className="hidden sm:inline">Space play · S split · Delete remove · drag edges to trim · drag onto a row to layer</span>
               <div className="flex-1" />
               <label className="flex items-center gap-2">
                 Zoom
                 <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
               </label>
             </div>
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, i) => void dropFromInbox(f, n, i)} />
+            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} />
           </div>
         </div>
       </div>
