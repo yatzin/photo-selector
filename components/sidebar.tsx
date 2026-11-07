@@ -133,14 +133,25 @@ export function Sidebar({ aiPending, counts }: { aiPending: number; counts: Root
   // The server and first paint are expanded; a stored "collapsed" takes over on hydration.
   const [mode, setMode] = useStoredState("ps.sidebar", "expanded", ["expanded", "collapsed"] as const)
   const collapsed = mode === "collapsed"
+  // The width animates only for a toggle here, so a stored "collapsed" taking over on load doesn't slide in.
+  const [animate, setAnimate] = useState(false)
   return (
     <aside
       className={cn(
-        "hidden md:flex shrink-0 flex-col overflow-hidden border-r bg-card transition-[width] duration-200 ease-out motion-reduce:transition-none",
+        "hidden md:flex shrink-0 flex-col overflow-hidden border-r bg-card",
+        animate && "transition-[width] duration-200 ease-out motion-reduce:transition-none",
         collapsed ? "w-14" : "w-56"
       )}
     >
-      <SidebarContent aiPending={aiPending} counts={counts} collapsed={collapsed} onToggle={() => setMode(collapsed ? "expanded" : "collapsed")} />
+      <SidebarContent
+        aiPending={aiPending}
+        counts={counts}
+        collapsed={collapsed}
+        onToggle={() => {
+          setAnimate(true)
+          setMode(collapsed ? "expanded" : "collapsed")
+        }}
+      />
     </aside>
   )
 }
