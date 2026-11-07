@@ -54,6 +54,16 @@ describe("exportFingerprint", () => {
     expect(exportFingerprint({ ...p, assets: { ...p.assets, z: { file: "unused.mp4", duration: 3, hasAudio: true } } })).toBe(base)
   })
 
+  it("changes with a clip's transform, and treats an identity transform like none", () => {
+    const p = project()
+    const withT = (t: object) => ({ ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], transform: t }, p.tracks[0].clips[1]] }, p.tracks[1]] }) as Project
+    const half = { x: 0, y: 0, scale: 0.5, cropTop: 0, cropBottom: 0 }
+    expect(exportFingerprint(withT(half))).not.toBe(exportFingerprint(p))
+    expect(exportFingerprint(withT({ ...half, scale: 0.6 }))).not.toBe(exportFingerprint(withT(half)))
+    expect(exportFingerprint(withT({ ...half, cropBottom: 0.1 }))).not.toBe(exportFingerprint(withT(half)))
+    expect(exportFingerprint(withT({ x: 0, y: 0, scale: 1, cropTop: 0, cropBottom: 0 }))).toBe(exportFingerprint(p))
+  })
+
   it("treats a video asset with no kind like one with kind video", () => {
     const p = project()
     expect(exportFingerprint({ ...p, assets: { ...p.assets, a: { ...p.assets.a, kind: "video" } } })).toBe(exportFingerprint(p))

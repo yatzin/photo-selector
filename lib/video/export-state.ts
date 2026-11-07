@@ -1,5 +1,6 @@
 import { createHash } from "crypto"
 import { assetKind, type Project } from "./project"
+import { isIdentity } from "./transform"
 
 // What the last export was made from. output/.export-state.json names the one
 // copy kept in output/ and the fingerprint of the project it was made from, so
@@ -21,8 +22,8 @@ function canonical(value: unknown): string {
 
 /**
  * SHA-256 (hex) of everything that changes the exported video: size, frame
- * rate, the tracks in order (clips with ids, assets, trims and starts, mute
- * flags) and the file, kind, length and audio of each asset a clip uses. The
+ * rate, the tracks in order (clips with ids, assets, trims, starts and
+ * transforms, an identity one counting as none; mute flags) and the file, kind, length and audio of each asset a clip uses. The
  * project's name and unused assets don't count.
  */
 export function exportFingerprint(p: Project): string {
@@ -35,7 +36,7 @@ export function exportFingerprint(p: Project): string {
   const tracks = p.tracks.map((t) => ({
     id: t.id,
     muted: t.muted === true,
-    clips: t.clips.map((c) => ({ id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start })),
+    clips: t.clips.map((c) => ({ id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start, transform: isIdentity(c.transform) ? undefined : c.transform })),
   }))
   return createHash("sha256").update(canonical({ width: p.width, height: p.height, fps: p.fps, tracks, assets })).digest("hex")
 }

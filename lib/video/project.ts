@@ -1,11 +1,17 @@
+import { isIdentity, isValidTransform, normalizeTransform, type Transform } from "./transform"
+
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
  * For an image, `duration` is its default clip length. `source` is the Inbox
  * path it was copied from ("<folder>/<name>"), so a second import reuses it.
  */
 export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video"; source?: string }
-/** `start` (seconds on the timeline) is set on overlay tracks only; the base track lays its clips end to end. */
-export type Clip = { id: string; asset: string; in: number; out: number; start?: number }
+/**
+ * `start` (seconds on the timeline) is set on overlay tracks only; the base
+ * track lays its clips end to end. `transform` moves, scales and crops the
+ * picture on the canvas (lib/video/transform); absent means as fit.
+ */
+export type Clip = { id: string; asset: string; in: number; out: number; start?: number; transform?: Transform }
 /**
  * A layer. Track 0 is the base: magnetic, clips end to end, an edit ripples.
  * Higher tracks are overlays: clips sit at their own `start`, gaps allowed, no
@@ -193,6 +199,7 @@ function place(p: Project, clip: Clip, trackIndex: number, at: { index?: number;
     if (q === p) return p
   }
   const bare: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out }
+  if (clip.transform) bare.transform = clip.transform
   const clips = q.tracks[trackIndex].clips
   if (trackIndex === 0) {
     if (trackEnd(q.tracks[0], true) + clipLength(clip) > MAX_TIMELINE + EPS) return p
@@ -296,7 +303,8 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
   const asset = p.assets[clip.asset]
-  const second = track === 0 ? {} : { start: timelineTime }
+  // Both halves keep the picture where it was.
+  const second = { ...(track === 0 ? {} : { start: timelineTime }), ...(clip.transform ? { transform: clip.transform } : {}) }
   if (asset && assetKind(asset) === "image") {
     next.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
   } else {
@@ -304,6 +312,20 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
     next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
   }
   return withTrack(p, track, next)
+}
+
+const sameTransform = (a: Transform | undefined, b: Transform | undefined) =>
+  isIdentity(a) && isIdentity(b) ? true : a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.scale === b.scale && a.cropTop === b.cropTop && a.cropBottom === b.cropBottom
+
+/** Sets a clip's transform (clamped into its limits); the identity removes the field. The same project when nothing changes. */
+export function setTransform(p: Project, clipId: string, t: Transform): Project {
+  const at = find(p, clipId)
+  if (!at) return p
+  const next = normalizeTransform(t)
+  if (sameTransform(at.clip.transform, next)) return p
+  const clip: Clip = { ...at.clip, transform: next }
+  if (isIdentity(next)) delete clip.transform
+  return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? clip : c)))
 }
 
 /** Takes a clip out: the base track closes the gap, an overlay keeps it. */
@@ -378,6 +400,11 @@ export function parseProject(json: unknown): Project | null {
       } else if (c.in < 0 || c.out <= c.in || c.out > asset.duration) return null
       ids.add(c.id)
       const clip: Clip = { id: c.id, asset: c.asset, in: c.in, out: c.out }
+      if (c.transform !== undefined) {
+        if (!isValidTransform(c.transform)) return null
+        const { x, y, scale, cropTop, cropBottom } = c.transform
+        if (!isIdentity(c.transform)) clip.transform = { x, y, scale, cropTop, cropBottom }
+      }
       if (!isBase) {
         if (!isNum(c.start) || c.start < 0) return null
         clip.start = c.start

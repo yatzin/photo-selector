@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   addClip, addTrack, allClips, assetKind, clipAt, clipsAt, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MAX_TRACKS, mergeClientProject, MIN_CLIP,
-  moveClip, newProject, parseProject, removeClip, removeTrack, resolveStart, setTrackMuted, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
+  moveClip, newProject, parseProject, removeClip, removeTrack, resolveStart, setTrackMuted, setTransform, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "./project"
+import { IDENTITY } from "./transform"
 
 function sample(): Project {
   return {
@@ -793,5 +794,80 @@ describe("the 6 hour timeline limit", () => {
     expect(base(trimClip(p, "b2", "in", 0))[1].in).toBe(3600)
     const q = { ...long(), tracks: [p.tracks[0], { id: "t2", clips: [{ id: "o", asset: "h", in: 0, out: 10, start: MAX_TIMELINE - 20 }] }] }
     expect(overlay(trimClip(q, "o", "out", 100))[0].out).toBe(20)
+  })
+})
+
+describe("clip transforms", () => {
+  const half = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
+  const withTransform = (p: Project, id: string, t = half): Project =>
+    ({ ...p, tracks: p.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.id === id ? { ...c, transform: t } : c)) })) })
+  const clip = (p: Project, id: string) => allClips(p).find((c) => c.id === id)
+
+  it("setTransform sets one clip's transform and nothing else", () => {
+    const p = layered()
+    const q = setTransform(p, "o1", half)
+    expect(clip(q, "o1")?.transform).toEqual(half)
+    expect(clip(q, "c1")?.transform).toBeUndefined()
+    expect(q.tracks[0]).toBe(p.tracks[0])
+    expect(clip(p, "o1")?.transform).toBeUndefined()
+  })
+
+  it("setTransform with the identity removes the field", () => {
+    const q = setTransform(withTransform(layered(), "c1"), "c1", IDENTITY)
+    expect(clip(q, "c1")).toEqual({ id: "c1", asset: "a", in: 0, out: 3 })
+    expect("transform" in (clip(q, "c1") ?? {})).toBe(false)
+  })
+
+  it("setTransform clamps, and returns the same project for an unknown clip or no change", () => {
+    const p = layered()
+    expect(clip(setTransform(p, "c1", { ...half, scale: 99 }), "c1")?.transform?.scale).toBe(5)
+    expect(setTransform(p, "nope", half)).toBe(p)
+    expect(setTransform(p, "c1", IDENTITY)).toBe(p)
+    const q = withTransform(p, "c1")
+    expect(setTransform(q, "c1", { ...half })).toBe(q)
+  })
+
+  it("splitClip gives both halves the transform", () => {
+    const p = withTransform(withTransform(layered(), "c1"), "o1")
+    const s = splitClip(p, "c1", 1, "n")
+    expect(clip(s, "c1")?.transform).toEqual(half)
+    expect(clip(s, "n")?.transform).toEqual(half)
+    const o = splitClip(p, "o1", 2, "m")
+    expect(clip(o, "m")?.transform).toEqual(half)
+  })
+
+  it("moveClip keeps it within and across tracks, trimClip keeps it", () => {
+    const p = withTransform(layered(), "c1")
+    expect(clip(moveClip(p, "c1", 1, { start: 8 }), "c1")?.transform).toEqual(half)
+    expect(clip(moveClip(p, "c1", 0, { index: 2 }), "c1")?.transform).toEqual(half)
+    expect(clip(moveClip(withTransform(layered(), "o1"), "o1", 0, { index: 0 }), "o1")?.transform).toEqual(half)
+    expect(clip(trimClip(p, "c1", "out", 2), "c1")?.transform).toEqual(half)
+  })
+
+  it("parseProject round-trips a valid transform and drops an identity one", () => {
+    const p = withTransform(withTransform(layered(), "o2"), "c2", IDENTITY)
+    const parsed = parseProject(JSON.parse(JSON.stringify(p)))
+    expect(clip(parsed!, "o2")?.transform).toEqual(half)
+    expect(clip(parsed!, "c2")).toEqual({ id: "c2", asset: "a", in: 2, out: 4 })
+  })
+
+  it("parseProject copies only the transform's own fields", () => {
+    const parsed = parseProject(JSON.parse(JSON.stringify(withTransform(layered(), "c1", { ...half, extra: 1 } as typeof half))))
+    expect(clip(parsed!, "c1")?.transform).toEqual(half)
+  })
+
+  it("parseProject and mergeClientProject reject an invalid transform instead of clamping it", () => {
+    for (const bad of [{ ...half, scale: 6 }, { ...half, x: -3 }, { ...half, cropTop: 0.5, cropBottom: 0.5 }, { ...half, y: null }, "big", { ...half, cropBottom: -0.1 }]) {
+      const p = JSON.parse(JSON.stringify(withTransform(layered(), "o1", bad as typeof half)))
+      expect(parseProject(p)).toBeNull()
+      expect(mergeClientProject(p, layered())).toBeNull()
+    }
+    const nan = withTransform(layered(), "o1", { ...half, x: NaN })
+    expect(parseProject(nan)).toBeNull()
+  })
+
+  it("mergeClientProject keeps the client's transforms", () => {
+    const merged = mergeClientProject(JSON.parse(JSON.stringify(withTransform(layered(), "c1"))), layered())
+    expect(clip(merged!, "c1")?.transform).toEqual(half)
   })
 })
