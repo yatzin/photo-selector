@@ -291,6 +291,19 @@ Not while the project is exporting, or while that file is being imported.
   the middle; the waveform button and the zoom slider at the right.
 - In the dark theme the editor's accent (playhead, selection, trim handles,
   the Snap box, drop markers) is a light sky blue so it stands out.
+- **Right-click a clip** for its menu: Split at playhead (when the playhead
+  is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
+  an image, Edit length... The arrow keys, Home and End move through it,
+  Enter runs an item and Esc closes it. The menu shows each item's shortcut.
+- **Edit length** opens a box with Start, End and Length in seconds.
+  Changing Length keeps Start and moves End; changing End changes Length;
+  changing Start moves the clip and keeps its length. "When it overlaps other
+  media" picks what happens on the same layer: **Push later media** (the
+  default) moves the clips after it right just enough, keeping their gaps;
+  **Overwrite media** cuts into the clips it covers (trims them, splits one it
+  sits inside, removes one it covers whole). Other layers never change. On a
+  snapped layer 1 the start is fixed and the clips after it follow the new
+  length. Apply is one undo step.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
   there), **Delete** removes the selected clip, **M** mutes or unmutes it,
   **Esc** deselects, **Space** plays.
