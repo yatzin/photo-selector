@@ -286,7 +286,8 @@ Not while the project is exporting, or while that file is being imported.
   first request, and keeps the result next to it in `assets/` as
   `.<file>.peaks`; deleting the media item deletes it too.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut) and Reset when the
+  Delete (each button's tooltip names its shortcut), Add text, Transition
+  before and after while a clip is selected, and Reset when the
   selected clip is moved, scaled, cropped, turned or flipped; Play/Pause in
   the middle; the waveform button and the zoom slider at the right.
 - In the dark theme the editor's accent (playhead, selection, trim handles,
@@ -345,6 +346,42 @@ Not while the project is exporting, or while that file is being imported.
   flip and crop; the selection handles stay where the text rests. A ramp at
   each end of the timeline block shows how long each runs. Apply is one undo
   step with the rest of the dialog.
+- **Transitions.** Two clips on the same layer that touch (one ends where
+  the next starts) can blend into each other. Select a clip: a white circle
+  with the transition icon sits on its top edge at each side where another
+  clip touches it, and the toolbar shows **Transition before** and
+  **Transition after** (greyed out on a side with no clip touching). Either
+  opens the **Transition** box: the two clips, a grid of transitions, each
+  playing a small sample (Fade: Crossfade, Fade through black, Fade through
+  white; Wipe left, right, up and down; Slide left, right, up and down;
+  Shape: Circle open, Circle close, Radial; Effect: Pixelate, Dissolve, Zoom
+  in, Blur), **None** to take it off, and the duration in seconds. Apply (or
+  Remove) is one undo step; the arrow keys move through the grid and Esc
+  cancels. As in Premiere and DaVinci Resolve, the transition is centred on
+  the cut: clips keep their places and the timeline its length, and over the
+  duration the first clip plays half of it past its end and the second half
+  of it before its start, using the footage beyond the trimmed range. So the
+  longest a transition can be is twice the spare footage on the shorter side,
+  no longer than either clip and at most 5 s; a video trimmed right to the
+  start or end of its file has none, and the box says to trim the clip
+  shorter first (there's no "hold the last frame" fallback). Images and text
+  have as much as they need. On the timeline a transition is an amber block
+  across the cut, half over each clip; click it to change it. The sound
+  crossfades over the same time (equal power). The preview draws pixelate and
+  blur as a blurred crossfade and dissolve as a plain crossfade; the export
+  draws each exactly.
+- **Linked clips.** Clips joined by transitions move together or not at
+  all. Dragging one away springs it back with a red X and a notice, with
+  **Unlink this clip's transitions** (takes both of its transitions off) and
+  **Move all linked clips (N)**, which moves the whole chain along its layer
+  by the drag you just made (one undo step; not to another layer). Trimming
+  the edge at a transition is refused the same way (Unlink only), except on a
+  snapped layer 1, where the clips stay together; trimming the other edge
+  keeps the transition, shortened if it no longer fits. A file dropped
+  between two linked clips on a snapped layer 1 is refused. Splitting a clip
+  keeps its transitions on the outer sides, deleting it takes them away, and
+  Edit length refuses a change that would part linked clips (with an Unlink
+  button). The notice stays while you point at it.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
   an image or text, Edit length... (text also has Edit text..., Animation...
@@ -385,11 +422,15 @@ removed with the export, and placed like an image. Its animations are drawn
 by ffmpeg from the same maths the preview uses, frame by frame; a typewriter
 on a text of more than 100 characters reveals it in 100 equal steps of a few
 characters each, in the preview too.
+Transitions use ffmpeg's xfade: each clip of a chain joined by transitions is
+played half a transition past its cut, put on a transparent frame of its own,
+and joined to the next at the start of their transition.
 
 **Limits in this version**
-- No transitions or audio import yet. Text has no size box (use the corner
-  handles) and no outline or shadow.
-- Cuts only.
+- No audio import yet. Text has no size box (use the corner handles) and no
+  outline or shadow.
+- Transitions only between clips that touch on one layer, and only with
+  spare footage beyond the cut.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 

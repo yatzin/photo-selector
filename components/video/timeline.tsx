@@ -44,7 +44,11 @@ import { Thumb } from "./thumb"
 // block with its text; it has Edit length... too, Edit text... (also a
 // double-click), Animation... (the same dialog on its Animation tab) and
 // Horizontal / Vertical (letters across or stacked). A ramp at each end of the
-// block shows how long its in and out animations run.
+// block shows how long its in and out animations run. A transition is an amber
+// block straddling its cut (click: the Transition dialog); the selected clip
+// has a white circle at each cut with an adjoining clip for adding one. A clip
+// linked by a transition can't be dragged off or trimmed apart at that cut: it
+// shows a red X and a notice offers to unlink it or move its whole chain.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */

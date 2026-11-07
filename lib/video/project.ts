@@ -641,7 +641,9 @@ function isInt(v: unknown, max: number): v is number {
  * `muted` must be a boolean (kept only when true); an older file's track
  * `muted: true` is read as `muted: true` on every clip of that track. A text
  * clip has asset "" and a valid `text` (lib/video/text), times like an image
- * and is never muted.
+ * and is never muted. A `transition` needs a known type and a duration from
+ * MIN_TRANSITION to MAX_TRANSITION; one with no clip adjoining it is dropped
+ * and one longer than its footage allows is shortened (fixTransitions).
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
