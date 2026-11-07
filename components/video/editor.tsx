@@ -11,7 +11,7 @@ import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
-import { addClip, allClips, assetKind, clipsAt, removeClip, splitClip, totalLength, type Edit, type Project } from "@/lib/video/project"
+import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, splitClip, totalLength, type Asset, type Edit, type Project } from "@/lib/video/project"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview } from "./preview"
@@ -50,6 +50,11 @@ export function Editor({
 }) {
   const [editor, setEditor] = useState(() => initialState(initial))
   const project = useMemo<Project>(() => ({ ...editor.meta, ...editor.history.present }), [editor.meta, editor.history.present])
+  // The latest project for code that runs after an await, which outlives the render that started it.
+  const latest = useRef(project)
+  useEffect(() => {
+    latest.current = project
+  })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Undo can take away the selected clip: drop a selection that no longer exists.
   if (selectedId !== null && !allClips(project).some((c) => c.id === selectedId)) setSelectedId(null)
@@ -147,8 +152,8 @@ export function Editor({
     }
   }
 
-  /** Copies an Inbox file into Project media (or finds the copy already there); its asset id, or null when it failed. */
-  async function importFile(inboxFolder: string, name: string): Promise<string | null> {
+  /** Copies an Inbox file into Project media (or finds the copy already there); its asset id and asset, or null when it failed. */
+  async function importFile(inboxFolder: string, name: string): Promise<{ id: string; asset: Asset } | null> {
     if (importingRef.current) {
       toast.info("Wait for the current import to finish.")
       return null
@@ -163,7 +168,7 @@ export function Editor({
       }
       // The server owns assets: take the new one from its reply.
       setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
-      return r.id
+      return { id: r.id, asset: r.asset }
     } catch {
       toast.error("Something went wrong importing that file.")
       return null
@@ -175,11 +180,20 @@ export function Editor({
 
   /** An Inbox file dropped on the timeline: import it, then put it where it was dropped. */
   async function dropFromInbox(inboxFolder: string, name: string, target: DropTarget) {
-    const assetId = await importFile(inboxFolder, name)
-    if (!assetId) return
+    const imported = await importFile(inboxFolder, name)
+    if (!imported) return
     const id = newId()
-    // Clips may have changed while importing; addClip clamps the index and slides an overlay clip clear of the others.
-    edit((p) => addClip(p, assetId, target.track, target, id))
+    // Clips may have changed while importing; addClip clamps the index and slides an overlay clip clear of the
+    // others, and a layer removed meanwhile makes the clip a new top layer rather than dropping it.
+    edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    // The ghost had a guessed length before the import: say so when the real length slid the clip along.
+    const p = latest.current
+    const track = Math.min(target.track, p.tracks.length)
+    if (track > 0 && target.start !== undefined) {
+      const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
+      const start = resolveStart(p.tracks[track]?.clips ?? [], length, target.start)
+      if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+    }
   }
 
   async function startExport() {
@@ -275,10 +289,10 @@ export function Editor({
         if (!id) return
         e.preventDefault()
         const splitId = newId()
-        edit((p) => splitClip(p, id, playhead, splitId), "split")
+        edit((p) => splitClip(p, id, playhead, splitId))
       } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
         e.preventDefault()
-        edit((p) => removeClip(p, selectedId), "delete")
+        edit((p) => removeClip(p, selectedId))
         setSelectedId(null)
       } else if (e.key === "Escape" && selectedId) {
         setSelectedId(null)
