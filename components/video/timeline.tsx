@@ -41,7 +41,9 @@ import { Thumb } from "./thumb"
 // opens its menu (split at the playhead, delete, mute, and for an image Edit
 // length..., a dialog for its start and length). A text clip is a coloured
 // block with its text; it has Edit length... too, Edit text... (also a
-// double-click) and Horizontal / Vertical (letters across or stacked).
+// double-click), Animation... (the same dialog on its Animation tab) and
+// Horizontal / Vertical (letters across or stacked). A ramp at each end of the
+// block shows how long its in and out animations run.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -102,8 +104,8 @@ export function Timeline({
   onChange: (edit: (p: Project) => Project) => void
   /** An Inbox file was dropped: import it, then add it at `target`. */
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
-  /** Open a text clip's Edit text dialog. */
-  onEditText: (id: string) => void
+  /** Open a text clip's Edit text dialog (on its Animation tab for "animation"). */
+  onEditText: (id: string, section?: "text" | "animation") => void
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
@@ -655,6 +657,7 @@ export function Timeline({
       const text = clip.text
       items.push(
         { label: "Edit text...", onSelect: () => onEditText(id) },
+        { label: "Animation...", onSelect: () => onEditText(id, "animation") },
         ...(["horizontal", "vertical"] as const).map((orientation) => ({
           label: orientation === "horizontal" ? "Horizontal" : "Vertical",
           checked: text.orientation === orientation,
@@ -852,6 +855,22 @@ export function Timeline({
                         }}
                         title={text ? `${text.content} (double-click to edit)` : file}
                       >
+                        {text?.animIn && (
+                          // The in animation's length: a ramp up from the clip's start.
+                          <div
+                            aria-hidden
+                            className="pointer-events-none absolute inset-y-0 left-0 bg-violet-600/30 [clip-path:polygon(0_100%,100%_0,100%_100%)] dark:bg-violet-300/30"
+                            style={{ width: Math.min(text.animIn.duration * zoom, clipWidth) }}
+                          />
+                        )}
+                        {text?.animOut && (
+                          // The out animation's length: a ramp down to the clip's end.
+                          <div
+                            aria-hidden
+                            className="pointer-events-none absolute inset-y-0 right-0 bg-violet-600/30 [clip-path:polygon(0_0,100%_100%,0_100%)] dark:bg-violet-300/30"
+                            style={{ width: Math.min(text.animOut.duration * zoom, clipWidth) }}
+                          />
+                        )}
                         {text ? (
                           // The text itself, on one line, over a block in its layer's place.
                           <span className="pointer-events-none absolute inset-x-3 inset-y-0 flex items-center gap-1 overflow-hidden text-[11px] font-medium text-violet-950 dark:text-violet-50">

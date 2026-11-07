@@ -12,14 +12,14 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, isTextClip, MAX_TRACKS, removeAsset, removeClip, resolveStart,
+  addClip, addTextClip, allClips, assetKind, baseInsertion, clipLength, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, isTextClip, MAX_TRACKS, removeAsset, removeClip, resolveStart,
   setClipMuted, setClipText, setTransform, splitClip, totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { DEFAULT_TEXT } from "@/lib/video/text"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
-import { EditTextDialog } from "./edit-text-dialog"
+import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
@@ -74,7 +74,13 @@ export function Editor({
   if (selectedId !== null && !allClips(project).some((c) => c.id === selectedId)) setSelectedId(null)
   // The text clip whose Edit text dialog is open.
   const [textFor, setTextFor] = useState<string | null>(null)
+  const [textSection, setTextSection] = useState<TextSection>("text")
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
+  /** Opens a text clip's Edit text dialog on its Text tab, or on its Animation tab. */
+  const openText = useCallback((id: string, section: TextSection = "text") => {
+    setTextSection(section)
+    setTextFor(id)
+  }, [])
 
   /** One user gesture: one undo step. Repeats with the same `group` in quick succession make one step together. */
   const edit = useCallback((change: (p: Project) => Project, group?: string) => {
@@ -370,7 +376,7 @@ export function Editor({
       return addTextClip(p, DEFAULT_TEXT, 0, { start: isMagnetic(p) ? trackEnd(p.tracks[0]) : at }, id)
     })
     setSelectedId(id)
-    setTextFor(id)
+    openText(id)
   }
 
   function addToTimeline(assetId: string) {
@@ -534,7 +540,7 @@ export function Editor({
             className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
             style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
-            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={setTextFor} />
+            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={openText} />
           </div>
           <ResizeHandle
             label="Resize preview"
@@ -613,7 +619,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={setTextFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} />
           </div>
         </div>
       </div>
@@ -621,6 +627,8 @@ export function Editor({
         <EditTextDialog
           key={textClip.id}
           text={textClip.text}
+          length={clipLength(textClip)}
+          section={textSection}
           onApply={(t) => {
             const id = textClip.id
             edit((p) => setClipText(p, id, t))

@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, clipsAt, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { assetKind, clipLength, clipsAt, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
-import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Content, type Transform } from "@/lib/video/transform"
+import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
+import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
 import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
@@ -25,7 +26,8 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // shows wherever an upper one doesn't cover and black shows where nothing
 // does. A clip with no transform fills the canvas letterboxed in black, as it
 // always has (and as the export draws it). An image clip shows as a still in its track's place, and a
-// text clip as its text (TextPicture) in its content box, placed the same way. Clicking the
+// text clip as its text (TextPicture) in its content box, placed the same way, its in or out
+// animation drawn as it is at the playhead (AnimatedText). Clicking the
 // canvas selects a clip there and TransformOverlay edits it, with a hint
 // about Alt below the canvas while a drag runs. A file dragged from the left
 // panel onto the canvas is added at the playhead (onDrop). The area around
@@ -85,6 +87,75 @@ function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
         )
       )}
     </svg>
+  )
+}
+
+const pct = (n: number) => `${n * 100}%`
+
+/**
+ * A sweep's or a typewriter's cut as a clip-path in the text box's own,
+ * unflipped box. A sweep's side is on screen (after the flips, as the export
+ * masks it), so a flip mirrors it here; the typewriter's units are the
+ * text's own, before any flip, so they're used as they are.
+ */
+function animClip(s: AnimState, cuts: ReturnType<typeof typewriterCuts> | null, t: Transform): string | undefined {
+  if (s.reveal) {
+    const f = s.reveal.fraction
+    const dir = s.reveal.dir
+    let [x0, x1] = dir === "left" ? [0, f] : dir === "right" ? [1 - f, 1] : [0, 1]
+    let [y0, y1] = dir === "up" ? [0, f] : dir === "down" ? [1 - f, 1] : [0, 1]
+    if (t.flipH) [x0, x1] = [1 - x1, 1 - x0]
+    if (t.flipV) [y0, y1] = [1 - y1, 1 - y0]
+    return `inset(${pct(y0)} ${pct(1 - x1)} ${pct(1 - y1)} ${pct(x0)})`
+  }
+  const c = s.chars !== null && cuts ? cuts[s.chars] : undefined
+  if (!c) return undefined
+  // What shows: every row above the first hidden character's, and its row up to it.
+  return `polygon(0 0, 100% 0, 100% ${pct(c.top)}, ${pct(c.x)} ${pct(c.top)}, ${pct(c.x)} ${pct(c.bottom)}, 0 ${pct(c.bottom)})`
+}
+
+/**
+ * A text clip with an in or out animation, drawn as its animation is at the
+ * playhead (lib/video/text-animation): only this follows the playhead at frame
+ * rate (the player's subscribeFrame), so playing or scrubbing doesn't re-render
+ * the rest of the editor for it. The slide's offset, the scale and the extra
+ * turn move a canvas-sized layer about the content centre, on top of the
+ * clip's own placement (`children`); the selection's handles stay on the
+ * clip's resting frame.
+ */
+function AnimatedText({ player, clip, transform, W, H, total, zIndex, children }: {
+  player: PreviewPlayer
+  clip: Clip & { text: ClipText }
+  transform: Transform
+  W: number
+  H: number
+  total: number
+  zIndex: number
+  children: (clipPath: string | undefined) => ReactNode
+}) {
+  const now = useSyncExternalStore(player.subscribeFrame, player.frameTime, () => 0)
+  const { text } = clip
+  const typing = text.animIn?.type === "typewriter" || text.animOut?.type === "typewriter"
+  const cuts = useMemo(() => (typing ? typewriterCuts(text) : null), [typing, text])
+  const look = now >= total ? Math.max(0, total - 0.001) : now
+  const length = clipLength(clip)
+  const b = rotatedBounds(textSize(text, H), W, H, transform)
+  const s = animationState(text, Math.max(0, Math.min(length, look - clip.start)), length, {
+    bounds: { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H },
+    units: cuts?.length ?? 0,
+  })
+  return (
+    <div
+      className="absolute inset-0"
+      style={{
+        zIndex,
+        opacity: s.opacity,
+        transform: `translate(${pct(s.offsetX)}, ${pct(s.offsetY)}) rotate(${s.rotationDeg}deg) scale(${s.scale})`,
+        transformOrigin: `${pct(0.5 + transform.x)} ${pct(0.5 + transform.y)}`,
+      }}
+    >
+      {children(animClip(s, cuts, transform))}
+    </div>
   )
 }
 
@@ -302,9 +373,23 @@ export function Preview({
             {lanes.map((track, lane) => {
               const clip = hits[lane]?.clip
               if (clip && isTextClip(clip)) {
+                const ready = loadedFonts.has(fontFamily(fontById(clip.text.font)))
+                if (isAnimated(clip.text)) {
+                  return (
+                    <AnimatedText key={`text-${lane}`} player={player} clip={clip} transform={transformOf(clip)} W={W} H={H} total={total} zIndex={lane + 1}>
+                      {(clipPath) => (
+                        <div className="absolute" style={placement(contentOf(clip), W, H, transformOf(clip))}>
+                          <div className="absolute inset-0" style={{ clipPath }}>
+                            <TextPicture text={clip.text} ready={ready} />
+                          </div>
+                        </div>
+                      )}
+                    </AnimatedText>
+                  )
+                }
                 return (
                   <div key={`text-${lane}`} className="absolute" style={{ ...placement(contentOf(clip), W, H, transformOf(clip)), zIndex: lane + 1 }}>
-                    <TextPicture text={clip.text} ready={loadedFonts.has(fontFamily(fontById(clip.text.font)))} />
+                    <TextPicture text={clip.text} ready={ready} />
                   </div>
                 )
               }

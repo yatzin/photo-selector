@@ -40,6 +40,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
   const lanes = useRef<Lane[]>(Array.from({ length: MAX_TRACKS }, newLane))
   const timeRef = useRef(0)
+  // The playhead at every frame (timeRef re-renders at most every TIME_STEP), and who follows it (subscribeFrame).
+  const frameRef = useRef(0)
+  const frameListeners = useRef(new Set<() => void>())
   // While playing: timeline time `t` at frame time `at` (ms).
   const clock = useRef({ t: 0, at: 0 })
   const playingRef = useRef(false)
@@ -145,10 +148,21 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     [load, isImage, nextVideo, upcoming]
   )
 
-  const setTimeline = useCallback((t: number) => {
-    timeRef.current = t
-    setTime(t)
+  /** Moves the frame-rate playhead and tells its followers. */
+  const setFrame = useCallback((t: number) => {
+    if (frameRef.current === t) return
+    frameRef.current = t
+    for (const listener of frameListeners.current) listener()
   }, [])
+
+  const setTimeline = useCallback(
+    (t: number) => {
+      timeRef.current = t
+      setTime(t)
+      setFrame(t)
+    },
+    [setFrame]
+  )
 
   const pauseAll = useCallback(() => {
     for (const lane of els.current) for (const v of lane) v?.pause()
@@ -344,9 +358,10 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       }
       if (swapped) setActive(lanes.current.map((l) => l.active))
       if (cut || Math.abs(t - timeRef.current) >= TIME_STEP) setTimeline(t)
+      else setFrame(t)
       raf.current = requestAnimationFrame((n) => tickRef.current(n))
     },
-    [load, markFailed, pause, playSlot, setTimeline, isImage, nextVideo, upcoming, playableClip]
+    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip]
   )
 
   const play = useCallback(() => {
@@ -446,9 +461,22 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     [markFailed]
   )
 
+  /**
+   * The playhead at every animation frame, for the few things that follow it
+   * that closely (an animated text) without re-rendering the editor: a
+   * useSyncExternalStore subscription and its snapshot.
+   */
+  const subscribeFrame = useCallback((listener: () => void) => {
+    frameListeners.current.add(listener)
+    return () => {
+      frameListeners.current.delete(listener)
+    }
+  }, [])
+  const frameTime = useCallback(() => frameRef.current, [])
+
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { attach, assetIn, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError }
+  return { attach, assetIn, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
 }
 
 export type PreviewPlayer = ReturnType<typeof usePreviewPlayer>
