@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -20,12 +20,14 @@ import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
+import { cutsOf, setTransition } from "@/lib/video/transitions"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline, type DropTarget } from "./timeline"
+import { TransitionDialog } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 
 // The editor: file tree on the left, preview in the middle, timeline below.
@@ -77,6 +79,10 @@ export function Editor({
   const [textFor, setTextFor] = useState<string | null>(null)
   const [textSection, setTextSection] = useState<TextSection>("text")
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
+  // The clip after the cut whose Transition dialog is open (it holds the transition).
+  const [transitionFor, setTransitionFor] = useState<string | null>(null)
+  // The selected clip's cuts with an adjoining neighbour, for the toolbar's Transition before / after.
+  const selectedCuts = selectedId ? cutsOf(project, selectedId) : null
   /** Opens a text clip's Edit text dialog on its Text tab, or on its Animation tab. */
   const openText = useCallback((id: string, section: TextSection = "text") => {
     setTextSection(section)
@@ -584,6 +590,25 @@ export function Editor({
                 <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
                   <Type className="h-4 w-4" /> Add text
                 </Button>
+                {selectedCuts &&
+                  (["before", "after"] as const).map((side) => {
+                    const holder = selectedCuts[side]
+                    return (
+                      <Button
+                        key={side}
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => holder && setTransitionFor(holder)}
+                        disabled={!holder}
+                        title={holder ? `Transition ${side}` : `Transition ${side} (no clip right ${side} this one on its layer)`}
+                        aria-label={`Transition ${side}`}
+                        className={side === "after" ? "[&_svg]:-scale-x-100" : undefined}
+                      >
+                        <Blend className="h-4 w-4" />
+                      </Button>
+                    )
+                  })}
                 {transformed && (
                   <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
                     <RotateCcw className="h-4 w-4" /> Reset
@@ -620,10 +645,23 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={setTransitionFor} />
           </div>
         </div>
       </div>
+      {transitionFor && allClips(project).some((c) => c.id === transitionFor) && (
+        <TransitionDialog
+          key={transitionFor}
+          project={project}
+          clipId={transitionFor}
+          thumbUrl={thumbUrl}
+          onApply={(spec) => {
+            const id = transitionFor
+            edit((p) => setTransition(p, id, spec))
+          }}
+          onClose={() => setTransitionFor(null)}
+        />
+      )}
       {textClip && isTextClip(textClip) && (
         <EditTextDialog
           key={textClip.id}

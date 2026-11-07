@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { setClipTiming, type TimingMode } from "@/lib/video/clip-timing"
+import { LINKED, setClipTiming, type TimingMode } from "@/lib/video/clip-timing"
 import { clipLength, isMagnetic, MIN_CLIP, type Clip, type Project } from "@/lib/video/project"
 
 // The clip menu's "Edit length...": Start, End and Length in seconds, kept in
@@ -23,11 +23,13 @@ function parse(text: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-export function EditLengthDialog({ project, clip, track, onApply, onClose }: {
+export function EditLengthDialog({ project, clip, track, onApply, onUnlink, onClose }: {
   project: Project
   clip: Clip
   track: number
   onApply: (timing: { start: number; length: number }, mode: TimingMode) => void
+  /** Takes the clip's transitions off (offered when the change would part linked clips). */
+  onUnlink: () => void
   onClose: () => void
 }) {
   const snapped = track === 0 && isMagnetic(project)
@@ -130,7 +132,14 @@ export function EditLengthDialog({ project, clip, track, onApply, onClose }: {
               {snapped ? "Layer 1 is snapped: the start follows the clips before it, and the clips after it move with the length." : "Only this layer changes."}
             </p>
           </div>
-          {problem && <p role="alert" className="text-xs text-destructive">{problem}</p>}
+          {problem && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p role="alert" className="text-xs text-destructive">{problem}</p>
+              {problem === LINKED && (
+                <Button type="button" size="sm" variant="outline" onClick={onUnlink}>Unlink this clip&apos;s transitions</Button>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={!canApply}>Apply</Button>

@@ -1,14 +1,15 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Film, Image as ImageIcon, Magnet, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
+import { Blend, Film, Image as ImageIcon, Magnet, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, isTextClip, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip,
+  addClip, addTrack, adjoins, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, isTextClip, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip,
   removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setClipText, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
+import { linkedChain, moveGroup, setTransition, transitionName, unlinkClip } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
 import {
   autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
@@ -62,6 +63,24 @@ const DRAG_EXTRA = 10 // s of timeline kept past a dragged item's end, so it can
 const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
 const SNAP_PX = 8 // px within which a dragged clip or edge snaps to the playhead, 0 or another clip's edge
 const ROW_ZOOM_KEY = "ps.video.rowZoom"
+const NOTICE_MS = 6000 // how long a notice stays (longer while hovered or focused)
+const REJECT_MS = 800 // how long a refused clip shows its red X
+
+/**
+ * A message over the timeline (where the Alt hint goes) after an edit was
+ * refused or changed something: `unlink` offers to take a clip's transitions
+ * off (or one cut's, `cut`), `group` to move its whole linked chain instead.
+ */
+type Notice = {
+  text: string
+  unlink?: { id: string; cut?: boolean }
+  group?: { id: string; count: number; run: () => void }
+  /** Where it sits in the view (px from its left): centred there, or its left or right edge there. */
+  anchor?: { x: number; side: "center" | "left" | "right" }
+}
+
+/** Seconds, without trailing zeros (0.65, 1, 1.5). */
+const secs = (n: number) => String(Number(n.toFixed(2)))
 
 export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE))
 
@@ -81,7 +100,7 @@ function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: n
 }
 
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -106,6 +125,8 @@ export function Timeline({
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
   /** Open a text clip's Edit text dialog (on its Animation tab for "animation"). */
   onEditText: (id: string, section?: "text" | "animation") => void
+  /** Open the Transition dialog for the cut before clip `id`. */
+  onTransition: (id: string) => void
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
@@ -143,6 +164,38 @@ export function Timeline({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   // The clip whose Edit length dialog is open.
   const [lengthFor, setLengthFor] = useState<string | null>(null)
+  // A refused edit's message (and the hover or focus that keeps it up), and the clip flashing its red X.
+  const [notice, setNotice] = useState<Notice | null>(null)
+  const [noticeHeld, setNoticeHeld] = useState(false)
+  const [rejected, setRejected] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!notice || noticeHeld) return
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [notice, noticeHeld])
+
+  useEffect(() => {
+    if (!rejected) return
+    const timer = setTimeout(() => setRejected(null), REJECT_MS)
+    return () => clearTimeout(timer)
+  }, [rejected])
+
+  /**
+   * A refused edit on a clip: its red X, and a notice. The notice goes at the
+   * top centre of the view like the Alt hint, or beside the playhead when that
+   * is near the centre, so it never covers it.
+   */
+  function refuse(id: string | null, n: Notice) {
+    if (id) setRejected(id)
+    const { header: h, zoom: z, playhead: t } = live.current
+    const view = scroller.current?.clientWidth ?? 600
+    const centre = h + (view - h) / 2
+    const x = h + t * z - (scroller.current?.scrollLeft ?? 0)
+    const near = x > h && x < view && Math.abs(x - centre) < 260
+    setNoticeHeld(false)
+    setNotice({ ...n, anchor: !near ? { x: centre, side: "center" } : x < centre ? { x: x + 12, side: "left" } : { x: x - 12, side: "right" } })
+  }
 
   const row = rowHeight(project.tracks.length, rowZoom)
   const tight = row < TIGHT_ROW
@@ -271,6 +324,23 @@ export function Timeline({
     const start = resolveStart(p.tracks[track]?.clips ?? [], length, snapped, ignore)
     return { to: { track, start }, guide: s && Math.abs(start - snapped) < 1e-9 ? s.at : null }
   }
+
+  /**
+   * On a snapped V1, the clip whose transition a drop or move landing at `start`
+   * would part (it goes in between two clips there); null anywhere else, where
+   * a clip slides clear of others and so never lands between two that adjoin.
+   */
+  function linkedCutAt(track: number, start: number, ignore?: string): string | null {
+    const p = live.current.project
+    if (track !== 0 || !isMagnetic(p)) return null
+    const others = p.tracks[0].clips.filter((c) => c.id !== ignore)
+    const slot = baseInsertion(others, start, ignore).index
+    const after = others[slot]
+    return slot > 0 && after?.transition && adjoins(others[slot - 1], after) ? after.id : null
+  }
+
+  /** The notice for an edit refused because a transition links clips (`cut`: the drop would part that one cut). */
+  const linkedNotice = (id: string, extra: Partial<Notice> = {}, cut = false): Notice => ({ text: "This clip is linked by a transition.", unlink: { id, cut }, ...extra })
 
   /** The hint and guide for a snapping drag landing on `track`: none on a snapped V1 (its insertion line doesn't snap). */
   const snapState = (track: number, off: boolean, guide: number | null) => (track === 0 && isMagnetic(live.current.project) ? null : { off, at: off ? null : guide })
@@ -440,6 +510,17 @@ export function Timeline({
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    // An edge at a cut with a transition can't move apart from its neighbour (a snapped V1 keeps them together, so there it can).
+    const p0 = live.current.project
+    const clips0 = p0.tracks[track]?.clips ?? []
+    const k0 = clips0.findIndex((c) => c.id === clip.id)
+    const neighbour = edge === "in" ? clips0[k0] : clips0[k0 + 1]
+    const linkedEdge = neighbour?.transition && adjoins(clips0[edge === "in" ? k0 - 1 : k0], neighbour)
+    if (linkedEdge && !(track === 0 && isMagnetic(p0))) {
+      onSelect(clip.id)
+      refuse(clip.id, linkedNotice(clip.id))
+      return
+    }
     const startX = e.clientX
     const scroll0 = scrollNow()
     let moved = false
@@ -476,7 +557,11 @@ export function Timeline({
         const s = seconds
         if (s === null) return
         // Off a snapped base leftTrimDraft's seconds are s itself.
-        onChange((p) => (edge === "in" ? trimClip(p, clip.id, "in", leftTrimDraft(p, clip.id, s).seconds) : trimClip(p, clip.id, edge, s)))
+        const trimmed = (p: Project) => (edge === "in" ? trimClip(p, clip.id, "in", leftTrimDraft(p, clip.id, s).seconds) : trimClip(p, clip.id, edge, s))
+        // A transition the trim leaves without enough footage goes (fixTransitions): say so.
+        const count = (p: Project) => p.tracks.reduce((n, t) => n + t.clips.filter((c) => c.transition).length, 0)
+        if (count(trimmed(live.current.project)) < count(live.current.project)) refuse(null, { text: "Transition removed: not enough footage left at the cut." })
+        onChange(trimmed)
       },
       true
     )
@@ -501,6 +586,8 @@ export function Timeline({
     const length = clipLength(clip)
     let moved = false
     let to: DropTarget | null = null
+    // The last pointer position as a time, the clip's unsnapped start there, and whether snapping was on: what Move all linked clips replays.
+    let last = { at: 0, left, snapOn: true }
     altHeld.current = e.altKey
     setLanded(null)
     follow(
@@ -515,7 +602,8 @@ export function Timeline({
         const dy = cdy + scrolled.y
         const newLeft = Math.max(0, left + dx / live.current.zoom)
         const off = altHeld.current
-        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX), !off)
+        last = { at: timeAt(ev.clientX), left: newLeft, snapOn: !off }
+        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, last.at, !off)
         to = r.to
         setDrag({ id: clip.id, length, dx, dy, target: r.to, end: Math.max(newLeft, r.to.start) + length })
         setSnap(snapState(r.to.track, off, r.guide))
@@ -523,14 +611,47 @@ export function Timeline({
       () => {
         setDrag(null)
         if (!moved) return onSelect(clip.id)
-        setLanded(clip.id)
         const t = to
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
-        if (!stays) onChange((p) => moveClip(p, clip.id, t.track, t))
+        if (stays) return setLanded(clip.id)
+        // A clip linked by a transition doesn't come apart: it springs back, and the notice offers to unlink it or move its whole chain.
+        const chain = linkedChain(live.current.project, clip.id)
+        if (chain.length > 1) {
+          const replay = last
+          return refuse(clip.id, linkedNotice(clip.id, { group: { id: clip.id, count: chain.length, run: () => moveChain(clip.id, replay.left - left, replay.at, replay.snapOn) } }))
+        }
+        const cut = linkedCutAt(t.track, t.start, clip.id)
+        if (cut) return refuse(clip.id, linkedNotice(cut, {}, true))
+        setLanded(clip.id)
+        onChange((p) => moveClip(p, clip.id, t.track, t))
       },
       true
     )
+  }
+
+  /**
+   * Moves the chain of clips linked to `id` along its layer by `delta` seconds
+   * (the drag Move all linked clips replays), its leading edge (or its end)
+   * snapping as a dragged clip does; on a snapped V1 into the slot the pointer
+   * time `at` picks. One undo step.
+   */
+  function moveChain(id: string, delta: number, at: number, snapOn: boolean) {
+    const { project: p, playhead: t, zoom: z } = live.current
+    const ids = new Set(linkedChain(p, id))
+    const track = p.tracks.findIndex((tr) => tr.clips.some((c) => c.id === id))
+    const group = p.tracks[track]?.clips.filter((c) => ids.has(c.id)) ?? []
+    if (group.length === 0) return
+    const length = clipEnd(group[group.length - 1]) - group[0].start
+    const magnetic = track === 0 && isMagnetic(p)
+    let start = Math.max(0, group[0].start + delta)
+    if (!magnetic && snapOn) {
+      const points = [0, t, ...p.tracks.flatMap((tr) => tr.clips.filter((c) => !ids.has(c.id)).flatMap((c) => [c.start, clipEnd(c)]))]
+      const s = snapEdges([start, start + length], points, SNAP_PX, z)
+      if (s) start = Math.max(0, s.edge === 0 ? s.at : s.at - length)
+    }
+    setNotice(null)
+    onChange((q) => moveGroup(q, id, magnetic ? at : start))
   }
 
   /** The ghost of a file dragged over `track` with the pointer at `clientX` (Alt held: no snapping). */
@@ -583,6 +704,9 @@ export function Timeline({
     e.preventDefault()
     const t = timeAt(e.clientX)
     const snapOn = !e.altKey
+    // Not in between two clips a transition links.
+    const cut = linkedCutAt(track, t)
+    if (cut) return refuse(null, linkedNotice(cut, {}, true))
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
@@ -925,6 +1049,12 @@ export function Timeline({
                             {muted ? <VolumeX className={cn("text-red-300", tight ? "h-2.5 w-2.5" : "h-3 w-3")} /> : <Volume2 className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />}
                           </button>
                         )}
+                        {rejected === clip.id && (
+                          // A refused move or trim: a red X across the block for a moment.
+                          <svg aria-hidden className="pointer-events-none absolute inset-0 z-20 h-full w-full bg-red-500/15" preserveAspectRatio="none" viewBox="0 0 100 100">
+                            <path d="M4 6 L96 94 M96 6 L4 94" stroke="#ef4444" strokeWidth={4} strokeLinecap="round" vectorEffect="non-scaling-stroke" fill="none" />
+                          </svg>
+                        )}
                         {(["in", "out"] as const).map((edge) => (
                           <span
                             key={edge}
@@ -942,6 +1072,64 @@ export function Timeline({
                       </div>
                     )
                   })}
+                  {track.clips.map((clip, k) => {
+                    // A transition: a tinted block straddling its cut, half over each clip.
+                    if (!clip.transition || !adjoins(track.clips[k - 1], clip)) return null
+                    const name = transitionName(clip.transition.type)
+                    const w = Math.max(clip.transition.duration * zoom, 16)
+                    return (
+                      <button
+                        key={`tx-${clip.id}`}
+                        type="button"
+                        aria-label={`Transition: ${name}, ${secs(clip.transition.duration)}s`}
+                        title={`${name}, ${secs(clip.transition.duration)} s (click to change)`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => onTransition(clip.id)}
+                        className={cn(
+                          "absolute top-1/2 z-[15] flex -translate-y-1/2 items-center justify-center gap-1 overflow-hidden rounded-md border px-1 text-[10px] font-medium shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          "border-amber-600/80 bg-amber-300/90 text-amber-950 hover:bg-amber-200 dark:border-amber-300/80 dark:bg-amber-500/85 dark:text-amber-950 dark:hover:bg-amber-400",
+                          tight ? "h-4" : "h-5"
+                        )}
+                        style={{ left: clip.start * zoom - w / 2, width: w }}
+                      >
+                        <Blend aria-hidden className="h-3 w-3 shrink-0" />
+                        {w >= 70 && <span className="truncate">{name}</span>}
+                      </button>
+                    )
+                  })}
+                  {(() => {
+                    // The selected clip's cuts with a neighbour: a white circle on each opens its Transition dialog.
+                    const k = !drag && !trim && selectedId ? track.clips.findIndex((c) => c.id === selectedId) : -1
+                    if (k < 0) return null
+                    const c = track.clips[k]
+                    const next = track.clips[k + 1]
+                    const cuts = [
+                      ...(adjoins(track.clips[k - 1], c) ? [{ side: "before" as const, at: c.start, holder: c }] : []),
+                      ...(adjoins(c, next) ? [{ side: "after" as const, at: clipEnd(c), holder: next }] : []),
+                    ]
+                    return cuts.map(({ side, at, holder }) => {
+                      const tr = holder.transition
+                      return (
+                        <button
+                          key={`cut-${side}`}
+                          type="button"
+                          aria-label={`Transition ${side} this clip`}
+                          title={tr ? `Transition ${side} this clip: ${transitionName(tr.type)}, ${secs(tr.duration)} s` : `Add a transition ${side} this clip`}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => onTransition(holder.id)}
+                          className={cn(
+                            // On the clip's top border at the cut, so the trim handles below it stay free.
+                            "absolute z-30 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-[0_1px_4px_rgb(0_0_0/0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            tight ? "top-1 h-4 w-4" : "top-2 h-5 w-5",
+                            tr ? "bg-editor-accent text-editor-accent-foreground ring-2 ring-white" : "bg-white text-neutral-900 ring-1 ring-black/25 hover:bg-neutral-100"
+                          )}
+                          style={{ left: at * zoom }}
+                        >
+                          <Blend aria-hidden className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />
+                        </button>
+                      )
+                    })
+                  })()}
                   {target?.track === i && (isBase && magnetic ? insertLine(target.start) : ghost(target.start))}
                 </div>
               </div>
@@ -962,6 +1150,48 @@ export function Timeline({
           {snapHint.off ? "Snapping off" : "Hold Alt to turn snapping off"}
         </div>
       )}
+      <span className="sr-only" aria-live="polite">{notice?.text ?? ""}</span>
+      {notice && !snapHint && (
+        // Where the Alt hint goes; it stays while hovered or focused.
+        <div
+          className={cn(
+            "absolute top-7 z-50 flex items-center gap-2 whitespace-nowrap rounded-full bg-neutral-900/90 py-0.5 pr-1 pl-3 text-[11px] text-white shadow dark:bg-neutral-100/95 dark:text-neutral-900",
+            notice.anchor?.side === "left" ? "" : notice.anchor?.side === "right" ? "-translate-x-full" : "-translate-x-1/2"
+          )}
+          style={{ left: notice.anchor?.x ?? header + Math.max(0, (viewport > 0 ? viewport : 600) - header) / 2 }}
+          onPointerEnter={() => setNoticeHeld(true)}
+          onPointerLeave={() => setNoticeHeld(false)}
+          onFocus={() => setNoticeHeld(true)}
+          onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setNoticeHeld(false)}
+        >
+          <span className={cn(!notice.unlink && !notice.group && "pr-2")}>{notice.text}</span>
+          {notice.unlink && (
+            <button
+              type="button"
+              className="rounded-full bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20"
+              onClick={() => {
+                const { id, cut } = notice.unlink!
+                setNotice(null)
+                onChange((p) => (cut ? setTransition(p, id, null) : unlinkClip(p, id)))
+              }}
+            >
+              {notice.unlink.cut ? "Unlink this transition" : "Unlink this clip's transitions"}
+            </button>
+          )}
+          {notice.group && (
+            <button
+              type="button"
+              className="rounded-full bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20"
+              onClick={notice.group.run}
+            >
+              Move all linked clips ({notice.group.count})
+            </button>
+          )}
+          <button type="button" aria-label="Dismiss" className="rounded-full p-0.5 hover:bg-white/20 dark:hover:bg-black/10" onClick={() => setNotice(null)}>
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {menu && menuClip && <ClipMenu x={menu.x} y={menu.y} label="Clip" items={menuItems(menuClip)} onClose={closeMenu} />}
       {lengthClip && (
         <EditLengthDialog
@@ -969,6 +1199,10 @@ export function Timeline({
           project={project}
           clip={lengthClip}
           track={lengthTrack}
+          onUnlink={() => {
+            const id = lengthClip.id
+            onChange((p) => unlinkClip(p, id))
+          }}
           onApply={(timing, mode) => {
             const id = lengthClip.id
             // At most one clip can be split around the new range, so one fresh id covers it.
