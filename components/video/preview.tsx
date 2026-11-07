@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { TriangleAlert } from "lucide-react"
 import { assetKind, clipsAt, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { TEXT_FONT_FAMILY, textLayout, textSize, type ClipText } from "@/lib/video/text"
+import { fontById, fontFamily } from "@/lib/video/fonts"
+import { textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
@@ -68,22 +69,40 @@ const TEXT_LAYOUT_PX = 100
 
 /**
  * A text clip's picture, filling its content box: each line of textLayout as
- * SVG text in the bundled font, centred on its baseline, so it lands where the
- * export's drawtext puts it. Spaces are kept; nothing wraps.
+ * SVG text in the clip's bundled font, centred on its baseline, so it lands where the
+ * export's drawtext puts it. Spaces are kept; nothing wraps. Hidden (its box
+ * still placed) until the font has loaded, so it never shows in another font.
  */
-function TextPicture({ text }: { text: ClipText }) {
+function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
   const l = textLayout(text, TEXT_LAYOUT_PX)
   return (
-    <svg viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="none" aria-hidden className="absolute inset-0 h-full w-full">
+    <svg viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="none" aria-hidden className={cn("absolute inset-0 h-full w-full", !ready && "invisible")}>
       {l.lines.map((line, i) =>
         line.text.trim() === "" ? null : (
-          <text key={i} x={line.cx} y={line.baseline} textAnchor="middle" fill={text.color} fontSize={TEXT_LAYOUT_PX} style={{ fontFamily: `"${TEXT_FONT_FAMILY}"`, whiteSpace: "pre" }}>
+          <text key={i} x={line.cx} y={line.baseline} textAnchor="middle" fill={text.color} fontSize={TEXT_LAYOUT_PX} style={{ fontFamily: `"${fontFamily(fontById(text.font))}"`, whiteSpace: "pre" }}>
             {line.text}
           </text>
         )
       )}
     </svg>
   )
+}
+
+/** The CSS families of `families` (one a line) that have loaded; a font that fails to load counts too (its text then shows in a fallback). */
+function useLoadedFonts(families: string): ReadonlySet<string> {
+  const [loaded, setLoaded] = useState<ReadonlySet<string>>(() => new Set())
+  useEffect(() => {
+    let live = true
+    for (const family of families.split("\n")) {
+      if (!family) continue
+      const done = () => live && setLoaded((s) => (s.has(family) ? s : new Set(s).add(family)))
+      document.fonts.load(`${TEXT_LAYOUT_PX}px "${family}"`).then(done, done)
+    }
+    return () => {
+      live = false
+    }
+  }, [families])
+  return loaded
 }
 
 export function Preview({
@@ -157,6 +176,9 @@ export function Preview({
     setAspects((a) => (a[assetId] === ratio ? a : { ...a, [assetId]: ratio }))
   }
   const lanes = project.tracks.slice(0, MAX_TRACKS)
+  // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
+  const textFonts = [...new Set(project.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
+  const loadedFonts = useLoadedFonts(textFonts)
   const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset) : ""
 
   const target = (clip: Clip, lane: number): TransformTarget => ({
@@ -282,7 +304,7 @@ export function Preview({
               if (clip && isTextClip(clip)) {
                 return (
                   <div key={`text-${lane}`} className="absolute" style={{ ...placement(contentOf(clip), W, H, transformOf(clip)), zIndex: lane + 1 }}>
-                    <TextPicture text={clip.text} />
+                    <TextPicture text={clip.text} ready={loadedFonts.has(fontFamily(fontById(clip.text.font)))} />
                   </div>
                 )
               }

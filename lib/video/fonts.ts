@@ -26,9 +26,10 @@
 // clips had before fonts could be chosen: a clip with no `font` uses it.
 //
 // Every font has a glyph for each printable ASCII character (letters, digits
-// and punctuation). Bangers draws its lower case as smaller capitals and Press
-// Start 2P is a wide monospaced pixel font (every character 1 em): both work
-// with any text, they just look that way.
+// and punctuation). Bangers and Creepster are caps-only designs: their lower
+// case letters are capitals too, so the text is kept as typed and shows in
+// capitals. Press Start 2P is a wide monospaced pixel font (every character
+// 1 em). All work with any text; they just look that way.
 
 export type TextFont = {
   id: string
