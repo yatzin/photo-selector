@@ -1,20 +1,25 @@
 "use client"
 
+import { useState } from "react"
 import { Pause, Play, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { clipAt, type Project } from "@/lib/video/project"
+import { assetKind, clipAt, type Project } from "@/lib/video/project"
 import { cn } from "@/lib/utils"
 import type { PreviewPlayer } from "./use-preview-player"
 
 // The player above the timeline. Two stacked <video> elements take turns (see
 // use-preview-player); a clip the browser can't decode shows a message here and
-// still exports, one whose file is missing says so (export fails on it).
+// still exports, one whose file is missing says so (export fails on it). An
+// image clip shows as a still over the video slots.
 
-export function Preview({ player, project }: { player: PreviewPlayer; project: Project }) {
+export function Preview({ player, project, imageUrl }: { player: PreviewPlayer; project: Project; imageUrl: (assetId: string) => string }) {
+  const [brokenImage, setBrokenImage] = useState<string | null>(null)
   const current = clipAt(project.clips, player.time)
   const currentAsset = (current ? project.clips[current.index] : project.clips.at(-1))?.asset
   const cantPlay = currentAsset !== undefined && player.failed.has(currentAsset)
   const missing = currentAsset !== undefined && player.missing.has(currentAsset)
+  const asset = currentAsset !== undefined ? project.assets[currentAsset] : undefined
+  const still = currentAsset !== undefined && asset !== undefined && assetKind(asset) === "image" ? imageUrl(currentAsset) : ""
 
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black/90 p-4">
@@ -30,6 +35,18 @@ export function Preview({ player, project }: { player: PreviewPlayer; project: P
             className={cn("absolute inset-0 h-full w-full object-contain", player.active === slot ? "opacity-100" : "opacity-0")}
           />
         ))}
+        {still && (
+          <div className="absolute inset-0 bg-black">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={still} alt="" draggable={false} className="h-full w-full object-contain" onError={() => setBrokenImage(still)} />
+            {brokenImage === still && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center text-sm text-white/80">
+                <TriangleAlert className="h-5 w-5" />
+                This image is missing from the project or can&apos;t be shown.
+              </div>
+            )}
+          </div>
+        )}
         {project.clips.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-white/60">Import a clip and add it to the timeline</div>
         )}

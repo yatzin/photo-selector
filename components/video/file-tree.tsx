@@ -1,19 +1,19 @@
 "use client"
 
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Folder, Loader2, Plus, Video } from "lucide-react"
+import { ChevronDown, ChevronRight, Folder, Loader2, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { formatBytes } from "@/lib/format"
+import { formatBytes, mediaUrl } from "@/lib/format"
 import { formatTimecode } from "@/lib/video/time"
-import type { Project } from "@/lib/video/project"
+import { assetKind, type Project } from "@/lib/video/project"
 import { Thumb } from "./thumb"
-import { ASSET_DRAG_TYPE } from "./timeline"
+import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
-// Inbox, where files can be imported from.
+// Inbox, where files can be imported from (or dragged straight onto the timeline).
 
-export type InboxFolder = { folder: string; files: { name: string; size: number }[] }
+export type InboxFolder = { folder: string; files: { name: string; size: number; kind: "image" | "video" }[] }
 
 export function FileTree({
   inbox, project, thumbUrl, importing, onImport, onAdd,
@@ -48,7 +48,9 @@ export function FileTree({
             <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
             <span className="min-w-0 flex-1">
               <span className="block truncate" title={a.file}>{a.file}</span>
-              <span className="block text-[11px] text-muted-foreground tabular-nums">{formatTimecode(a.duration)}</span>
+              <span className="block text-[11px] text-muted-foreground tabular-nums">
+                {assetKind(a) === "image" ? `Image · ${formatTimecode(a.duration)}` : formatTimecode(a.duration)}
+              </span>
             </span>
             <Button type="button" size="icon-sm" variant="ghost" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => onAdd(id)} title="Add to timeline">
               <Plus className="h-4 w-4" />
@@ -59,7 +61,7 @@ export function FileTree({
       </ul>
 
       <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Inbox</p>
-      {inbox.length === 0 && <p className="px-3 text-xs text-muted-foreground">No videos in the Video Editing Inbox yet.</p>}
+      {inbox.length === 0 && <p className="px-3 text-xs text-muted-foreground">No videos or images in the Video Editing Inbox yet.</p>}
       {inbox.map((f) => {
         const expanded = open[f.folder] ?? true
         return (
@@ -75,8 +77,16 @@ export function FileTree({
                 {f.files.map((file) => {
                   const key = `${f.folder}/${file.name}`
                   return (
-                    <li key={key} className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-muted/60">
-                      <Video className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                    <li
+                      key={key}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData(INBOX_DRAG_TYPE, JSON.stringify({ folder: f.folder, name: file.name }))
+                        e.dataTransfer.effectAllowed = "copy"
+                      }}
+                      className="group flex cursor-grab items-center gap-2 rounded-md p-1 hover:bg-muted/60 active:cursor-grabbing"
+                    >
+                      <Thumb src={mediaUrl("video-inbox", [f.folder], file.name, "thumb", String(file.size))} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate" title={file.name}>{file.name}</span>
                         <span className="block text-[11px] text-muted-foreground">{formatBytes(file.size)}</span>

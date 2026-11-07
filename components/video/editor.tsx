@@ -8,7 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
 import { newId } from "@/lib/video/ids"
-import { addClip, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
+import { addClip, assetKind, removeClip, splitClip, totalLength, type Project } from "@/lib/video/project"
 import { clipIdAt } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
@@ -67,8 +67,17 @@ export function Editor({
 
   const videoUrl = useCallback(
     (assetId: string) => {
-      const file = project.assets[assetId]?.file
-      return file ? mediaUrl("video-projects", [userFolder, folder, "assets"], file, "original", assetId) : ""
+      const asset = project.assets[assetId]
+      return asset && assetKind(asset) === "video" ? mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "original", assetId) : ""
+    },
+    [project.assets, userFolder, folder]
+  )
+
+  /** A still shown in the preview while an image clip is current (the converted preview, so HEIC and DNG show too). */
+  const imageUrl = useCallback(
+    (assetId: string) => {
+      const asset = project.assets[assetId]
+      return asset && assetKind(asset) === "image" ? mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "preview", assetId) : ""
     },
     [project.assets, userFolder, folder]
   )
@@ -87,22 +96,38 @@ export function Editor({
     }
   }
 
-  async function importFile(inboxFolder: string, name: string) {
-    if (importing) return
+  /** Copies an Inbox file into Project media (or finds the copy already there); its asset id, or null when it failed. */
+  async function importFile(inboxFolder: string, name: string, fromDrop = false): Promise<string | null> {
+    if (importing) {
+      if (fromDrop) toast.info("Wait for the current import to finish.")
+      return null
+    }
     setImporting(`${inboxFolder}/${name}`)
     try {
       const r = await importAssetAction(folder, [inboxFolder], name)
       if ("error" in r) {
         toast.error(r.error)
-        return
+        return null
       }
       // The server owns assets: take the new one from its reply.
       setProject((p) => ({ ...p, assets: { ...p.assets, [r.id]: r.asset } }))
+      if (r.reused && !fromDrop) toast.info(`${name} is already in Project media.`)
+      return r.id
     } catch {
-      toast.error("Something went wrong importing that clip.")
+      toast.error("Something went wrong importing that file.")
+      return null
     } finally {
       setImporting(null)
     }
+  }
+
+  /** An Inbox file dropped on the timeline: import it, then put it where it was dropped. */
+  async function dropFromInbox(inboxFolder: string, name: string, index: number) {
+    const assetId = await importFile(inboxFolder, name, true)
+    if (!assetId) return
+    const id = newId()
+    // Clips may have changed while importing; addClip clamps the index to the current timeline.
+    setProject((p) => addClip(p, assetId, index, id))
   }
 
   async function startExport() {
@@ -210,10 +235,10 @@ export function Editor({
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
-          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onImport={importFile} onAdd={addToTimeline} />
+          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onImport={(f, n) => void importFile(f, n)} onAdd={addToTimeline} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          <Preview player={player} project={project} />
+          <Preview player={player} project={project} imageUrl={imageUrl} />
           <div className="shrink-0 border-t border-border/60 bg-card">
             <div className="flex h-9 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
               <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project.clips))}</span>
@@ -224,7 +249,7 @@ export function Editor({
                 <input type="range" min={20} max={200} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 accent-primary" />
               </label>
             </div>
-            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={setProject} />
+            <Timeline project={project} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={setProject} onDropInbox={(f, n, i) => void dropFromInbox(f, n, i)} />
           </div>
         </div>
       </div>

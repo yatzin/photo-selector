@@ -1,9 +1,9 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { Film } from "lucide-react"
+import { Film, Image as ImageIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { addClip, clipLength, clipStarts, moveClip, totalLength, trimClip, type Project } from "@/lib/video/project"
+import { addClip, assetKind, clipLength, clipStarts, moveClip, totalLength, trimClip, type Project } from "@/lib/video/project"
 import { newId } from "@/lib/video/ids"
 import { dropIndex, trimDelta } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
@@ -11,15 +11,17 @@ import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and one video track. Clips sit end to end (the
 // track closes gaps). Drag a clip to reorder it, drag its edge handles to trim,
-// drop a file from the left panel to add it.
+// drop a file from the left panel to add it (an Inbox file is imported first).
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
+/** An Inbox file being dragged: JSON { folder, name }. */
+export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
 
 const TRACK_PAD = 16 // px of empty track after the last clip
 const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
 
 export function Timeline({
-  project, thumbUrl, selectedId, playhead, zoom, onSelect, onSeek, onScrub, onChange,
+  project, thumbUrl, selectedId, playhead, zoom, onSelect, onSeek, onScrub, onChange, onDropInbox,
 }: {
   project: Project
   /** Thumbnail URL for an asset id. */
@@ -34,6 +36,8 @@ export function Timeline({
   onScrub: (active: boolean) => void
   /** Applies an edit to the current project (not the one this render saw, which may be stale by then). */
   onChange: (edit: (p: Project) => Project) => void
+  /** An Inbox file was dropped at clip index `index`: import it, then add it there. */
+  onDropInbox: (folder: string, name: string, index: number) => void
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
@@ -164,7 +168,7 @@ export function Timeline({
           className="relative h-24"
           onPointerDown={(e) => e.target === e.currentTarget && onSelect(null)}
           onDragOver={(e) => {
-            if (!e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) return
+            if (!e.dataTransfer.types.includes(ASSET_DRAG_TYPE) && !e.dataTransfer.types.includes(INBOX_DRAG_TYPE)) return
             e.preventDefault()
             e.dataTransfer.dropEffect = "copy"
             setDropTime(timeAt(e.clientX))
@@ -172,12 +176,22 @@ export function Timeline({
           onDragLeave={() => setDropTime(null)}
           onDrop={(e) => {
             const assetId = e.dataTransfer.getData(ASSET_DRAG_TYPE)
+            const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
             setDropTime(null)
-            if (!assetId) return
+            if (!assetId && !inbox) return
             e.preventDefault()
             const index = dropIndex(project.clips, timeAt(e.clientX))
-            const id = newId()
-            onChange((p) => addClip(p, assetId, index, id))
+            if (assetId) {
+              const id = newId()
+              onChange((p) => addClip(p, assetId, index, id))
+              return
+            }
+            try {
+              const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
+              if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, index)
+            } catch {
+              // Not our drag after all.
+            }
           }}
         >
           {shown.clips.length === 0 && (
@@ -187,15 +201,17 @@ export function Timeline({
           )}
           {shown.clips.map((clip, i) => {
             const dragging = drag?.id === clip.id
-            const file = project.assets[clip.asset]?.file
-            // Zero except for the clip whose in edge is being dragged.
-            const inShift = clip.in - layout.clips[i].in
+            const asset = project.assets[clip.asset]
+            const file = asset?.file
+            const image = asset !== undefined && assetKind(asset) === "image"
+            // Zero except for the clip whose in edge is being dragged: how far that edge has moved.
+            const inShift = clipLength(layout.clips[i]) - clipLength(clip)
             return (
               <div
                 key={clip.id}
                 role="button"
                 tabIndex={0}
-                aria-label={`Clip ${i + 1} of ${shown.clips.length}, ${file ?? "missing file"}, ${clipLength(clip).toFixed(1)} seconds`}
+                aria-label={`Clip ${i + 1} of ${shown.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, ${clipLength(clip).toFixed(1)} seconds`}
                 aria-pressed={selectedId === clip.id}
                 onPointerDown={(e) => startReorder(e, clip.id, i)}
                 onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
@@ -212,9 +228,15 @@ export function Timeline({
                 title={file}
               >
                 <Thumb src={thumbUrl(clip.asset)} className="pointer-events-none h-full w-full object-cover opacity-80" />
-                <span className="pointer-events-none absolute inset-x-3 bottom-0.5 truncate text-[10px] font-medium text-white drop-shadow">
-                  {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
-                </span>
+                {image ? (
+                  <span className="pointer-events-none absolute inset-x-3 bottom-0.5 flex items-center gap-1 truncate text-[10px] font-medium text-white drop-shadow">
+                    <ImageIcon className="h-3 w-3 shrink-0" /> {clipLength(clip).toFixed(1)}s image
+                  </span>
+                ) : (
+                  <span className="pointer-events-none absolute inset-x-3 bottom-0.5 truncate text-[10px] font-medium text-white drop-shadow">
+                    {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
+                  </span>
+                )}
                 {(["in", "out"] as const).map((edge) => (
                   <span
                     key={edge}

@@ -1,12 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { clipAt, clipStarts, totalLength, type Project } from "@/lib/video/project"
+import { assetKind, clipAt, clipStarts, totalLength, type Clip, type Project } from "@/lib/video/project"
 
 // Plays the timeline in the browser with no re-encoding: two <video> elements
 // take turns. One shows the current clip while the other waits on the next one
 // (already loaded and seeked), so a cut doesn't stall. A clip the browser can't
-// play still takes its time on the timeline: it runs on the clock instead.
+// play still takes its time on the timeline: it runs on the clock instead. So
+// does an image clip: the preview shows it as an <img>, no video element loads
+// it, the video slots pause under it and the waiting one holds the next video.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
@@ -20,13 +22,14 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const timeRef = useRef(0)
   const playingRef = useRef(false)
   const clipsRef = useRef(project.clips)
+  const assetsRef = useRef(project.assets)
   const urlRef = useRef(urlFor)
   const raf = useRef(0)
   const tickRef = useRef<(now: number) => void>(() => {})
   const failedRef = useRef<Set<string>>(new Set())
   // For a clip that can't play: its source time at the frame time `at` (ms).
   const clock = useRef<{ index: number; pos: number; at: number } | null>(null)
-  const primed = useRef(false)
+  const primed = useRef([false, false])
   const [active, setActive] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [time, setTime] = useState(0)
@@ -35,10 +38,26 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   useEffect(() => {
     clipsRef.current = project.clips
+    assetsRef.current = project.assets
     urlRef.current = urlFor
   })
 
   const el = (slot: number) => (slot === 0 ? slotA.current : slotB.current)
+
+  const isImage = useCallback((clip: Clip | undefined) => {
+    const asset = clip && assetsRef.current[clip.asset]
+    return asset !== undefined && assetKind(asset) === "image"
+  }, [])
+
+  /** The first video (not image) clip from `from` on: the one a waiting slot should hold. */
+  const nextVideo = useCallback(
+    (from: number): Clip | undefined => {
+      const clips = clipsRef.current
+      for (let i = from; i < clips.length; i++) if (!isImage(clips[i])) return clips[i]
+      return undefined
+    },
+    [isImage]
+  )
 
   const load = useCallback((slot: number, assetId: string, at: number) => {
     const v = el(slot)
@@ -54,20 +73,25 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     }
   }, [])
 
-  /** Shows the clip at `index` (source time `at`) in the active slot and gets the next clip ready in the other. */
+  /**
+   * Shows the clip at `index` (source time `at`) in the active slot and gets the
+   * next video clip ready in the other. An image clip loads no video: both slots
+   * pause under the image, and the other slot still waits on the next video.
+   */
   const showClip = useCallback(
     (index: number, at: number) => {
       const clips = clipsRef.current
       const clip = clips[index]
       if (!clip) return
       clipIndex.current = index
-      load(activeSlot.current, clip.asset, at)
-      const next = clips[index + 1]
       const other = 1 - activeSlot.current
+      if (isImage(clip)) el(activeSlot.current)?.pause()
+      else load(activeSlot.current, clip.asset, at)
+      const next = nextVideo(index + 1)
       if (next) load(other, next.asset, next.in)
       else el(other)?.pause()
     },
-    [load]
+    [load, isImage, nextVideo]
   )
 
   const setTimeline = useCallback((t: number) => {
@@ -137,9 +161,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         showClip(last, clips[last].out)
         setTimeline(total)
       }
-      if (playingRef.current) playSlot(activeSlot.current)
+      if (playingRef.current && !isImage(clips[clipIndex.current])) playSlot(activeSlot.current)
     },
-    [setTimeline, showClip, playSlot]
+    [setTimeline, showClip, playSlot, isImage]
   )
 
   const tick = useCallback(
@@ -152,7 +176,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       if (clip && v) {
         let pos: number
         let done: boolean
-        if (failedRef.current.has(clip.asset)) {
+        if (isImage(clip) || failedRef.current.has(clip.asset)) {
           // Run this clip on the clock and cut at its out point as usual.
           if (clock.current?.index !== idx) clock.current = { index: idx, pos: clip.in + Math.max(0, timeRef.current - clipStarts(clips)[idx]), at: now }
           pos = clock.current.pos + (now - clock.current.at) / 1000
@@ -165,7 +189,16 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         }
         if (done) {
           const next = clips[idx + 1]
-          if (next) {
+          if (next && isImage(next)) {
+            // An image comes next: no slot to swap to. The video stops under it, and the
+            // waiting slot keeps (or gets) the next video clip.
+            clipIndex.current = idx + 1
+            clock.current = null
+            v.pause()
+            setTimeline(clipStarts(clips)[idx + 1])
+            const after = nextVideo(idx + 2)
+            if (after) load(1 - activeSlot.current, after.asset, after.in)
+          } else if (next) {
             // Swap to the waiting slot.
             const old = activeSlot.current
             activeSlot.current = 1 - old
@@ -176,7 +209,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
             playSlot(activeSlot.current)
             v.pause()
             setTimeline(clipStarts(clips)[idx + 1])
-            const after = clips[idx + 2]
+            const after = nextVideo(idx + 2)
             if (after) load(old, after.asset, after.in)
           } else {
             pause()
@@ -190,7 +223,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       }
       raf.current = requestAnimationFrame((n) => tickRef.current(n))
     },
-    [load, markFailed, pause, playSlot, setTimeline]
+    [load, markFailed, pause, playSlot, setTimeline, isImage, nextVideo]
   )
 
   const play = useCallback(() => {
@@ -200,18 +233,24 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     else seek(timeRef.current)
     playingRef.current = true
     setPlaying(true)
-    playSlot(activeSlot.current)
+    const image = isImage(clipsRef.current[clipIndex.current])
+    if (!image) {
+      playSlot(activeSlot.current)
+      primed.current[activeSlot.current] = true
+    }
     // Safari lets a later play() from the frame loop (at a cut) through only on an
-    // element that was played inside a user gesture, so prime the waiting one now.
-    const other = el(1 - activeSlot.current)
-    if (!primed.current && other?.src) {
-      primed.current = true
-      void other.play().catch(() => {})
-      other.pause()
+    // element that was played inside a user gesture, so prime the waiting one now
+    // (both, when an image is showing and neither was just played).
+    for (const slot of image ? [0, 1] : [1 - activeSlot.current]) {
+      const v = el(slot)
+      if (primed.current[slot] || !v?.src) continue
+      primed.current[slot] = true
+      void v.play().catch(() => {})
+      v.pause()
     }
     cancelAnimationFrame(raf.current)
     raf.current = requestAnimationFrame((n) => tickRef.current(n))
-  }, [seek, playSlot])
+  }, [seek, playSlot, isImage])
 
   useEffect(() => {
     tickRef.current = tick

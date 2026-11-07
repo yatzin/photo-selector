@@ -54,7 +54,8 @@ config/        export.json: resolution, fps, codec presets (reusable when templa
 - Preview plays the asset files directly in the browser (HTML5 video via the existing media route), no proxy files. Formats the browser can't play (some HEVC/MOV) fall back to a generated proxy later, not in slice 1.
 - Timeline built in React with pointer events, no editor library. Matches the existing shadcn look.
 - Export runs as a background job on the server with progress shown in the UI. Cuts only in slice 1: concat of trimmed clips, normalised to the project resolution and fps (default 1080p, 30 fps).
-- Images on the timeline are not supported in slice 1 (video clips only).
+- Images on the timeline are supported. An image asset has `kind: "image"`; its clip starts at 5 s (`DEFAULT_IMAGE`) and stretches from 0.2 s to 10 minutes (`MAX_IMAGE`), with `in` always 0. Export loops the converted preview still for the clip's length with silence; the browser preview shows it as an image on the clock.
+- An imported asset records its Inbox path as `source`. Importing the same Inbox file again (Import button or dragging it onto the timeline) reuses that asset while its file is still in `assets/`, instead of copying it again.
 - Autosave to `project.json` after each edit, debounced.
 - Routes: `/tools/video-editing` (project list), `/tools/video-editing/<project>` (editor). Sidebar "Video Editing" label links to the list.
 - Access: a user sees and edits only their own `Projects/<user>/` folder in this tool.

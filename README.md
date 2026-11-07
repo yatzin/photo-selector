@@ -156,7 +156,7 @@ Database changes apply themselves on start.
 
 ## Video Editing
 
-Tools → Video Editing cuts video clips together and exports an MP4.
+Tools → Video Editing cuts video clips and still images together and exports an MP4.
 
 **Getting clips in.** Right-click files in the library, use the toolbar's
 **Video Editing** button, or the button in the viewer, then choose
@@ -166,14 +166,20 @@ pick whose folder. You can copy instead of move.
 **Projects.** Each one is a folder, `Projects/<user>/<project>/`:
 
 - `project.json`: the timeline
-- `assets/`: the clips the project uses
+- `assets/`: the clips and images the project uses
 - `output/`: exported videos
 - `config/export.json`: export size and frame rate
 
 Importing copies a file from the Inbox into `assets/`. The original stays in the Inbox.
+The Inbox list shows a thumbnail for each video and image. Dragging an Inbox
+file onto the timeline imports it and adds it where you drop it. Importing the
+same Inbox file again (button or drag) reuses the copy already in the project
+instead of copying it twice.
 
 **Editing.**
-- Drag a clip onto the timeline.
+- Drag a clip or image onto the timeline.
+- An image starts as a 5 s clip. Drag either edge to stretch or shorten it,
+  from 0.2 s up to 10 minutes. It exports letterboxed with silence.
 - Drag a clip's edges to trim it, or drag the clip to reorder.
 - **S** splits at the playhead, **Delete** removes the selected clip, **Space** plays.
 
@@ -181,7 +187,7 @@ Importing copies a file from the Inbox into `assets/`. The original stays in the
 1920x1080 and 30 fps. It never overwrites: a name already taken gets a new one.
 
 **Limits in this version**
-- Video clips only. No text, transitions or audio import yet.
+- No text, transitions or audio import yet.
 - Cuts only.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
