@@ -8,7 +8,7 @@ import { assetKind, clipLength, MAX_TRACKS, totalLength, trackClipAt, trackStart
 // has a lane of two <video> elements that take turns: one shows the track's
 // current clip while the other waits on its next one (already loaded and
 // seeked), so a cut doesn't stall. All lanes play at once from one clock, so
-// every track's sound mixes; the preview shows the topmost lane with a clip.
+// every track's sound mixes; the preview shows every lane with a clip, stacked.
 // The lowest lane playing a healthy video drives the clock (a stall waits for
 // it, and the other lanes pause until it plays on); with none, wall time does. A clip the browser can't play still takes
 // its time on the timeline, and so does an image clip: the preview shows it
@@ -23,12 +23,15 @@ type Lane = { loaded: (string | null)[]; active: number; index: number; primed: 
 
 const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false] })
 
-/** Whether two lists of track clips match lane by lane (an empty lane matches a missing one). */
+/** The same clip for playback: what plays and when (a transform only changes where it shows). */
+const samePlayback = (a: Clip, b: Clip) => a === b || (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start)
+
+/** Whether two lists of track clips play the same lane by lane (an empty lane matches a missing one). */
 function sameClips(a: Clip[][], b: Clip[][]): boolean {
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const x = a[i] ?? []
     const y = b[i] ?? []
-    if (x !== y && (x.length > 0 || y.length > 0)) return false
+    if (x !== y && (x.length !== y.length || x.some((c, k) => !samePlayback(c, y[k])))) return false
   }
   return true
 }
@@ -427,6 +430,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   useEffect(() => () => cancelAnimationFrame(raf.current), [])
 
+  /** The asset loaded in a lane's slot (null: none), for event handlers. */
+  const assetIn = useCallback((lane: number, slot: number) => lanes.current[lane]?.loaded[slot] ?? null, [])
+
   const onVideoError = useCallback(
     (lane: number, slot: number) => {
       const id = lanes.current[lane].loaded[slot]
@@ -437,7 +443,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { attach, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError }
+  return { attach, assetIn, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError }
 }
 
 export type PreviewPlayer = ReturnType<typeof usePreviewPlayer>

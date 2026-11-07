@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Check, Download, Loader2, Redo2, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, Check, Download, Loader2, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -11,7 +11,8 @@ import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
-import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, splitClip, totalLength, type Asset, type Edit, type Project } from "@/lib/video/project"
+import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, setTransform, splitClip, totalLength, type Asset, type Edit, type Project } from "@/lib/video/project"
+import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview } from "./preview"
@@ -28,6 +29,8 @@ const DEFAULT_ZOOM = 60 // px per second
 const MIN_PREVIEW = 120 // px
 const MIN_TIMELINE = 160 // px
 const HANDLE = 8 // px, the resize handle's height
+/** Arrow keys' nudge direction. */
+const ARROWS: Record<string, [number, number] | undefined> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
 
 /**
  * Server-owned fields (assets, name, settings) and the undoable edit, in one
@@ -303,8 +306,34 @@ export function Editor({
     return true
   }
 
+  // The selected clip when it shows at the playhead (the preview draws its frame), and whether it's moved, scaled or cropped.
+  // At the end the preview still shows the last frame, so look just before it, as the preview does.
+  const shownTotal = totalLength(project)
+  const shownHits = playhead >= shownTotal ? clipsAt(project, Math.max(0, shownTotal - 0.001)) : playheadHits
+  const canvasSelected = shownHits.tracks.some((h) => h !== null && h.clip.id === selectedId) ? selectedId : null
+  const transformed = selectedId !== null && allClips(project).some((c) => c.id === selectedId && !isIdentity(c.transform))
+
+  /** Puts the selected clip's picture back as fit (the toolbar's Reset). One undo step. */
+  function resetTransform() {
+    if (!selectedId) return
+    const id = selectedId
+    edit((p) => setTransform(p, id, IDENTITY))
+  }
+
+  /** Moves the clip selected on the canvas by fractions of the canvas (arrow keys); quick repeats make one undo step. */
+  function nudge(dx: number, dy: number): boolean {
+    if (!canvasSelected) return false
+    const id = canvasSelected
+    edit((p) => {
+      const clip = allClips(p).find((c) => c.id === id)
+      return clip ? setTransform(p, id, dragMove(clip.transform ?? IDENTITY, dx, dy)) : p
+    }, `nudge-${id}`)
+    return true
+  }
+
   // Keyboard: Space plays, S splits the selected clip under the playhead (else the topmost one there),
-  // Delete removes the selection, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo.
+  // Delete removes the selection, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo,
+  // the arrows nudge the clip selected on the canvas by 1% (Shift: 5%).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target instanceof Element ? e.target : null
@@ -317,6 +346,14 @@ export function Editor({
           e.preventDefault()
           step(key === "z" && !e.shiftKey ? "undo" : "redo")
         }
+        return
+      }
+      const arrow = ARROWS[e.key]
+      if (arrow && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // A focused slider or resize handle takes its own arrows.
+        if (t?.closest("[role=slider], [role=separator]")) return
+        const by = e.shiftKey ? 0.05 : 0.01
+        if (nudge(arrow[0] * by, arrow[1] * by)) e.preventDefault()
         return
       }
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return
@@ -372,7 +409,7 @@ export function Editor({
             className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
             style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
-            <Preview player={player} project={project} imageUrl={imageUrl} />
+            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} />
           </div>
           <ResizeHandle
             label="Resize preview"
@@ -406,6 +443,11 @@ export function Editor({
               <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
                 <Trash2 className="h-4 w-4" />
               </Button>
+              {transformed && (
+                <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position and crop">
+                  <RotateCcw className="h-4 w-4" /> Reset
+                </Button>
+              )}
               <div className="flex-1" />
               <label className="flex items-center gap-2">
                 Zoom
