@@ -12,8 +12,8 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, freeTrackFor, removeAsset, removeClip, resolveStart, setTransform, splitClip, totalLength, trackEnd,
-  type Asset, type Edit, type Project,
+  addClip, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, removeAsset, removeClip, resolveStart, setTransform, splitClip,
+  totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
@@ -34,6 +34,12 @@ const MIN_TIMELINE = 160 // px
 const HANDLE = 8 // px, the resize handle's height
 /** Arrow keys' nudge direction. */
 const ARROWS: Record<string, [number, number] | undefined> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+
+/** Where addClip puts a clip `length` long asked for at `start` on `track`: the snapped V1's slot boundary, else slid clear of overlaps. */
+function landing(p: Project, track: number, length: number, start: number, id: string): number {
+  const clips: Clip[] = p.tracks[track]?.clips ?? []
+  return track === 0 && isMagnetic(p) ? baseInsertion(clips, start, id).start : resolveStart(clips, length, start, id)
+}
 
 /**
  * Server-owned fields (assets, name, settings) and the undoable edit, in one
@@ -196,7 +202,7 @@ export function Editor({
     const p = latest.current
     const track = Math.min(target.track, p.tracks.length)
     const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
-    const start = resolveStart(p.tracks[track]?.clips ?? [], length, target.start, id)
+    const start = landing(p, track, length, target.start, id)
     if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
   }
 
@@ -235,8 +241,8 @@ export function Editor({
     })
     setSelectedId(id)
     // A free layer takes it at the playhead; only the timeline's end limit could move it.
-    const start = resolveStart(latest.current.tracks[track]?.clips ?? [], length, at, id)
-    if (Math.abs(start - at) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+    const start = landing(latest.current, track, length, at, id)
+    if (Math.abs(start - at) > 0.05) toast.info(`Placed at ${formatTimecode(start)} ${track === 0 && isMagnetic(latest.current) ? "(V1 snaps clips together)" : "to avoid overlap"}`)
   }
 
   /**
@@ -353,9 +359,12 @@ export function Editor({
     [pause]
   )
 
-  // What S and the Split button cut: the selected clip when it's under the playhead, else the topmost one there.
+  // What S and the Split button cut: the selected clip when something is selected (and only when the playhead
+  // is over it, never another clip), else the topmost clip under the playhead.
   const playheadHits = clipsAt(project, playhead)
-  const splitTarget = playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? playheadHits.top?.clip.id ?? null
+  const splitTarget = selectedId
+    ? (playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? null)
+    : (playheadHits.top?.clip.id ?? null)
 
   /** Splits at the playhead (S, or the toolbar); false when there's no clip under it. One undo step. */
   function splitAtPlayhead(): boolean {
@@ -507,7 +516,7 @@ export function Editor({
               <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
                 <Redo2 className="h-4 w-4" />
               </Button>
-              <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title="Split at playhead (S)" aria-label="Split at playhead">
+              <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
                 <SquareSplitHorizontal className="h-4 w-4" />
               </Button>
               <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">

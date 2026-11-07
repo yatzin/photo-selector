@@ -1,12 +1,12 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Film, Image as ImageIcon, Plus, Volume2, VolumeX, X } from "lucide-react"
+import { Film, Image as ImageIcon, Magnet, Plus, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, clipLength, DEFAULT_IMAGE, findAssetsBySource, MAX_TRACKS, moveClip, removeTrack, resolveStart, setTrackMuted,
-  totalLength, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, assetKind, baseInsertion, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, MAX_TRACKS, moveClip, removeTrack, resolveStart,
+  setBaseMagnetic, setTrackMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { newId } from "@/lib/video/ids"
 import { autoPanSpeed, clampRowZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapStart, timelineWidth, trimDelta } from "@/lib/video/timeline-math"
@@ -22,7 +22,8 @@ import { Thumb } from "./thumb"
 // The width follows the content (never narrower than the view), grows while
 // something is dragged towards the end, and any drag near the left or right
 // edge scrolls the view. From three layers the rows are half height, with a
-// vertical zoom on the right.
+// vertical zoom on the right. V1's Snap box keeps its clips end to end: a drop
+// or drag there shows an insertion line between clips instead of a ghost.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -191,12 +192,14 @@ export function Timeline({
   }
 
   /**
-   * Where a clip `length` long lands on `track`: its left edge `left` (the
-   * pointer time) snapped and slid clear of the clips there. `ignore` is the
-   * clip being moved.
+   * Where a clip `length` long lands on `track`: its left edge `left` snapped
+   * and slid clear of the clips there. `ignore` is the clip being moved. On a
+   * snapped V1 it's the slot the pointer time `at` picks (baseInsertion), its
+   * start that slot's boundary.
    */
-  function targetFor(track: number, left: number, length: number, ignore?: string): DropTarget {
+  function targetFor(track: number, left: number, length: number, ignore?: string, at = left): DropTarget {
     const { project: p, playhead: t, zoom: z } = live.current
+    if (track === 0 && isMagnetic(p)) return { track, start: baseInsertion(p.tracks[0].clips, at, ignore).start }
     const start = snapStart(left, length, snapPoints(p, t, ignore), SNAP_PX, z)
     return { track, start: resolveStart(p.tracks[track]?.clips ?? [], length, start, ignore) }
   }
@@ -339,7 +342,7 @@ export function Timeline({
         const dx = cdx + scrolled.x
         const dy = cdy + scrolled.y
         const newLeft = Math.max(0, left + dx / live.current.zoom)
-        to = targetFor(rowAt(ev.clientY), newLeft, length, clip.id)
+        to = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX))
         setDrag({ id: clip.id, length, dx, dy, target: to, end: Math.max(newLeft, to.start) + length })
       },
       () => {
@@ -423,6 +426,11 @@ export function Timeline({
       style={{ left: start * zoom + shift, width: Math.max(targetLength * zoom - 2, 8) }}
     />
   )
+  // On a snapped V1: where the clip goes in, between two clips.
+  const insertLine = (start: number) => (
+    <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-primary" style={{ left: start * zoom }} />
+  )
+  const magnetic = isMagnetic(project)
 
   const allEmpty = project.tracks.every((t) => t.clips.length === 0)
   const rows = shown.tracks.map((_, i) => i).reverse()
@@ -497,27 +505,46 @@ export function Timeline({
                 >
                   <span className={cn("font-medium", muted && "text-muted-foreground")} title={label}>V{i + 1}</span>
                   {isBase && !tight && <span aria-hidden className="rounded bg-muted px-1 text-[9px] leading-tight text-muted-foreground" title={label}>base</span>}
-                  <button
-                    type="button"
-                    aria-pressed={muted}
-                    title={muted ? `Unmute ${label}` : `Mute ${label}`}
-                    onClick={() => onChange((p) => setTrackMuted(p, track.id, !muted))}
-                    className={cn("flex shrink-0 items-center justify-center rounded hover:bg-muted", tight ? "h-4 w-4" : "h-5 w-5", muted ? "text-destructive" : "text-muted-foreground hover:text-foreground")}
-                  >
-                    {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-                    <span className="sr-only">Mute {label}</span>
-                  </button>
-                  {!isBase && project.tracks[i]?.clips.length === 0 && (
+                  <div className="flex items-center gap-0.5">
                     <button
                       type="button"
-                      title={`Remove ${label}`}
-                      onClick={() => onChange((p) => removeTrack(p, track.id))}
-                      className={cn("flex shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground", tight ? "h-4 w-4" : "h-5 w-5")}
+                      aria-pressed={muted}
+                      title={muted ? `Unmute ${label}` : `Mute ${label}`}
+                      onClick={() => onChange((p) => setTrackMuted(p, track.id, !muted))}
+                      className={cn("flex shrink-0 items-center justify-center rounded hover:bg-muted", tight ? "h-4 w-4" : "h-5 w-5", muted ? "text-destructive" : "text-muted-foreground hover:text-foreground")}
                     >
-                      <X className="h-3.5 w-3.5" />
-                      <span className="sr-only">Remove {label}</span>
+                      {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                      <span className="sr-only">Mute {label}</span>
                     </button>
-                  )}
+                    {isBase && (
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={magnetic}
+                        aria-label="Snap clips together on V1 (no gaps)"
+                        title="Snap clips together on V1 (no gaps)"
+                        onClick={() => onChange((p) => setBaseMagnetic(p, !isMagnetic(p)))}
+                        className={cn(
+                          "flex shrink-0 items-center justify-center rounded border",
+                          tight ? "h-4 w-4" : "h-5 w-5",
+                          magnetic ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                        )}
+                      >
+                        <Magnet className="h-3 w-3" />
+                      </button>
+                    )}
+                    {!isBase && project.tracks[i]?.clips.length === 0 && (
+                      <button
+                        type="button"
+                        title={`Remove ${label}`}
+                        onClick={() => onChange((p) => removeTrack(p, track.id))}
+                        className={cn("flex shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground", tight ? "h-4 w-4" : "h-5 w-5")}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span className="sr-only">Remove {label}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div
                   ref={(el) => {
@@ -599,7 +626,7 @@ export function Timeline({
                       </div>
                     )
                   })}
-                  {target?.track === i && ghost(target.start)}
+                  {target?.track === i && (isBase && magnetic ? insertLine(target.start) : ghost(target.start))}
                 </div>
               </div>
             )
