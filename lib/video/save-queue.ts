@@ -60,7 +60,12 @@ export function createSaveQueue(
   return {
     update(p: Project) {
       latest = p
-      if (same(p, attempted)) return cancel()
+      if (same(p, attempted)) {
+        cancel()
+        // Back to what's stored with nothing in flight: a "saving" shown for the change undone is over.
+        if (inflight === 0 && same(attempted, confirmed)) onState("saved")
+        return
+      }
       if (timer) clearTimeout(timer)
       timer = setTimeout(start, delay)
       maxTimer ??= setTimeout(start, maxWait)

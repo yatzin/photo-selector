@@ -99,6 +99,24 @@ describe("createSaveQueue", () => {
     expect(queue.isDirty()).toBe(false)
   })
 
+  it("says saved after an undo back to a stored state that was saved while a newer change waited", async () => {
+    let release: (ok: boolean) => void = () => {}
+    const states: SaveState[] = []
+    const save = vi.fn((p: unknown) => (p === v1 ? new Promise<boolean>((r) => (release = r)) : Promise.resolve(true)))
+    const queue = createSaveQueue(save, v0, (s) => states.push(s))
+    queue.update(v1)
+    await vi.advanceTimersByTimeAsync(1500)
+    queue.update(v2)
+    release(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(states.at(-1)).toBe("saving")
+    queue.update(v1)
+    expect(states.at(-1)).toBe("saved")
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(queue.isDirty()).toBe(false)
+  })
+
   it("doesn't save the project as loaded", async () => {
     const { queue, save } = setup()
     queue.update(v0)
