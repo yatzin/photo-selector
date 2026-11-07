@@ -5,15 +5,18 @@ import { Film, Image as ImageIcon, Magnet, Plus, Volume2, VolumeX, X } from "luc
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, leftTrimDraft, MAX_TRACKS, moveClip, removeTrack,
-  resolveStart, setBaseMagnetic, setClipMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip, removeClip,
+  removeTrack, resolveStart, setBaseMagnetic, setClipMuted, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
+import { setClipTiming } from "@/lib/video/clip-timing"
 import { newId } from "@/lib/video/ids"
 import {
   autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
+import { ClipMenu, type ClipMenuItem } from "./clip-menu"
 import { ClipWaveform } from "./clip-waveform"
+import { EditLengthDialog } from "./edit-length-dialog"
 import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and stacked tracks (layers), the top layer at
@@ -34,7 +37,9 @@ import { Thumb } from "./thumb"
 // The mouse wheel zooms the rows over the layer numbers, zooms time over the
 // ruler (or with Ctrl/Cmd over the clips) and scrolls sideways over the clips
 // (Shift: up and down). A clip with sound has its own mute button and, when
-// waveforms are on, its waveform over the thumbnail.
+// waveforms are on, its waveform over the thumbnail. Right-clicking a clip
+// opens its menu (split at the playhead, delete, mute, and for an image Edit
+// length..., a dialog for its start and length).
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -128,6 +133,10 @@ export function Timeline({
   const wheelRowZoom = useRef<number | null>(null)
   // Alt held during a pointer drag (snapping off), kept up to date by follow.
   const altHeld = useRef(false)
+  // The right-click menu: the clip it's for and where the pointer was (viewport px).
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // The clip whose Edit length dialog is open.
+  const [lengthFor, setLengthFor] = useState<string | null>(null)
 
   const row = rowHeight(project.tracks.length, rowZoom)
   const tight = row < TIGHT_ROW
@@ -585,6 +594,66 @@ export function Timeline({
     }
   }
 
+  const clipEl = (id: string) => scroller.current?.querySelector<HTMLElement>(`[data-clip-id="${CSS.escape(id)}"]`) ?? null
+
+  /** Right click on a clip (or the menu key on a focused one): select it and open its menu there. Not during a drag. */
+  function openMenu(e: React.MouseEvent, clip: Clip) {
+    e.preventDefault()
+    if (stopFollowing.current || drag || trim) return
+    // The menu key gives no pointer position: open at the clip's bottom left.
+    let { clientX: x, clientY: y } = e
+    if (x === 0 && y === 0) {
+      const r = e.currentTarget.getBoundingClientRect()
+      x = r.left
+      y = r.bottom
+    }
+    onSelect(clip.id)
+    setMenu({ id: clip.id, x, y })
+  }
+
+  function closeMenu() {
+    const id = menu?.id
+    setMenu(null)
+    if (id) clipEl(id)?.focus({ preventScroll: true })
+  }
+
+  /** What a clip's menu offers; each kind of clip adds its own items here. */
+  function menuItems(clip: Clip): ClipMenuItem[] {
+    const asset = project.assets[clip.asset]
+    const image = asset !== undefined && assetKind(asset) === "image"
+    const audible = asset !== undefined && !image && asset.hasAudio
+    const id = clip.id
+    // Split works only with the playhead inside the clip, at least MIN_CLIP from either end (as splitClip needs).
+    const local = playhead - clip.start
+    const items: ClipMenuItem[] = [
+      {
+        label: "Split at playhead",
+        hint: "S",
+        disabled: !(local >= MIN_CLIP && clipLength(clip) - local >= MIN_CLIP),
+        onSelect: () => {
+          const at = live.current.playhead
+          const splitId = newId()
+          onChange((p) => splitClip(p, id, at, splitId))
+        },
+      },
+      {
+        label: "Delete",
+        hint: "Delete",
+        onSelect: () => {
+          onChange((p) => removeClip(p, id))
+          onSelect(null)
+        },
+      },
+    ]
+    if (audible) items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
+    if (image) items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
+    return items
+  }
+
+  const menuClip = menu ? project.tracks.flatMap((t) => t.clips).find((c) => c.id === menu.id) : undefined
+  const lengthTrack = lengthFor ? project.tracks.findIndex((t) => t.clips.some((c) => c.id === lengthFor)) : -1
+  const lengthClip = lengthTrack >= 0 ? project.tracks[lengthTrack].clips.find((c) => c.id === lengthFor) : undefined
+
   // Clips and ghosts sit 8 px in from a row's top and bottom, 4 px on short rows.
   const inset = tight ? "top-1 bottom-1" : "top-2 bottom-2"
   const ghost = (start: number, shift = 0) => (
@@ -740,7 +809,10 @@ export function Timeline({
                         tabIndex={0}
                         aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds${muted ? ", muted" : ""}`}
                         aria-pressed={selectedId === clip.id}
+                        aria-haspopup="menu"
+                        data-clip-id={clip.id}
                         onPointerDown={(e) => startMove(e, clip, i, starts[k])}
+                        onContextMenu={(e) => openMenu(e, clip)}
                         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
                         className={cn(
                           "group absolute touch-none select-none overflow-hidden rounded-lg border outline-none",
@@ -843,6 +915,30 @@ export function Timeline({
         >
           {snapHint.off ? "Snapping off" : "Hold Alt to turn snapping off"}
         </div>
+      )}
+      {menu && menuClip && <ClipMenu x={menu.x} y={menu.y} label="Clip" items={menuItems(menuClip)} onClose={closeMenu} />}
+      {lengthClip && (
+        <EditLengthDialog
+          key={lengthClip.id}
+          project={project}
+          clip={lengthClip}
+          track={lengthTrack}
+          onApply={(timing, mode) => {
+            const id = lengthClip.id
+            // At most one clip can be split around the new range, so one fresh id covers it.
+            const pieceId = newId()
+            onChange((p) => {
+              const r = setClipTiming(p, id, timing, mode, () => pieceId)
+              return r.ok ? r.project : p
+            })
+          }}
+          onClose={() => {
+            const id = lengthClip.id
+            setLengthFor(null)
+            // The dialog unmounts at once, so focus goes back to the clip here, after it's gone.
+            setTimeout(() => clipEl(id)?.focus({ preventScroll: true }), 0)
+          }}
+        />
       )}
       {project.tracks.length >= 3 && (
         <div className="flex w-7 shrink-0 flex-col items-center gap-1 border-l border-border/60 bg-card py-2" title="Layer height (double-click to reset)">
