@@ -33,6 +33,8 @@ export const MAX_IMAGE = 600
 export const MAX_TRACKS = 4
 /** Most clips a project may hold, over all tracks. */
 export const MAX_CLIPS = 5000
+/** No clip may end later than this on the timeline (6 hours), on any track. */
+export const MAX_TIMELINE = 21600
 /** Overlay clips closer than this count as touching, not overlapping (float rounding). */
 const EPS = 1e-6
 
@@ -125,9 +127,11 @@ export function clipsAt(p: Project, timelineTime: number): { tracks: (ActiveClip
  * `length` fits between `clips` (an overlay track) without overlapping: it
  * slides past the neighbour it would overlap, and on past the next one if
  * there's no room. `ignore` is a clip id to leave out (the one being moved).
+ * A start that would end the clip past MAX_TIMELINE comes back to fit (the
+ * slide can still push it past; place refuses that).
  */
 export function resolveStart(clips: Clip[], length: number, desired: number, ignore?: string): number {
-  let t = Math.max(0, Number.isFinite(desired) ? desired : 0)
+  let t = Math.max(0, Math.min(Number.isFinite(desired) ? desired : 0, MAX_TIMELINE - length))
   const others = clips.filter((c) => c.id !== ignore).sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
   for (const c of others) {
     const s = c.start ?? 0
@@ -191,11 +195,13 @@ function place(p: Project, clip: Clip, trackIndex: number, at: { index?: number;
   const bare: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out }
   const clips = q.tracks[trackIndex].clips
   if (trackIndex === 0) {
+    if (trackEnd(q.tracks[0], true) + clipLength(clip) > MAX_TIMELINE + EPS) return p
     const next = [...clips]
     next.splice(Math.max(0, Math.min(at.index ?? clips.length, clips.length)), 0, bare)
     return withTrack(q, 0, next)
   }
   const start = resolveStart(clips, clipLength(clip), at.start ?? 0, clip.id)
+  if (start + clipLength(clip) > MAX_TIMELINE + EPS) return p
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), { ...bare, start }]))
 }
 
@@ -245,7 +251,7 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   if (track > 0) {
     const start = clip.start ?? 0
     const { prevEnd, nextStart } = room(clips, index)
-    const maxLength = nextStart - start
+    const maxLength = Math.min(nextStart, MAX_TIMELINE) - start
     if (edge === "in") {
       // How far the left edge moves: at most to the previous clip (or 0), and leaving at least MIN_CLIP.
       const lo = Math.max(prevEnd - start, image ? clipLength(clip) - MAX_IMAGE : -clip.in)
@@ -260,17 +266,19 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
     return replace({ ...clip, out })
   }
 
+  // The longest this clip may get before the base runs past MAX_TIMELINE.
+  const maxLength = MAX_TIMELINE - (trackEnd(p.tracks[0], true) - clipLength(clip))
   if (image) {
     // An image has no source to run out of: either edge just changes the length, and `in` stays 0.
     const length = edge === "out" ? seconds : clipLength(clip) - (seconds - clip.in)
-    const out = Math.max(MIN_CLIP, Math.min(MAX_IMAGE, length))
+    const out = Math.max(MIN_CLIP, Math.min(MAX_IMAGE, maxLength, length))
     return replace({ ...clip, in: 0, out })
   }
   const next = { ...clip }
   if (edge === "in") {
-    next.in = Math.max(0, Math.min(seconds, clip.out - MIN_CLIP))
+    next.in = Math.max(0, clip.out - maxLength, Math.min(seconds, clip.out - MIN_CLIP))
   } else {
-    next.out = Math.min(asset.duration, Math.max(seconds, clip.in + MIN_CLIP))
+    next.out = Math.min(asset.duration, clip.in + maxLength, Math.max(seconds, clip.in + MIN_CLIP))
   }
   // Only possible when the asset itself is shorter than MIN_CLIP (the epsilon absorbs float rounding).
   if (clipLength(next) < MIN_CLIP - 1e-9) return p
@@ -358,6 +366,7 @@ export function parseProject(json: unknown): Project | null {
     trackIds.add(raw.id)
     const isBase = t === 0
     let clips: Clip[] = []
+    let baseEnd = 0
     for (const c of raw.clips) {
       if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
       if (!Object.hasOwn(parsedAssets, c.asset)) return null
@@ -373,6 +382,9 @@ export function parseProject(json: unknown): Project | null {
         if (!isNum(c.start) || c.start < 0) return null
         clip.start = c.start
       }
+      // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
+      const end = isBase ? (baseEnd += clipLength(clip)) : (clip.start ?? 0) + clipLength(clip)
+      if (end > MAX_TIMELINE + EPS) return null
       clips.push(clip)
     }
     if (!isBase) {

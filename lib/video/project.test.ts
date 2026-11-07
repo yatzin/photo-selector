@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTrack, allClips, assetKind, clipAt, clipsAt, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_CLIPS, MAX_IMAGE, MAX_TRACKS, mergeClientProject, MIN_CLIP,
+  addClip, addTrack, allClips, assetKind, clipAt, clipsAt, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MAX_TRACKS, mergeClientProject, MIN_CLIP,
   moveClip, newProject, parseProject, removeClip, removeTrack, resolveStart, setTrackMuted, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "./project"
 
@@ -745,5 +745,53 @@ describe("tracks", () => {
     expect(setTrackMuted(p, "t2", false).tracks[1]).not.toHaveProperty("muted")
     expect(setTrackMuted(p, "t2", true)).toBe(p)
     expect(setTrackMuted(p, "nope", true)).toBe(p)
+  })
+})
+
+describe("the 6 hour timeline limit", () => {
+  const long = (): Project => ({
+    ...layered(),
+    assets: { ...layered().assets, h: { file: "h.mp4", duration: 4 * 3600, hasAudio: true } },
+  })
+
+  it("parseProject rejects an overlay clip that ends past 6 hours, and mergeClientProject with it", () => {
+    const p = layered()
+    const forged = { ...p, tracks: [p.tracks[0], { id: "t2", clips: [{ id: "o1", asset: "a", in: 0, out: 2, start: 1e5 }] }] }
+    expect(parseProject(forged)).toBeNull()
+    expect(mergeClientProject(forged, p)).toBeNull()
+    const edge = { ...p, tracks: [p.tracks[0], { id: "t2", clips: [{ id: "o1", asset: "a", in: 0, out: 2, start: MAX_TIMELINE - 2 }] }] }
+    expect(parseProject(edge)).not.toBeNull()
+  })
+
+  it("parseProject rejects a base track longer than 6 hours", () => {
+    const p = long()
+    const clips = [{ id: "b1", asset: "h", in: 0, out: 4 * 3600 }, { id: "b2", asset: "h", in: 0, out: 2 * 3600 + 1 }]
+    expect(parseProject({ ...p, tracks: [{ id: "t1", clips }] })).toBeNull()
+    expect(parseProject({ ...p, tracks: [{ id: "t1", clips: [clips[0], { ...clips[1], out: 2 * 3600 }] }] })).not.toBeNull()
+  })
+
+  it("resolveStart keeps a clip inside the limit", () => {
+    expect(resolveStart([], 10, 1e5)).toBe(MAX_TIMELINE - 10)
+  })
+
+  it("addClip and moveClip put an overlay clip no later than the limit allows, and refuse when it can't fit", () => {
+    expect(overlay(addClip(layered(), "a", 1, { start: 1e5 }, "n")).find((c) => c.id === "n")?.start).toBe(MAX_TIMELINE - 10)
+    expect(overlay(moveClip(layered(), "o1", 1, { start: 1e5 })).find((c) => c.id === "o1")?.start).toBe(MAX_TIMELINE - 2)
+    const p = { ...layered(), tracks: [layered().tracks[0], { id: "t2", clips: [{ id: "z", asset: "a", in: 0, out: 5, start: MAX_TIMELINE - 5 }] }] }
+    expect(addClip(p, "a", 1, { start: MAX_TIMELINE - 6 }, "n")).toBe(p)
+  })
+
+  it("addClip refuses a base clip that would take the base past the limit", () => {
+    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 4 * 3600 }] }] }
+    expect(addClip(p, "h", 0, {}, "n")).toBe(p)
+    expect(base(addClip(p, "a", 0, {}, "n"))).toHaveLength(2)
+  })
+
+  it("trimClip stops an edge at the limit", () => {
+    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 3 * 3600 }, { id: "b2", asset: "h", in: 3600, out: 4 * 3600 }] }] }
+    expect(base(trimClip(p, "b1", "out", 4 * 3600))[0].out).toBe(3 * 3600)
+    expect(base(trimClip(p, "b2", "in", 0))[1].in).toBe(3600)
+    const q = { ...long(), tracks: [p.tracks[0], { id: "t2", clips: [{ id: "o", asset: "h", in: 0, out: 10, start: MAX_TIMELINE - 20 }] }] }
+    expect(overlay(trimClip(q, "o", "out", 100))[0].out).toBe(20)
   })
 })
