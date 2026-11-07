@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Check, Download, Loader2, Redo2, Scissors, Trash2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, Check, Download, Loader2, Redo2, SquareSplitHorizontal, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -401,7 +401,7 @@ export function Editor({
                 <Redo2 className="h-4 w-4" />
               </Button>
               <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title="Split at playhead (S)" aria-label="Split at playhead">
-                <Scissors className="h-4 w-4" />
+                <SquareSplitHorizontal className="h-4 w-4" />
               </Button>
               <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
                 <Trash2 className="h-4 w-4" />
