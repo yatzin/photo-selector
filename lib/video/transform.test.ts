@@ -83,6 +83,27 @@ describe("clipRect", () => {
     expect(r.y).toBeCloseTo(0)
   })
 
+  it("keeps a text's content box at its own size (no fit), then scales, moves and crops it like a picture", () => {
+    const box = { w: 300, h: 200 }
+    expect(clipRect(box, W, H, IDENTITY)).toEqual({ x: W / 2 - 150, y: H / 2 - 100, w: 300, h: 200, visible: { x: W / 2 - 150, y: H / 2 - 100, w: 300, h: 200 } })
+    const r = clipRect(box, W, H, t({ scale: 2, x: 0.1, cropTop: 0.25, cropLeft: 0.5 }))
+    expect(r.w).toBeCloseTo(600)
+    expect(r.h).toBeCloseTo(400)
+    expect(r.x).toBeCloseTo(W / 2 + 0.1 * W - 300)
+    expect(r.visible).toMatchObject({ w: 300, h: 300 })
+    expect(r.visible.x).toBeCloseTo(r.x + 300)
+    expect(r.visible.y).toBeCloseTo(r.y + 100)
+    // The handles work on the box too: a corner drag about the opposite corner, a hit inside the turned box.
+    const scaled = scaleAbout(IDENTITY, box, W, H, "br", 2)
+    expect(clipRect(box, W, H, scaled).visible).toMatchObject({ x: W / 2 - 150, y: H / 2 - 100, w: 600, h: 400 })
+    expect(containsPoint(box, W, H, t({ rotation: 90 }), W / 2 + 90, H / 2)).toBe(true)
+    expect(containsPoint(box, W, H, t({ rotation: 90 }), W / 2 + 140, H / 2)).toBe(false)
+  })
+
+  it("treats an empty text box as the canvas's shape", () => {
+    expect(clipRect({ w: 0, h: 0 }, W, H, IDENTITY)).toMatchObject({ x: 0, y: 0, w: W, h: H })
+  })
+
   it("scales about the centre and moves by fractions of the canvas", () => {
     const r = clipRect(16 / 9, W, H, t({ scale: 0.5, x: 0.25, y: -0.1 }))
     expect(r.w).toBeCloseTo(960)

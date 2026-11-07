@@ -171,3 +171,28 @@ describe("setClipTiming: what stays", () => {
     expect(JSON.stringify(p)).toBe(before)
   })
 })
+
+describe("setClipTiming: text clips", () => {
+  const text = { content: "Hi", color: "#ffffff", orientation: "horizontal" as const }
+  const withText = (): Project => {
+    const p = sample()
+    return { ...p, tracks: [{ ...p.tracks[0], clips: [{ id: "x", asset: "", in: 0, out: 1, start: 0, text }, ...p.tracks[0].clips] }, p.tracks[1]] }
+  }
+
+  it("sets a text clip's length like an image's (no source limit) and pushes what it reaches", () => {
+    const p = ok(setClipTiming(withText(), "x", { start: 0, length: 3 }, "push", ids))
+    expect(spans(p)).toEqual([["x", 0, 0, 3], ["p", 3, 0, 4], ["v", 9, 1, 5], ["q", 15, 0, 2]])
+    expect(p.tracks[0].clips[0].text).toEqual(text)
+    expect(setClipTiming(withText(), "x", { start: 0, length: MAX_IMAGE + 1 }, "push", ids).ok).toBe(false)
+  })
+
+  it("cuts a text clip it overwrites like an image, splitting one with the text on both pieces", () => {
+    const p = withText()
+    const long = ok(setClipTiming(p, "x", { start: 0, length: 1.5 }, "push", ids))
+    const wide = { ...long, tracks: [{ ...long.tracks[0], clips: [{ ...long.tracks[0].clips[0], out: 2 }] }, long.tracks[1]] }
+    // Image o on layer 2 is unrelated; overwrite the middle of x with p moved onto it.
+    const r = ok(setClipTiming({ ...wide, tracks: [{ ...wide.tracks[0], clips: [...wide.tracks[0].clips, { id: "p", asset: "i", in: 0, out: 1, start: 4 }] }, wide.tracks[1]] }, "p", { start: 0.5, length: 1 }, "overwrite", () => "n"))
+    expect(spans(r)).toEqual([["x", 0, 0, 0.5], ["p", 0.5, 0, 1], ["n", 1.5, 0, 0.5]])
+    expect(r.tracks[0].clips[2].text).toEqual(text)
+  })
+})

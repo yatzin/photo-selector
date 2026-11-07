@@ -1,4 +1,4 @@
-import { assetKind, clipEnd, clipLength, isMagnetic, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, type Clip, type Project } from "./project"
+import { clipEnd, clipLength, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, type Clip, type Project } from "./project"
 
 /** What happens to other media on the clip's layer that the new range reaches. */
 export type TimingMode = "push" | "overwrite"
@@ -17,7 +17,7 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
 
 /**
  * Sets a clip's start and length (seconds on the timeline) as one edit of the
- * tracks, from the Edit length dialog. An image keeps in 0 and gets out =
+ * tracks, from the Edit length dialog. An image (or text) keeps in 0 and gets out =
  * length (MIN_CLIP to MAX_IMAGE); a video keeps its in and may not run past
  * its source. Only the clip's own layer changes.
  *
@@ -40,15 +40,16 @@ export function setClipTiming(p: Project, clipId: string, timing: { start: numbe
   if (track < 0) return fail("That clip is gone.")
   const clips = p.tracks[track].clips
   const clip = clips.find((c) => c.id === clipId)!
-  const asset = p.assets[clip.asset]
-  if (!asset) return fail("That clip's media is gone.")
-  const image = assetKind(asset) === "image"
+  const asset = isTextClip(clip) ? undefined : p.assets[clip.asset]
+  if (!asset && !isTextClip(clip)) return fail("That clip's media is gone.")
+  // A text clip times like an image.
+  const image = isStill(p, clip)
   const { start, length } = timing
   if (!Number.isFinite(start) || !Number.isFinite(length)) return fail("Enter numbers.")
   if (start < 0) return fail("Start can't be before 0.")
   if (length < MIN_CLIP - 1e-9) return fail(`Length must be at least ${MIN_CLIP} s.`)
   if (image && length > MAX_IMAGE) return fail(`An image can be at most ${MAX_IMAGE} s long.`)
-  if (!image && clip.in + length > asset.duration + EPS) return fail(`This video has only ${(asset.duration - clip.in).toFixed(2)} s left from its start.`)
+  if (!image && asset && clip.in + length > asset.duration + EPS) return fail(`This video has only ${(asset.duration - clip.in).toFixed(2)} s left from its start.`)
   const end = start + length
   if (end > MAX_TIMELINE + EPS) return fail("That would end past the timeline's 6 hour limit.")
   if (Math.abs(start - clip.start) < EPS && Math.abs(length - clipLength(clip)) < EPS) return { ok: true, project: p }
@@ -81,7 +82,8 @@ export function setClipTiming(p: Project, clipId: string, timing: { start: numbe
       kept.push(c)
       continue
     }
-    const cImage = assetKind(p.assets[c.asset] ?? asset) === "image"
+    // A clip whose media is gone is cut like this one.
+    const cImage = isTextClip(c) || p.assets[c.asset] ? isStill(p, c) : image
     const long = (piece: Clip) => clipLength(piece) >= MIN_CLIP - 1e-9
     // The part before the new range: the tail is cut (out moves back for both kinds).
     const left = c.start < start - EPS ? { ...c, out: c.out - (clipEnd(c) - start) } : null

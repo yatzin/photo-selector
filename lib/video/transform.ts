@@ -15,6 +15,13 @@
 // centre of the whole scaled picture, so cropping never moves the pivot),
 // 6. place the content centre at (W/2 + x*W, H/2 + y*H). clipRect gives the
 // unrotated rects; rotatedCorners turns the visible one on screen.
+//
+// A text clip has no picture to fit: its content box is a fixed size worked
+// out from its text (lib/video/text: textSize, a font a tenth of the canvas
+// height), passed as `{ w, h }` instead of an aspect. Step 1 then keeps that
+// size as it is (no fit), and every later step is the same. The preview draws
+// the text in that box and the export rasterises it at that box's size, so
+// the handles, hit-testing and the export all agree for text too.
 
 /**
  * `cropLeft` and `cropRight` are optional: absent means 0 (projects from before
@@ -36,6 +43,8 @@ export type Transform = {
   flipV?: boolean
 }
 export type Rect = { x: number; y: number; w: number; h: number }
+/** What clipRect places: a picture's aspect (width over height), fit inside the canvas, or a text's content box in canvas px, kept as it is. */
+export type Content = number | { w: number; h: number }
 export type Corner = "tl" | "tr" | "bl" | "br"
 /** Canvas lines (px) a snapped edge or centre sits on: vertical lines at `x`, horizontal ones at `y`. */
 export type Guides = { x: number[]; y: number[] }
@@ -125,14 +134,16 @@ export function normalizeTransform(t: Transform): Transform {
 /**
  * The full scaled picture's rect on a `canvasW` x `canvasH` canvas (px) and
  * `visible`, the strip left after the crop. `contentAspect` is the picture's
- * width over height; an unknown one (0, NaN) counts as the canvas's.
+ * width over height; an unknown one (0, NaN) counts as the canvas's. A
+ * `{ w, h }` box (a text's) is used at that size instead of being fit.
  */
-export function clipRect(contentAspect: number, canvasW: number, canvasH: number, t: Transform = IDENTITY): Rect & { visible: Rect } {
+export function clipRect(contentAspect: Content, canvasW: number, canvasH: number, t: Transform = IDENTITY): Rect & { visible: Rect } {
   const canvasAspect = canvasW / canvasH
-  const aspect = contentAspect > 0 && Number.isFinite(contentAspect) ? contentAspect : canvasAspect
-  let cw = canvasW
-  let ch = canvasH
-  if (Math.abs(aspect - canvasAspect) > EPS * canvasAspect) {
+  const box = typeof contentAspect === "object" && contentAspect.w > 0 && contentAspect.h > 0 ? contentAspect : null
+  const aspect = typeof contentAspect === "number" && contentAspect > 0 && Number.isFinite(contentAspect) ? contentAspect : canvasAspect
+  let cw = box ? box.w : canvasW
+  let ch = box ? box.h : canvasH
+  if (!box && Math.abs(aspect - canvasAspect) > EPS * canvasAspect) {
     if (aspect > canvasAspect) ch = canvasW / aspect
     else cw = canvasH * aspect
   }
@@ -174,7 +185,7 @@ export function rotatedCorners(rect: Rect, centre: Point, deg: number): [Point, 
 }
 
 /** The visible strip's bounding box on the canvas once turned (the strip itself when not rotated). */
-export function rotatedBounds(contentAspect: number, canvasW: number, canvasH: number, t: Transform): Rect {
+export function rotatedBounds(contentAspect: Content, canvasW: number, canvasH: number, t: Transform): Rect {
   const v = clipRect(contentAspect, canvasW, canvasH, t).visible
   if (rotationOf(t) === 0) return v
   const pts = rotatedCorners(v, contentCentre(canvasW, canvasH, t), rotationOf(t))
@@ -186,7 +197,7 @@ export function rotatedBounds(contentAspect: number, canvasW: number, canvasH: n
 }
 
 /** True when canvas point `x`, `y` is on the visible strip as it shows (turned with the picture). */
-export function containsPoint(contentAspect: number, canvasW: number, canvasH: number, t: Transform, x: number, y: number): boolean {
+export function containsPoint(contentAspect: Content, canvasW: number, canvasH: number, t: Transform, x: number, y: number): boolean {
   const v = clipRect(contentAspect, canvasW, canvasH, t).visible
   const p = rotatePoint({ x, y }, contentCentre(canvasW, canvasH, t), -rotationOf(t))
   return p.x >= v.x && p.x <= v.x + v.w && p.y >= v.y && p.y <= v.y + v.h
@@ -229,7 +240,7 @@ function cornerOf(r: Rect, c: Corner): { x: number; y: number } {
  * opposite `corner`, which stays where it was on screen (turned with the
  * picture when it's rotated).
  */
-export function scaleAbout(t0: Transform, contentAspect: number, canvasW: number, canvasH: number, corner: Corner, k: number): Transform {
+export function scaleAbout(t0: Transform, contentAspect: Content, canvasW: number, canvasH: number, corner: Corner, k: number): Transform {
   const { x: cx, y: cy } = contentCentre(canvasW, canvasH, t0)
   // The anchor where it shows: scaling about that point keeps it there whatever the rotation.
   const anchor = rotatePoint(cornerOf(clipRect(contentAspect, canvasW, canvasH, t0).visible, OPPOSITE[corner]), { x: cx, y: cy }, rotationOf(t0))
@@ -249,7 +260,7 @@ export function scaleAbout(t0: Transform, contentAspect: number, canvasW: number
  * rotated picture the drag is taken in the picture's own axes.
  */
 export function dragCorner(
-  t0: Transform, corner: Corner, contentAspect: number, canvasW: number, canvasH: number, sdx: number, sdy: number,
+  t0: Transform, corner: Corner, contentAspect: Content, canvasW: number, canvasH: number, sdx: number, sdy: number,
   options: { anchor: "opposite" } = { anchor: "opposite" }
 ): Transform {
   void options
@@ -271,7 +282,7 @@ export type Edge = "top" | "bottom" | "left" | "right"
  * left and right (+ is down or right). Inward crops, outward un-crops down to
  * 0; only that edge's crop changes.
  */
-export function dragEdge(t0: Transform, edge: Edge, contentAspect: number, canvasW: number, canvasH: number, d: number): Transform {
+export function dragEdge(t0: Transform, edge: Edge, contentAspect: Content, canvasW: number, canvasH: number, d: number): Transform {
   const r = clipRect(contentAspect, canvasW, canvasH, t0)
   if (edge === "left" || edge === "right") {
     if (!(r.w > 0)) return t0
@@ -342,7 +353,7 @@ function edgeOf(v: Rect, edge: Edge): number {
  * it off the line).
  */
 export function snapEdge(
-  t0: Transform, edge: Edge, contentAspect: number, canvasW: number, canvasH: number, d: number, thresholdPx: number
+  t0: Transform, edge: Edge, contentAspect: Content, canvasW: number, canvasH: number, d: number, thresholdPx: number
 ): { t: Transform; guides: Guides } {
   const vertical = edge === "left" || edge === "right"
   const lines = vertical ? [0, canvasW / 2, canvasW] : [0, canvasH / 2, canvasH]
@@ -360,7 +371,7 @@ export function snapEdge(
  * the opposite corner; and the lines the corner sits on.
  */
 export function snapCorner(
-  t0: Transform, corner: Corner, contentAspect: number, canvasW: number, canvasH: number, t1: Transform, thresholdPx: number
+  t0: Transform, corner: Corner, contentAspect: Content, canvasW: number, canvasH: number, t1: Transform, thresholdPx: number
 ): { t: Transform; guides: Guides } {
   const v0 = clipRect(contentAspect, canvasW, canvasH, t0).visible
   const anchor = cornerOf(v0, OPPOSITE[corner])

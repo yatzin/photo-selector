@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
-  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setTransform,
+  addClip, addTextClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipMuted, setClipText, setTransform,
   splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
 } from "./project"
 import { commit, createHistory, undo } from "./history"
@@ -1405,5 +1405,109 @@ describe("leftTrimDraft (a snapped base's left edge, packed on release)", () => 
     const p = setBaseMagnetic(snapped(), false)
     expect(leftTrimDraft(p, "m2", 5).draft).toEqual(trimClip(p, "m2", "in", 5))
     expect(leftTrimDraft(snapped(), "o1", 1).draft).toEqual(trimClip(snapped(), "o1", "in", 1))
+  })
+})
+
+describe("text clips", () => {
+  const text = { content: "Hello", color: "#ffffff", orientation: "horizontal" as const }
+  const textClip = (over: Partial<Clip> = {}): Clip => ({ id: "x", asset: "", in: 0, out: 5, start: 0, text, ...over })
+  const withText = (clips: Clip[], magnetic = false): Project => ({
+    ...newProject("t"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } },
+    tracks: [{ id: "t1", ...(magnetic ? { magnetic: true } : {}), clips }],
+  })
+
+  it("adds a text clip DEFAULT_IMAGE long at the start, slid clear like an image, a new layer one past the top", () => {
+    const p = withText([{ id: "v", asset: "a", in: 0, out: 4, start: 2 }])
+    const added = addTextClip(p, text, 0, { start: 3 }, "x")
+    expect(added.tracks[0].clips[1]).toEqual({ id: "x", asset: "", in: 0, out: DEFAULT_IMAGE, start: 6, text })
+    const layered = addTextClip(p, { ...text, color: "#ABCDEF" }, 1, { start: 3 }, "x")
+    expect(layered.tracks[1].clips).toEqual([{ id: "x", asset: "", in: 0, out: DEFAULT_IMAGE, start: 3, text: { ...text, color: "#abcdef" } }])
+  })
+
+  it("appends on a snapped base at the slot the time picks", () => {
+    const p = withText([{ id: "v", asset: "a", in: 0, out: 4, start: 0 }], true)
+    expect(addTextClip(p, text, 0, { start: 99 }, "x").tracks[0].clips[1]).toMatchObject({ id: "x", start: 4 })
+  })
+
+  it("refuses an invalid text or a taken id", () => {
+    const p = withText([textClip()])
+    expect(addTextClip(p, { ...text, content: " " }, 0, {}, "y")).toBe(p)
+    expect(addTextClip(p, text, 0, {}, "x")).toBe(p)
+  })
+
+  it("sets the text (one edit), refusing invalid text, a media clip and no change", () => {
+    const p = withText([textClip(), { id: "v", asset: "a", in: 0, out: 4, start: 6 }])
+    const vertical = setClipText(p, "x", { ...text, orientation: "vertical" })
+    expect(vertical.tracks[0].clips[0].text).toEqual({ ...text, orientation: "vertical" })
+    expect(setClipText(p, "x", { ...text })).toBe(p)
+    expect(setClipText(p, "x", { ...text, content: "" })).toBe(p)
+    expect(setClipText(p, "v", text)).toBe(p)
+    expect(setClipText(p, "nope", text)).toBe(p)
+  })
+
+  it("trims and stretches like an image (no source limit), and never mutes", () => {
+    const p = withText([textClip({ start: 2 })])
+    expect(trimClip(p, "x", "out", 20).tracks[0].clips[0]).toMatchObject({ in: 0, out: 20, start: 2 })
+    expect(trimClip(p, "x", "out", MAX_IMAGE + 50).tracks[0].clips[0].out).toBe(MAX_IMAGE)
+    expect(trimClip(p, "x", "in", -1).tracks[0].clips[0]).toMatchObject({ in: 0, out: 6, start: 1 })
+    expect(trimClip(p, "x", "in", 1).tracks[0].clips[0]).toMatchObject({ in: 0, out: 4, start: 3 })
+    expect(setClipMuted(p, "x", true)).toBe(p)
+    const snapped = withText([textClip()], true)
+    expect(leftTrimDraft(snapped, "x", -1).draft.tracks[0].clips[0]).toMatchObject({ in: 0, out: 5, start: 0 })
+    expect(leftTrimDraft(snapped, "x", 1).draft.tracks[0].clips[0]).toMatchObject({ in: 0, out: 4, start: 1 })
+  })
+
+  it("splits into two text clips with the text and transform, and moves across layers keeping them", () => {
+    const transform: Transform = { ...IDENTITY, scale: 2, rotation: 30 }
+    const p = withText([textClip({ transform })])
+    const split = splitClip(p, "x", 2, "y")
+    expect(split.tracks[0].clips).toEqual([
+      { id: "x", asset: "", in: 0, out: 2, start: 0, text, transform },
+      { id: "y", asset: "", in: 0, out: 3, start: 2, transform, text },
+    ])
+    const moved = moveClip(addTrack(p), "x", 1, { start: 4 })
+    expect(moved.tracks[1].clips).toEqual([{ id: "x", asset: "", in: 0, out: 5, start: 4, transform, text }])
+    expect(removeClip(p, "x").tracks[0].clips).toEqual([])
+  })
+
+  it("survives removing an asset", () => {
+    const p = withText([textClip(), { id: "v", asset: "a", in: 0, out: 4, start: 6 }])
+    expect(removeAsset(p, "a").project.tracks[0].clips).toEqual([textClip()])
+  })
+
+  it("is a still: an image's or a text clip, not a video's", () => {
+    const p = { ...withText([]), assets: { a: { file: "a.mp4", duration: 10, hasAudio: true }, i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" as const } } }
+    expect(isStill(p, textClip())).toBe(true)
+    expect(isStill(p, { id: "i", asset: "i", in: 0, out: 1, start: 0 })).toBe(true)
+    expect(isStill(p, { id: "v", asset: "a", in: 0, out: 1, start: 0 })).toBe(false)
+    expect(isTextClip(textClip())).toBe(true)
+  })
+
+  it("parses a text clip (asset \"\", valid text, image timing), dropping a mute and normalising the text", () => {
+    const json = { ...withText([]), tracks: [{ id: "t1", clips: [{ ...textClip(), muted: true, text: { ...text, color: "#FFFFFF", extra: 1 } }] }] }
+    expect(parseProject(json)?.tracks[0].clips).toEqual([textClip()])
+  })
+
+  it("refuses a text clip with an asset, invalid text or past MAX_IMAGE, and a media clip naming no asset", () => {
+    const bad = (c: Record<string, unknown>) => parseProject({ ...withText([]), tracks: [{ id: "t1", clips: [c] }] })
+    expect(bad({ ...textClip(), asset: "a" })).toBeNull()
+    expect(bad({ ...textClip(), text: { ...text, content: "" } })).toBeNull()
+    expect(bad({ ...textClip(), text: { ...text, orientation: "up" } })).toBeNull()
+    expect(bad({ ...textClip(), text: "Hello" })).toBeNull()
+    expect(bad({ ...textClip(), out: MAX_IMAGE + 1 })).toBeNull()
+    expect(bad({ ...textClip(), in: 1 })).toBeNull()
+    expect(bad({ id: "v", asset: "", in: 0, out: 1, start: 0 })).toBeNull()
+  })
+
+  it("reads an old project with no text clips unchanged", () => {
+    const old = sample()
+    expect(parseProject(JSON.parse(JSON.stringify(old)))).toEqual(old)
+  })
+
+  it("merges a client's text clips (they need no stored asset)", () => {
+    const stored = withText([])
+    const merged = mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: [textClip()] }] }, stored)
+    expect(merged?.tracks[0].clips).toEqual([textClip()])
   })
 })

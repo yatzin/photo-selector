@@ -1,3 +1,4 @@
+import { normalizeText, sameText, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 
 /**
@@ -10,9 +11,11 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
  * `start` is where the clip begins on the timeline (seconds), on every track.
  * `transform` moves, scales and crops the picture on the canvas
  * (lib/video/transform); absent means as fit. `muted` silences the clip's
- * sound in the preview and the export (absent when it isn't).
+ * sound in the preview and the export (absent when it isn't). A text clip
+ * (lib/video/text) has `text` and no media: its `asset` is "", and it times
+ * like an image (in 0, out its length, up to MAX_IMAGE); it has no sound.
  */
-export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean }
+export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText }
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
  * lower ones. On every track clips sit at their own `start`, sorted by it,
@@ -55,6 +58,16 @@ const EPS = 1e-6
 
 export function assetKind(a: Asset): "image" | "video" {
   return a.kind === "image" ? "image" : "video"
+}
+
+/** True for a text clip (no media). */
+export const isTextClip = (c: Clip): c is Clip & { text: ClipText } => c.text !== undefined
+
+/** True for a clip that shows one still picture for its length: a text clip, or an image's (its in is 0 and it stretches freely). */
+export function isStill(p: Project, c: Clip): boolean {
+  if (isTextClip(c)) return true
+  const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
+  return asset !== undefined && assetKind(asset) === "image"
 }
 
 /** Every asset copied from this Inbox path ("<folder>/<name>"), oldest first; a deleted copy can leave more than one. */
@@ -258,7 +271,7 @@ export function removeTrack(p: Project, id: string): Project {
 /** Mutes or unmutes one clip's sound (preview and export); unmuted stores no field. The same project when nothing changes. */
 export function setClipMuted(p: Project, clipId: string, muted: boolean): Project {
   const at = find(p, clipId)
-  if (!at || Boolean(at.clip.muted) === muted) return p
+  if (!at || isTextClip(at.clip) || Boolean(at.clip.muted) === muted) return p
   const clip: Clip = { ...at.clip, muted: true }
   if (!muted) delete clip.muted
   return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? clip : c)))
@@ -278,6 +291,7 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   const placed: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out, start: at }
   if (clip.transform) placed.transform = clip.transform
   if (clip.muted) placed.muted = true
+  if (clip.text) placed.text = clip.text
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -293,6 +307,28 @@ export function addClip(p: Project, assetId: string, trackIndex: number, at: { s
   const clip: Clip = { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, start: 0 }
   if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
   return place(p, clip, trackIndex, at.start ?? 0)
+}
+
+/**
+ * A new text clip (DEFAULT_IMAGE long, `text` as given, the canvas centre) on
+ * any track at `at.start`, placed as addClip places an image: slid clear of
+ * overlaps, a new layer one past the top, inserted at its slot on a snapped
+ * base. The same project when the text isn't valid or the id is taken.
+ */
+export function addTextClip(p: Project, text: ClipText, trackIndex: number, at: { start?: number }, id: string): Project {
+  const t = normalizeText(text)
+  if (!t || hasClip(p, id)) return p
+  const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: t }
+  if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
+  return place(p, clip, trackIndex, at.start ?? 0)
+}
+
+/** Sets a text clip's text (content, colour, orientation); the same project when it isn't a text clip, the text isn't valid or nothing changes. */
+export function setClipText(p: Project, clipId: string, text: ClipText): Project {
+  const at = find(p, clipId)
+  const t = normalizeText(text)
+  if (!at || !t || !isTextClip(at.clip) || sameText(at.clip.text, t)) return p
+  return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? { ...c, text: t } : c)))
 }
 
 /**
@@ -326,12 +362,13 @@ function room(clips: Clip[], index: number): { prevEnd: number; nextStart: numbe
  */
 export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: number): Project {
   const at = find(p, id)
-  const asset = at && p.assets[at.clip.asset]
-  if (!at || !asset || Number.isNaN(seconds)) return p
+  const asset = at && (isTextClip(at.clip) ? undefined : p.assets[at.clip.asset])
+  if (!at || (!asset && !isTextClip(at.clip)) || Number.isNaN(seconds)) return p
   const { clip, track, index } = at
   const clips = p.tracks[track].clips
   const replace = (next: Clip) => settle(p, withTrack(p, track, clips.map((c) => (c.id === id ? next : c))))
-  const image = assetKind(asset) === "image"
+  // A text clip trims like an image.
+  const image = !asset || assetKind(asset) === "image"
   const start = clip.start
   const room0 = room(clips, index)
   const magnetic = track === 0 && isMagnetic(p)
@@ -355,7 +392,7 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
     const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
     return replace({ ...clip, in: clip.in + delta, start: magnetic ? start : start + delta })
   }
-  if (image) return replace({ ...clip, in: 0, out: Math.max(MIN_CLIP, Math.min(MAX_IMAGE, maxLength, seconds)) })
+  if (image || !asset) return replace({ ...clip, in: 0, out: Math.max(MIN_CLIP, Math.min(MAX_IMAGE, maxLength, seconds)) })
   const out = Math.min(asset.duration, clip.in + maxLength, Math.max(seconds, clip.in + MIN_CLIP))
   // Only possible when the asset itself is shorter than MIN_CLIP (the epsilon absorbs float rounding).
   if (out - clip.in < MIN_CLIP - 1e-9) return p
@@ -373,17 +410,17 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
  */
 export function leftTrimDraft(p: Project, id: string, seconds: number): { draft: Project; seconds: number } {
   const at = find(p, id)
-  const asset = at && p.assets[at.clip.asset]
-  if (!at || !asset || at.track !== 0 || !isMagnetic(p) || Number.isNaN(seconds)) return { draft: trimClip(p, id, "in", seconds), seconds }
+  const still = at !== null && isStill(p, at.clip)
+  if (!at || (!still && !p.assets[at.clip.asset]) || at.track !== 0 || !isMagnetic(p) || Number.isNaN(seconds)) return { draft: trimClip(p, id, "in", seconds), seconds }
   const { clip } = at
   // The most the committed trim may grow the clip: the base's end stays inside MAX_TIMELINE.
   const growth = MAX_TIMELINE - trackEnd(p.tracks[0])
   const length = clipLength(clip)
-  const lo = -Math.min(clip.start, growth, assetKind(asset) === "image" ? MAX_IMAGE - length : clip.in)
+  const lo = -Math.min(clip.start, growth, still ? MAX_IMAGE - length : clip.in)
   const hi = length - MIN_CLIP
   if (hi < -1e-9) return { draft: p, seconds: clip.in }
   const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
-  const next: Clip = assetKind(asset) === "image" ? { ...clip, out: length - delta, start: clip.start + delta } : { ...clip, in: clip.in + delta, start: clip.start + delta }
+  const next: Clip = still ? { ...clip, out: length - delta, start: clip.start + delta } : { ...clip, in: clip.in + delta, start: clip.start + delta }
   return { draft: withTrack(p, 0, p.tracks[0].clips.map((c) => (c.id === id ? next : c))), seconds: clip.in + delta }
 }
 
@@ -396,10 +433,11 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   const local = timelineTime - clip.start
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
-  const asset = p.assets[clip.asset]
-  // Both halves keep the picture where it was, and the mute.
-  const second = { start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}) }
-  if (asset && assetKind(asset) === "image") {
+  // Both halves keep the picture where it was, the mute and the text.
+  const second = {
+    start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}), ...(clip.text ? { text: clip.text } : {}),
+  }
+  if (isStill(p, clip)) {
     next.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
   } else {
     const cut = clip.in + local
@@ -442,7 +480,7 @@ export function removeAsset(p: Project, assetId: string): { project: Project; re
   if (!Object.hasOwn(p.assets, assetId)) return { project: p, removedClips: 0 }
   let removedClips = 0
   const tracks = p.tracks.map((t) => {
-    const clips = t.clips.filter((c) => c.asset !== assetId)
+    const clips = t.clips.filter((c) => isTextClip(c) || c.asset !== assetId)
     removedClips += t.clips.length - clips.length
     return clips.length === t.clips.length ? t : { ...t, clips }
   })
@@ -480,7 +518,9 @@ function isInt(v: unknown, max: number): v is number {
  * `magnetic` must be a boolean; it's kept on the base only, whose clips are
  * then packed end to end (gaps and overlaps there aren't refused). A clip's
  * `muted` must be a boolean (kept only when true); an older file's track
- * `muted: true` is read as `muted: true` on every clip of that track.
+ * `muted: true` is read as `muted: true` on every clip of that track. A text
+ * clip has asset "" and a valid `text` (lib/video/text), times like an image
+ * and is never muted.
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -516,11 +556,17 @@ export function parseProject(json: unknown): Project | null {
     let baseEnd = 0
     for (const c of raw.clips) {
       if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
-      if (!Object.hasOwn(parsedAssets, c.asset)) return null
+      // A text clip names no asset ("") and carries a valid text; any other clip names one of the project's assets.
+      let text: ClipText | null = null
+      if (c.text !== undefined) {
+        text = normalizeText(c.text)
+        if (!text || c.asset !== "") return null
+      } else if (!Object.hasOwn(parsedAssets, c.asset)) return null
       if (ids.has(c.id)) return null
       if (c.muted !== undefined && typeof c.muted !== "boolean") return null
-      const asset = parsedAssets[c.asset]
-      if (assetKind(asset) === "image") {
+      const asset = text ? null : parsedAssets[c.asset]
+      // A text clip times like an image.
+      if (!asset || assetKind(asset) === "image") {
         // The epsilon absorbs float rounding from a split.
         if (c.in !== 0 || c.out < MIN_CLIP - 1e-9 || c.out > MAX_IMAGE) return null
       } else if (c.in < 0 || c.out <= c.in || c.out > asset.duration) return null
@@ -546,7 +592,9 @@ export function parseProject(json: unknown): Project | null {
           }
         }
       }
-      if (c.muted === true || raw.muted === true) clip.muted = true
+      if (text) clip.text = text
+      // A text clip has no sound to mute.
+      else if (c.muted === true || raw.muted === true) clip.muted = true
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null
       clips.push(clip)
@@ -581,7 +629,8 @@ export function mergeClientProject(client: unknown, stored: Project): Project | 
   if (!parsed) return null
   const clips = allClips(parsed)
   if (clips.length > MAX_CLIPS) return null
-  if (!clips.every((c) => Object.hasOwn(stored.assets, c.asset))) return null
+  // A text clip uses no asset.
+  if (!clips.every((c) => isTextClip(c) || Object.hasOwn(stored.assets, c.asset))) return null
   const { name, width, height, fps, assets } = stored
   return parseProject({ ...parsed, name, width, height, fps, assets })
 }
