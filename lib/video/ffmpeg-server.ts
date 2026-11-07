@@ -45,12 +45,14 @@ export function overlayPosition(t: Transform): { x: string; y: string } {
 
 /**
  * The graph when any clip is moved, scaled or cropped: every clip, base track
- * included, is fit inside the canvas, scaled (to even sizes), cropped top and
- * bottom, and overlaid on a black canvas the timeline's length at its place,
- * track by track (lowest first) and enabled for its own span. Audio as in the
- * layered graph: each heard clip's sound delayed to its start, over silence.
+ * included, is overlaid on a black canvas the timeline's length, track by
+ * track (lowest first) and enabled for its own span. A transformed clip is fit
+ * inside the canvas, scaled (to even sizes), cropped top and bottom and placed
+ * as clipRect says; an untransformed one fills the canvas letterboxed in black
+ * as it always has, so it hides what's under it in both graphs. Audio as in
+ * the layered graph: each heard clip's sound delayed to its start, over silence.
  */
-function transformedGraph(p: Project, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
+function transformedGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
   const { width: W, height: H, fps } = p
   const inputs: string[][] = []
   const parts: string[] = []
@@ -67,12 +69,15 @@ function transformedGraph(p: Project, fileFor: (c: Clip) => string, isImage: (c:
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
     const keep = 1 - t.cropTop - t.cropBottom
-    const place = [
-      `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
-      `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
-      ...(t.cropTop > 0 || t.cropBottom > 0 ? [`crop=iw:round(ih*${frac(keep)}/2)*2:0:round(ih*${frac(t.cropTop)}/2)*2`] : []),
-      "setsar=1",
-    ].join(",")
+    // The overlay position below puts a full-canvas frame at 0, 0.
+    const place = isIdentity(c.transform)
+      ? frame
+      : [
+          `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
+          `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
+          ...(t.cropTop > 0 || t.cropBottom > 0 ? [`crop=iw:round(ih*${frac(keep)}/2)*2:0:round(ih*${frac(t.cropTop)}/2)*2`] : []),
+          "setsar=1",
+        ].join(",")
     const shift = `setpts=PTS+${num(start)}/TB`
     if (isImage(c)) {
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
@@ -125,7 +130,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
     const asset = p.assets[c.asset]
     return asset !== undefined && assetKind(asset) === "image"
   }
-  if (allClips(p).some((c) => !isIdentity(c.transform))) return transformedGraph(p, fileFor, isImage)
+  if (allClips(p).some((c) => !isIdentity(c.transform))) return transformedGraph(p, frame, fileFor, isImage)
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or the track is muted).
   const [baseTrack, ...overlays] = p.tracks

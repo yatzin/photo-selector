@@ -178,6 +178,7 @@ describe("buildExportArgs with layers", () => {
 describe("buildExportArgs with transforms", () => {
   const half: Transform = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
   const fit = "scale=1920:1080:force_original_aspect_ratio=decrease,setsar=1,fps=30"
+  const frame = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30"
   function project(tracks: Project["tracks"]): Project {
     return {
       ...newProject("T"),
@@ -193,11 +194,10 @@ describe("buildExportArgs with transforms", () => {
     expect(g).toContain("color=c=black:s=1920x1080:r=30:d=5,format=yuv420p[bg]")
     expect(g).toContain(`[0:v]trim=1:4,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2,crop=iw:round(ih*0.7/2)*2:0:round(ih*0.1/2)*2,setsar=1,setpts=PTS+0/TB[v0]`)
     expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0.25*W:y=(H-h/0.7)/2-0.1*H+0.1*h/0.7:eval=init:enable='between(t,0,3)':eof_action=pass[l1]")
-    // The untransformed base clip after it is placed as fit, from its own start.
-    expect(g).toContain(`[1:v]trim=0:2,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*1/2)*2:trunc(ih*1/2)*2,setsar=1,setpts=PTS+3/TB[v1]`)
+    // The untransformed base clip after it fills the canvas letterboxed, as always, from its own start.
+    expect(g).toContain(`[1:v]trim=0:2,setpts=PTS-STARTPTS,${frame},setpts=PTS+3/TB[v1]`)
     expect(g).toContain("[l1][v1]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,3,5)':eof_action=pass[v]")
     expect(g).not.toContain("concat")
-    expect(g).not.toContain("pad=")
     // Audio: the clip's own, delayed to its start, over silence; the silent asset adds none.
     expect(g).toContain("[0:a]atrim=1:4,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=0S:all=1[a0]")
     expect(g).not.toContain("[1:a]")
@@ -215,6 +215,7 @@ describe("buildExportArgs with transforms", () => {
     const g = graph(args)
     expect(args.slice(args.indexOf("/x/i.webp") - 7, args.indexOf("/x/i.webp") + 1)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2", "-i", "/x/i.webp"])
     expect(g).toContain("color=c=black:s=1920x1080:r=30:d=4,format=yuv420p[bg]")
+    expect(g).toContain(`[0:v]trim=0:4,setpts=PTS-STARTPTS,${frame},setpts=PTS+0/TB[v0]`)
     expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,0,4)':eof_action=pass[l1]")
     expect(g).toContain(`[1:v]setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.3/2)*2:trunc(ih*0.3/2)*2,setsar=1,format=yuv420p,setpts=PTS+1/TB[v1]`)
     expect(g).toContain("[l1][v1]overlay=x=(W-w)/2-0.3*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,1,3)':eof_action=pass[l2]")
