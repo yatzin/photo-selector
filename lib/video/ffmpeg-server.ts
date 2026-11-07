@@ -3,7 +3,8 @@ import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
-import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Transform } from "./transform"
+import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
+import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -39,10 +40,11 @@ const signed = (n: number) => `${n < 0 ? "-" : "+"}${frac(Math.abs(n))}`
  * gives the visible strip: centred, moved by fractions of the canvas, and the
  * crop's top and left cut back in (h / keep is the picture's height before the
  * crop, w / keepW its width). With no left or right crop x is the plain form.
+ * `turned`: the frame is a turned one (a rotation, or a text's spin).
  */
-export function overlayPosition(t: Transform): { x: string; y: string } {
+export function overlayPosition(t: Transform, turned = rotationOf(t) !== 0): { x: string; y: string } {
   // Turned, the picture keeps its full scaled size (the crop is transparent) and its centre is the content centre.
-  if (rotationOf(t) !== 0) return { x: `(W-w)/2${signed(t.x)}*W`, y: `(H-h)/2${signed(t.y)}*H` }
+  if (turned) return { x: `(W-w)/2${signed(t.x)}*W`, y: `(H-h)/2${signed(t.y)}*H` }
   const keep = frac(1 - t.cropTop - t.cropBottom)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
@@ -89,16 +91,52 @@ function cropBoxes(t: Transform): string[] {
  * the cut sides go transparent instead and rotate turns the frame about its
  * centre, the content centre, into a frame big enough to hold it (transparent
  * corners). The output keeps its alpha (yuva420p) when turned.
+ *
+ * A text's animation adds `afterFlips` (its alpha, lib/video/text-animation)
+ * and `angle`, a turn in radians that changes with `t` (its spin, on top of
+ * the rotation): the frame is then turned every frame into a square frame
+ * that holds it at any angle.
  */
-function transformFilters(t: Transform): string[] {
-  const flips = [...(t.flipH ? ["hflip"] : []), ...(t.flipV ? ["vflip"] : [])]
+function transformFilters(t: Transform, anim: { afterFlips?: string[]; angle?: string } = {}): string[] {
+  const flips = [...(t.flipH ? ["hflip"] : []), ...(t.flipV ? ["vflip"] : []), ...(anim.afterFlips ?? [])]
   const deg = rotationOf(t)
-  if (deg === 0) {
+  if (deg === 0 && !anim.angle) {
     const crop = cropFilter(t)
     return [...flips, ...(crop ? [crop] : []), "setsar=1"]
   }
   const rad = frac((deg * Math.PI) / 180)
-  return [...flips, "format=rgba", ...cropBoxes(t), `rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=black@0`, "setsar=1", "format=yuva420p"]
+  const rotate = anim.angle ? `rotate=a='${anim.angle}':ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=black@0` : `rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=black@0`
+  return [...flips, "format=rgba", ...cropBoxes(t), rotate, "setsar=1", "format=yuva420p"]
+}
+
+/**
+ * A text clip's in and out animations as filters, from the same expressions
+ * the preview evaluates (lib/video/text-animation), each on the clip's own
+ * time: `boxes`, the typewriter's (on its RGBA frame, before the flips);
+ * `alpha`, a geq multiplying the alpha by the fade and a sweep's mask (after
+ * the flips, while one runs); `angle`, the turn (radians, the rotation plus
+ * a spin); `scale`, a resize of the finished frame about its centre (the
+ * content centre: a turned frame is centred on it, and an unturned cropped
+ * strip's overlay position scales with its size); and the overlay's x and y
+ * with the slide or bounce added, on the timeline's time from `start`. Null
+ * where nothing moves.
+ */
+function textAnimation(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }) {
+  const { width: W, height: H } = p
+  const length = clipLength(c)
+  const t = c.transform ?? IDENTITY
+  const b = rotatedBounds(textSize(c.text, H), W, H, t)
+  const x = animationExprs(c.text, length, { bounds: { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H }, units: 0 })
+  const local = `(t-${num(c.start)})`
+  const window = alphaWindow(c.text, length)
+  return {
+    boxes: typewriterBoxes(c.text, length),
+    alpha: x.alpha === null ? null : `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${printExpr(x.alpha, { t: "T" })}':enable='${window}'`,
+    angle: x.rotationDeg === null ? null : `${frac((rotationOf(t) * Math.PI) / 180)}+${printExpr(x.rotationDeg, { t: "t" })}*PI/180`,
+    scale: x.scale === null ? null : ((s: string) => `scale=w='max(2,trunc(iw*${s}/2)*2)':h='max(2,trunc(ih*${s}/2)*2)':eval=frame`)(printExpr(x.scale, { t: "t" })),
+    x: x.offsetX === null ? null : `${printExpr(x.offsetX, { t: local })}*W`,
+    y: x.offsetY === null ? null : `${printExpr(x.offsetY, { t: local })}*H`,
+  }
 }
 
 /** The key a text clip's rasterised PNG has in buildExportGraph's `files`. */
@@ -155,9 +193,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
     const text = isTextClip(c) ? textRaster(p, c) : null
+    const anim = isTextClip(c) && isAnimated(c.text) ? textAnimation(p, c) : null
     // The overlay position below puts a full-canvas frame at 0, 0.
     const place = text
-      ? [`scale=${text.w}:${text.h}`, `setsar=1,fps=${fps},format=rgba`, ...transformFilters(t)].join(",")
+      ? [
+          `scale=${text.w}:${text.h}`, `setsar=1,fps=${fps},format=rgba`, ...(anim?.boxes ?? []),
+          ...transformFilters(t, anim ? { ...(anim.alpha ? { afterFlips: [anim.alpha] } : {}), ...(anim.angle ? { angle: anim.angle } : {}) } : {}),
+          ...(anim?.scale ? [anim.scale] : []),
+        ].join(",")
       : isIdentity(c.transform)
       ? frame
       : [
@@ -180,9 +223,12 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
         mix.push(`[a${i}]`)
       }
     }
-    const { x, y } = overlayPosition(t)
+    const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
     const out = n === clips.length - 1 ? "[v]" : `[l${n + 1}]`
-    parts.push(`${under}[v${i}]overlay=x=${x}:y=${y}:eval=init:enable='between(t,${num(start)},${num(start + clipLength(c))})':eof_action=pass${out}`)
+    // A text that moves or changes size is placed afresh every frame.
+    const moving = anim !== null && (anim.x !== null || anim.y !== null || anim.scale !== null)
+    const at = moving ? `x='${x}${anim.x ? `+${anim.x}` : ""}':y='${y}${anim.y ? `+${anim.y}` : ""}':eval=frame` : `x=${x}:y=${y}:eval=init`
+    parts.push(`${under}[v${i}]overlay=${at}:enable='between(t,${num(start)},${num(start + clipLength(c))})':eof_action=pass${out}`)
     under = out
   })
   parts.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[asil]`)

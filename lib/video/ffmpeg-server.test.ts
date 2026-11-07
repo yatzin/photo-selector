@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport, textRaster } from "./ffmpeg-server"
 import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
 import { textSize, type ClipText } from "./text"
+import { animationState } from "./text-animation"
 import { rasteriseText } from "./text-raster-server"
 import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
 
@@ -457,6 +458,49 @@ describe("buildExportArgs with text clips", () => {
   it("refuses a text clip with no PNG", () => {
     expect(() => buildExportArgs(project({}), { a: "/x/a.mp4" }, "o")).toThrow("Missing text picture")
   })
+
+  describe("animated", () => {
+    const g = (over: Partial<ClipText>, transform?: Transform) => graph(buildExportArgs(project({ text: text(over), ...(transform ? { transform } : {}) }), tFiles, "o"))
+
+    it("fades in with a geq on the alpha while the in animation runs, placed once", () => {
+      const s = g({ animIn: { type: "fade", duration: 1 } })
+      expect(s).toContain(
+        "[1:v]setpts=PTS-STARTPTS,scale=184:194,setsar=1,fps=30,format=rgba," +
+          "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*if(lt(T,1),(1-pow((1-clip((T/1),0,1)),3)),1)':enable='lt(t,1)'," +
+          "setsar=1,format=yuva420p,setpts=PTS+1/TB[v1]"
+      )
+      expect(s).toContain("overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,1,3)'")
+    })
+
+    it("slides out with an x on the timeline's time from the clip's start, placed every frame, no geq", () => {
+      const s = g({ animOut: { type: "slide-left", duration: 0.5 } })
+      expect(s).not.toContain("geq=")
+      // The box rests 868.2-1051.8 px across: it ends 1051.8 / 1920 = 0.547813 canvas widths left.
+      expect(s).toContain("overlay=x='(W-w)/2+0*W+if(gt((t-1),1.5),((1-(1-pow((1-clip(((2-(t-1))/0.5),0,1)),3)))*(-0.547813)),0)*W':y='(H-h/1)/2+0*H+0*h/1':eval=frame")
+    })
+
+    it("plays a sweep in and a fade out of different lengths in one geq, enabled for both", () => {
+      const s = g({ animIn: { type: "sweep-left", duration: 0.5 }, animOut: { type: "fade", duration: 1 } })
+      expect(s).toContain(
+        "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(if(gt(T,1),(1-pow((1-clip(((2-T)/1),0,1)),3)),1)*" +
+          "if(lt(T,0.5),lt((X+0.5),(W*(1-pow((1-clip((T/0.5),0,1)),3)))),1))':enable='lt(t,0.5)+gt(t,1)'"
+      )
+    })
+
+    it("spins a turned text on top of its rotation into a square frame, scaling it about its centre", () => {
+      const s = g({ animIn: { type: "spin", duration: 1 } }, { ...IDENTITY, rotation: 30, flipH: true })
+      expect(s).toContain("hflip,format=rgba,rotate=a='0.523599+if(lt(t,1),((-360)*(1-(1-pow((1-clip((t/1),0,1)),3)))),0)*PI/180':ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=black@0,setsar=1,format=yuva420p,")
+      expect(s).toContain("scale=w='max(2,trunc(iw*if(lt(t,1),(1-pow((1-clip((t/1),0,1)),3)),1)/2)*2)':h='max(2,trunc(ih*if(lt(t,1),(1-pow((1-clip((t/1),0,1)),3)),1)/2)*2)':eval=frame")
+      expect(s).toContain("overlay=x='(W-w)/2+0*W':y='(H-h)/2+0*H':eval=frame")
+    })
+
+    it("turns an unturned text for a spin, and types with drawboxes before the flips", () => {
+      expect(g({ animIn: { type: "spin", duration: 1 } })).toContain("rotate=a='0+if(lt(t,1)")
+      const s = g({ animIn: { type: "typewriter", duration: 1 } }, { ...IDENTITY, flipV: true })
+      expect(s).toContain("format=rgba,drawbox=x=round(iw*0):y=round(ih*0):w=iw-round(iw*0):h=ih-round(ih*0):color=black@0:t=fill:replace=1:enable='lt(t,0.5)',drawbox=")
+      expect(s.indexOf("enable='lt(t,1)',vflip")).toBeGreaterThan(0)
+    })
+  })
 })
 
 describe("parseProgressLine", () => {
@@ -850,6 +894,92 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     expect(await brightest(r.out, 900, 120, 120, 280)).toBeLessThan(100)
     expect(await brightest(r.out, 900, 700, 120, 280)).toBeLessThan(100)
   }, 60_000)
+
+  /** Frame `n` of `file` (30 fps: n / 30 seconds in): the brightest luma and the bounds of the pixels at least `threshold` (the white text's ink over the blue base). */
+  async function ink(file: string, n: number, threshold = 150) {
+    const px = await ffmpeg(["-i", file, "-vf", `select='eq(n,${n})',format=gray`, "-frames:v", "1", "-f", "rawvideo", "-"])
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity, max = 0
+    for (let i = 0; i < px.stdout.length; i++) {
+      max = Math.max(max, px.stdout[i])
+      if (px.stdout[i] < threshold) continue
+      const x = i % 1920
+      const y = Math.floor(i / 1920)
+      left = Math.min(left, x)
+      right = Math.max(right, x + 1)
+      top = Math.min(top, y)
+      bottom = Math.max(bottom, y + 1)
+    }
+    return { left, right, top, bottom, max, cx: (left + right) / 2, w: right - left }
+  }
+
+  describe("text animations", () => {
+    const hi = (over: Partial<ClipText>): ClipText => ({ content: "HHHH", color: "#ffffff", orientation: "horizontal", ...over })
+    const t2: Transform = { ...IDENTITY, scale: 2 }
+    // The blue base's luma, and white's (full range, as format=gray reads them).
+    const BLUE = 29, WHITE = 255
+
+    it("fades in: the text's ink brightens over the in time as the preview's opacity says", async () => {
+      const text = hi({ animIn: { type: "fade", duration: 1 } })
+      const r = await textExport(text, t2, "anim-fade")
+      const v = clipRect(textSize(text, 1080), 1920, 1080, t2).visible
+      // How much the box is brighter than the blue base, summed (the encoder's ringing averages out).
+      const lift = async (n: number) => {
+        const px = await ffmpeg(["-i", r.out, "-vf", `select='eq(n,${n})',crop=${Math.round(v.w)}:${Math.round(v.h)}:${Math.round(v.x)}:${Math.round(v.y)},format=gray`, "-frames:v", "1", "-f", "rawvideo", "-"])
+        return px.stdout.reduce((sum, y) => sum + Math.max(0, y - BLUE), 0)
+      }
+      const [a0, a5, a15, a45] = [await lift(0), await lift(5), await lift(15), await lift(45)]
+      expect(a0).toBeLessThan(a5)
+      expect(a5).toBeLessThan(a15)
+      expect(a0 / a45).toBeLessThan(0.02)
+      for (const [n, a] of [[5, a5], [15, a15]]) expect(Math.abs(a / a45 - animationState(text, n / 30, 2).opacity)).toBeLessThan(0.04)
+    }, 60_000)
+    it("slides in from beyond the left edge, where the preview has it halfway, at rest after", async () => {
+      const text = hi({ animIn: { type: "slide-left", duration: 1 } })
+      const r = await textExport(text, t2, "anim-slide")
+      expect((await ink(r.out, 0)).max).toBeLessThan(100)
+      const rest = await ink(r.out, 45)
+      const v = clipRect(textSize(text, 1080), 1920, 1080, t2).visible
+      expect(Math.abs(rest.cx - (v.x + v.w / 2))).toBeLessThan(6)
+      const s = animationState(text, 0.5, 2, { bounds: { x: v.x / 1920, y: v.y / 1080, w: v.w / 1920, h: v.h / 1080 }, units: 4 })
+      expect(Math.abs((await ink(r.out, 15)).cx - (rest.cx + s.offsetX * 1920))).toBeLessThan(4)
+    }, 60_000)
+
+    it("sweeps in from the left inside its box: partly shown at the midpoint", async () => {
+      const text = hi({ animIn: { type: "sweep-left", duration: 1 } })
+      const r = await textExport(text, t2, "anim-sweep")
+      const v = clipRect(textSize(text, 1080), 1920, 1080, t2).visible
+      const f = animationState(text, 0.2, 2).reveal!.fraction
+      const mid = await ink(r.out, 6)
+      const full = await ink(r.out, 45)
+      expect(mid.max).toBeGreaterThan(200)
+      expect(mid.left).toBe(full.left)
+      expect(mid.right).toBeLessThanOrEqual(Math.ceil(v.x + f * v.w) + 1)
+      expect(full.right - mid.right).toBeGreaterThan(100)
+    }, 60_000)
+
+    it("pops and explodes about the centre at the size the preview gives", async () => {
+      for (const type of ["pop", "explode"] as const) {
+        const text = hi({ animIn: { type, duration: 1 } })
+        const r = await textExport(text, t2, `anim-${type}`)
+        const s = animationState(text, 0.5, 2)
+        const mid = await ink(r.out, 15, 120)
+        const rest = await ink(r.out, 45, 120)
+        expect(Math.abs(mid.w / rest.w - s.scale)).toBeLessThan(0.03)
+        expect(Math.abs(mid.cx - rest.cx)).toBeLessThan(4)
+      }
+    }, 60_000)
+
+    it("plays in and out on one clip: shown in the middle, gone at the end", async () => {
+      const text = hi({ animIn: { type: "sweep-left", duration: 0.5 }, animOut: { type: "fade", duration: 0.5 } })
+      const r = await textExport(text, t2, "anim-both")
+      expect((await ink(r.out, 30)).max).toBeGreaterThan(225)
+      // The last frame (59, 1.967 s): the fade has 0.033 s to go.
+      const o = animationState(text, 59 / 30, 2).opacity
+      const last = (await ink(r.out, 59)).max
+      expect(last).toBeLessThan(100)
+      expect(Math.abs(last - (o * WHITE + (1 - o) * BLUE))).toBeLessThan(15)
+    }, 60_000)
+  })
 
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {
     const p: Project = {
