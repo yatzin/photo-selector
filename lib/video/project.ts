@@ -1,5 +1,6 @@
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
+import { isTransitionType, MAX_TRANSITION, MIN_TRANSITION, type Transition } from "./transition-types"
 
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
@@ -14,8 +15,10 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
  * sound in the preview and the export (absent when it isn't). A text clip
  * (lib/video/text) has `text` and no media: its `asset` is "", and it times
  * like an image (in 0, out its length, up to MAX_IMAGE); it has no sound.
+ * `transition` blends the clip before it on its track into this one, centred
+ * on the cut (see transitionLimits); only while that clip adjoins this one.
  */
-export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText }
+export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition }
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
  * lower ones. On every track clips sit at their own `start`, sorted by it,
@@ -209,6 +212,103 @@ function withTrack(p: Project, index: number, clips: Clip[]): Project {
   return { ...p, tracks: p.tracks.map((t, i) => (i === index ? { ...t, clips } : t)) }
 }
 
+/** Two clips closer than this (s) at a cut adjoin: a transition can join them. */
+export const ADJOIN_EPS = 0.001
+
+/** True when `b` starts where `a` ends (within ADJOIN_EPS). */
+export const adjoins = (a: Clip | undefined, b: Clip | undefined) => a !== undefined && b !== undefined && Math.abs(clipEnd(a) - b.start) <= ADJOIN_EPS
+
+/** Spare footage (s) past a clip's out point: unlimited for a still, what the source has left for a video (0 when its asset is gone). */
+function tailHandle(p: Project, c: Clip): number {
+  if (isStill(p, c)) return Infinity
+  const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
+  return asset ? Math.max(0, asset.duration - c.out) : 0
+}
+
+/** Spare footage (s) before a clip's in point: unlimited for a still, its in point for a video. */
+const headHandle = (p: Project, c: Clip) => (isStill(p, c) ? Infinity : Math.max(0, c.in))
+
+export type TransitionLimits = { max: number; reason: "ok" | "not-adjoining" | "no-footage" }
+
+/**
+ * How long a transition into clip `clipId` from the clip before it may be.
+ * The transition is centred on the cut, so the outgoing clip plays half of it
+ * past its out point and the incoming one half before its in point, from the
+ * footage beyond them (a still has any amount): the most is twice the smaller
+ * of those two handles, at most each clip's own length (so two transitions on
+ * one clip never meet) and at most MAX_TRANSITION, floored to the millisecond.
+ * `max` is 0 with "not-adjoining" when nothing adjoins it (or the clip is
+ * gone), and "no-footage" when the handles leave less than MIN_TRANSITION.
+ */
+export function transitionLimits(p: Project, clipId: string): TransitionLimits {
+  const at = find(p, clipId)
+  const prev = at ? p.tracks[at.track].clips[at.index - 1] : undefined
+  if (!at || !adjoins(prev, at.clip)) return { max: 0, reason: "not-adjoining" }
+  const max = Math.floor(Math.min(MAX_TRANSITION, 2 * tailHandle(p, prev!), 2 * headHandle(p, at.clip), clipLength(prev!), clipLength(at.clip)) * 1000 + 1e-6) / 1000
+  return max < MIN_TRANSITION - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
+}
+
+/** The clip adjoining `c`'s start on `clips` (sorted by start), if any. */
+function adjoiningBefore(clips: Clip[], index: number): Clip | undefined {
+  const prev = clips[index - 1]
+  return adjoins(prev, clips[index]) ? prev : undefined
+}
+
+/**
+ * Every transition checked after an edit of `prev` (none: a freshly read
+ * project): one whose clip no longer has a clip adjoining it goes, and so does
+ * one whose adjoining clip changed (a delete or an insert between them).
+ * `alias` maps a split's new piece to the clip it came from, which it stands
+ * in for. The rest are shortened to transitionLimits, and dropped when that's
+ * below MIN_TRANSITION. The same project when nothing changes.
+ */
+export function fixTransitions(p: Project, prev?: Project, alias: Record<string, string> = {}): Project {
+  if (!p.tracks.some((t) => t.clips.some((c) => c.transition))) return p
+  const before = new Map<string, string | null>()
+  if (prev) {
+    for (const t of prev.tracks) t.clips.forEach((c, i) => before.set(c.id, adjoiningBefore(t.clips, i)?.id ?? null))
+  }
+  let changed = false
+  const tracks = p.tracks.map((t) => {
+    let touched = false
+    const clips = t.clips.map((c, i) => {
+      if (!c.transition) return c
+      const pred = adjoiningBefore(t.clips, i)
+      const was = before.get(c.id)
+      const samePred = !prev || was === undefined || (pred !== undefined && (alias[pred.id] ?? pred.id) === was)
+      const limit = pred && samePred ? transitionLimits(p, c.id).max : 0
+      if (limit >= MIN_TRANSITION && c.transition.duration <= limit) return c
+      touched = true
+      const { transition, ...rest } = c
+      return limit >= MIN_TRANSITION ? { ...rest, transition: { ...transition, duration: limit } } : rest
+    })
+    if (!touched) return t
+    changed = true
+    return { ...t, clips }
+  })
+  return changed ? { ...p, tracks } : p
+}
+
+/**
+ * The clips whose transition `next` (an edit of `prev`) would part: both
+ * clips of the cut are still there, but no longer side by side on one track.
+ */
+export function brokenLinks(prev: Project, next: Project): string[] {
+  const where = new Map<string, { track: number; index: number }>()
+  next.tracks.forEach((t, track) => t.clips.forEach((c, index) => where.set(c.id, { track, index })))
+  const broken: string[] = []
+  for (const t of prev.tracks) {
+    t.clips.forEach((c, i) => {
+      const pred = c.transition ? adjoiningBefore(t.clips, i) : undefined
+      const b = where.get(c.id)
+      if (!pred || !b || !where.has(pred.id)) return
+      const clips = next.tracks[b.track].clips
+      if (adjoiningBefore(clips, b.index)?.id !== pred.id) broken.push(c.id)
+    })
+  }
+  return broken
+}
+
 /** True when the base track snaps its clips together (Track.magnetic; it means nothing on another track). */
 export function isMagnetic(p: Project): boolean {
   return p.tracks[0]?.magnetic === true
@@ -234,11 +334,15 @@ export function packBase(p: Project): Project {
   return withTrack(p, 0, endToEnd(clips))
 }
 
-/** `next` (an edit of `p`) with a snapped base packed again; `p` when that would end past MAX_TIMELINE. */
-function settle(p: Project, next: Project): Project {
-  if (next === p || !isMagnetic(next)) return next
+/**
+ * `next` (an edit of `p`) with a snapped base packed again, its transitions
+ * checked against `p` (fixTransitions); `p` when the pack would end past MAX_TIMELINE.
+ */
+function settle(p: Project, next: Project, alias?: Record<string, string>): Project {
+  if (next === p) return next
+  if (!isMagnetic(next)) return fixTransitions(next, p, alias)
   const packed = packBase(next)
-  return trackEnd(packed.tracks[0]) > MAX_TIMELINE + EPS ? p : packed
+  return trackEnd(packed.tracks[0]) > MAX_TIMELINE + EPS ? p : fixTransitions(packed, p, alias)
 }
 
 /** Snap on: the base packs end to end in its current order (one edit with the flag). Off: only the flag goes; clips stay put. */
@@ -299,6 +403,7 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   if (clip.transform) placed.transform = clip.transform
   if (clip.muted) placed.muted = true
   if (clip.text) placed.text = clip.text
+  if (clip.transition) placed.transition = clip.transition
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -312,7 +417,8 @@ export function addClip(p: Project, assetId: string, trackIndex: number, at: { s
   const asset = p.assets[assetId]
   if (!asset || asset.duration < MIN_CLIP || hasClip(p, id)) return p
   const clip: Clip = { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, start: 0 }
-  if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
+  // Going in between two clips there parts them: a transition between them goes.
+  if (trackIndex === 0 && isMagnetic(p)) return fixTransitions(insertBase(p, clip, at.start ?? 0), p)
   return place(p, clip, trackIndex, at.start ?? 0)
 }
 
@@ -326,7 +432,7 @@ export function addTextClip(p: Project, text: ClipText, trackIndex: number, at: 
   const t = normalizeText(text)
   if (!t || hasClip(p, id)) return p
   const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: fitAnims(t, DEFAULT_IMAGE) }
-  if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
+  if (trackIndex === 0 && isMagnetic(p)) return fixTransitions(insertBase(p, clip, at.start ?? 0), p)
   return place(p, clip, trackIndex, at.start ?? 0)
 }
 
@@ -457,7 +563,8 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
     const cut = clip.in + local
     next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
   }
-  return settle(p, withTrack(p, track, next))
+  // The second piece takes over the clip's place before the next clip, and with it that clip's transition.
+  return settle(p, withTrack(p, track, next), { [newId]: id })
 }
 
 const sameTransform = (a: Transform | undefined, b: Transform | undefined) =>
@@ -610,6 +717,11 @@ export function parseProject(json: unknown): Project | null {
       if (text) clip.text = fitAnims(text, clip.out - clip.in)
       // A text clip has no sound to mute.
       else if (c.muted === true || raw.muted === true) clip.muted = true
+      if (c.transition !== undefined) {
+        const tr = c.transition
+        if (!isRecord(tr) || !isTransitionType(tr.type) || !isNum(tr.duration) || tr.duration < MIN_TRANSITION - 1e-9 || tr.duration > MAX_TRANSITION + 1e-9) return null
+        clip.transition = { type: tr.type, duration: tr.duration }
+      }
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null
       clips.push(clip)
@@ -627,7 +739,8 @@ export function parseProject(json: unknown): Project | null {
     tracks.push({ id: raw.id, ...(magnetic ? { magnetic: true } : {}), clips })
   }
 
-  return { version: 3, name, width, height, fps, assets: parsedAssets, tracks }
+  // A transition with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
+  return fixTransitions({ version: 3, name, width, height, fps, assets: parsedAssets, tracks })
 }
 
 /**

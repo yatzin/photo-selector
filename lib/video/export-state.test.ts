@@ -51,6 +51,17 @@ describe("exportFingerprint", () => {
     for (const changed of [trimmed, moved, reordered, muted, otherFile, fps, size, layers, gap]) expect(exportFingerprint(changed)).not.toBe(base)
   })
 
+  it("changes with a transition's type and length", () => {
+    const p = project()
+    const base = exportFingerprint(p)
+    const withTransition = (type: "fade" | "wipeleft", duration: number) =>
+      ({ ...p, tracks: [{ ...p.tracks[0], clips: [p.tracks[0].clips[0], { ...p.tracks[0].clips[1], transition: { type, duration } }] }, p.tracks[1]] })
+    const fade = exportFingerprint(withTransition("fade", 1))
+    expect(fade).not.toBe(base)
+    expect(exportFingerprint(withTransition("wipeleft", 1))).not.toBe(fade)
+    expect(exportFingerprint(withTransition("fade", 1.5))).not.toBe(fade)
+  })
+
   it("is unchanged by renaming the project or importing an unused asset", () => {
     const base = exportFingerprint(project())
     const p = project()

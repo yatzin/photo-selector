@@ -1,4 +1,6 @@
-import { clipEnd, clipLength, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, type Clip, type Project } from "./project"
+import {
+  brokenLinks, clipEnd, clipLength, fixTransitions, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, type Clip, type Project,
+} from "./project"
 
 /** What happens to other media on the clip's layer that the new range reaches. */
 export type TimingMode = "push" | "overwrite"
@@ -32,10 +34,22 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
  *
  * On a snapped base the start can't change (packing sets it) and a length
  * change ripples the clips after it, whatever the mode. Refused (with a
- * message) when anything would end past MAX_TIMELINE. The same project when
- * nothing changes.
+ * message) when anything would end past MAX_TIMELINE, or (LINKED) when it
+ * would part two clips joined by a transition; other transitions are fitted
+ * to their footage (fixTransitions). The same project when nothing changes.
  */
 export function setClipTiming(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
+  const r = timingEdit(p, clipId, timing, mode, newId)
+  if (!r.ok || r.project === p) return r
+  // A transition joins two clips side by side: an edit that parts them is refused, and the rest are fitted to their footage.
+  if (brokenLinks(p, r.project).length > 0) return fail(LINKED)
+  return { ok: true, project: fixTransitions(r.project, p) }
+}
+
+/** setClipTiming's refusal when the change would part clips joined by a transition. */
+export const LINKED = "This clip is linked by a transition."
+
+function timingEdit(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
   const track = p.tracks.findIndex((t) => t.clips.some((c) => c.id === clipId))
   if (track < 0) return fail("That clip is gone.")
   const clips = p.tracks[track].clips
