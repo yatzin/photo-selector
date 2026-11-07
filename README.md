@@ -182,11 +182,12 @@ instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
 under the same name reuses the existing copy (delete that copy from Project
 media to import the new one).
 
-**Deleting media.** Right-click an item in Project media and choose Delete.
-After a warning it leaves the project: every clip of it comes off the
+**Deleting media.** Right-click an item in Project media and choose Delete
+(or focus it and press **Delete**). The warning says how many timeline clips
+use it. Confirmed, it leaves the project: every clip of it comes off the
 timeline (leaving gaps), its copy in `assets/` is deleted and undo history
 starts over. The Inbox original isn't touched, so you can import it again.
-Not while the project is exporting.
+Not while the project is exporting, or while that file is being imported.
 
 **Editing.**
 - Drag a clip or image onto the timeline.
@@ -202,6 +203,19 @@ Not while the project is exporting.
   the top layer (it shows while you drag) to make a new layer. The **+** at
   the left of the ruler adds an empty layer; an empty layer has an **×** to
   remove it. Drag a clip up or down to move it to another layer.
+- **Drop on the player.** Drop a Project media or Inbox file on the preview
+  to add it at the playhead, on the lowest layer free for its whole length
+  there (a new layer when none is, up to four). It comes in selected, with
+  its frame showing, ready to move or resize.
+- **Many layers.** With three or four layers the rows are half height. A
+  slim slider at the timeline's right edge makes them taller or shorter
+  (0.6x to 2x; double-click it to reset), remembered in this browser; the
+  timeline scrolls up and down when they don't fit.
+- **Timeline length.** The timeline is as long as its content plus a little
+  room, never narrower than the view. Dragging a clip, an edge or a file
+  towards the end makes it longer as you go, and dragging near the left or
+  right edge of the view scrolls it. When the last clip goes (deleted, moved
+  or trimmed), the timeline shrinks back.
 - **Free placement.** On every track, the base (V1) included, clips stay where
   you put them and gaps are fine: removing, trimming or moving a clip leaves
   the rest where they are. A gap shows black and is silent, in the preview
@@ -214,9 +228,13 @@ Not while the project is exporting.
   timeline highlights the same clip. Drag it to move it. Drag a corner to
   enlarge or shrink it with its shape kept; the opposite corner stays put.
   Drag the top, bottom, left or right handle to crop the picture from that
-  edge (drag back out to undo the crop). While you drag, the picture snaps to the
-  frame's centre and edges and a thin line shows it; hold **Alt** to stop
-  snapping. **Esc** during a drag cancels it, and each drag is one undo step.
+  edge (drag back out to undo the crop); on a very small frame the middle
+  handles hide so the corners stay usable. While you drag, the picture's
+  edges and centre (or the cropped edge) snap to the frame's vertical and
+  horizontal centre lines and its edges, and a thin line shows each one.
+  A hint below the preview says to hold **Alt** to stop snapping, and
+  changes to "Snapping off" while you do. **Esc** during a drag cancels it,
+  and each drag is one undo step. The area around the frame is light gray.
   Once a clip is moved, shrunk or cropped, the layers below show around it,
   and black where nothing covers (the base layer too). With a clip selected
   in the preview, the arrow keys nudge it by 1% (**Shift**: 5%); a focused
