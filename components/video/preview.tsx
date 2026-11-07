@@ -5,9 +5,16 @@ import { Pause, Play, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { assetKind, clipsAt, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { clipRect, cropLeftOf, cropRightOf, IDENTITY, isIdentity, type Transform } from "@/lib/video/transform"
+import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
-import { TransformOverlay, type TransformTarget } from "./transform-overlay"
+import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
+import { TransformOverlay, type GestureState, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
+
+/** A file from the left panel dropped on the canvas: a Project media item, or an Inbox file to import first. */
+export type MediaDrop = { kind: "asset"; id: string } | { kind: "inbox"; folder: string; name: string }
+
+const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 
 // The player above the timeline: a black canvas the project's shape. Each
 // track has two stacked <video> elements that take turns (see
@@ -17,7 +24,10 @@ import type { PreviewPlayer } from "./use-preview-player"
 // shows wherever an upper one doesn't cover and black shows where nothing
 // does. A clip with no transform fills the canvas letterboxed in black, as it
 // always has (and as the export draws it). An image clip shows as a still in its track's place. Clicking the
-// canvas selects a clip there and TransformOverlay edits it. A clip the
+// canvas selects a clip there and TransformOverlay edits it, with a hint
+// about Alt below the canvas while a drag runs. A file dragged from the left
+// panel onto the canvas is added at the playhead (onDrop). The area around
+// the canvas is light gray. A clip the
 // browser can't decode shows a message here and still exports, one whose file
 // is missing says so (export fails on it).
 
@@ -42,7 +52,7 @@ function placement(aspect: number, W: number, H: number, t: Transform): CSSPrope
 }
 
 export function Preview({
-  player, project, imageUrl, selectedId, onSelect, onChange,
+  player, project, imageUrl, selectedId, onSelect, onChange, onDrop,
 }: {
   player: PreviewPlayer
   project: Project
@@ -51,15 +61,21 @@ export function Preview({
   onSelect: (id: string | null) => void
   /** Applies an edit to the current project; `group` merges quick repeats into one undo step. */
   onChange: (edit: (p: Project) => Project, group?: string) => void
+  /** A file from the left panel was dropped on the canvas: add it at the playhead. */
+  onDrop: (drop: MediaDrop) => void
 }) {
   const [brokenImage, setBrokenImage] = useState<string | null>(null)
+  // A canvas drag in progress (for the Alt hint), and a file dragged over the canvas.
+  const [gesture, setGesture] = useState<GestureState>(null)
+  const [dropOver, setDropOver] = useState(false)
   // Each asset's picture aspect (width / height), learnt from the loaded video or image.
   const [aspects, setAspects] = useState<Record<string, number>>({})
   // The transform being dragged, shown instead of the clip's until it's committed.
   const [draft, setDraft] = useState<{ id: string; transform: Transform } | null>(null)
   // The canvas box's size on screen: the project's shape fit inside the area.
   const area = useRef<HTMLDivElement>(null)
-  const [box, setBox] = useState<{ w: number; h: number } | null>(null)
+  // `below`: the px between the canvas's bottom and the pane's (the gray margin and the padding).
+  const [box, setBox] = useState<{ w: number; h: number; below: number } | null>(null)
   const { width: W, height: H } = project
 
   useEffect(() => {
@@ -70,8 +86,10 @@ export function Preview({
       const ah = el.clientHeight
       if (!(aw > 0 && ah > 0)) return
       const w = Math.min(aw, (ah * W) / H)
-      const next = { w: Math.floor(w), h: Math.floor((w * H) / W) }
-      setBox((b) => (b && b.w === next.w && b.h === next.h ? b : next))
+      const h = Math.floor((w * H) / W)
+      // The area is centred in the pane with 16 px (p-4) of padding all round.
+      const next = { w: Math.floor(w), h, below: Math.floor((ah - h) / 2) + 16 }
+      setBox((b) => (b && b.w === next.w && b.h === next.h && b.below === next.below ? b : next))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -137,12 +155,65 @@ export function Preview({
     for (const url of nextStills.split("\n")) if (url) new Image().src = url
   }, [nextStills])
 
+  // A drag that ends anywhere (dropped elsewhere, or Esc) takes the canvas's drop highlight with it.
+  useEffect(() => {
+    const clear = () => setDropOver(false)
+    window.addEventListener("dragend", clear)
+    window.addEventListener("drop", clear)
+    return () => {
+      window.removeEventListener("dragend", clear)
+      window.removeEventListener("drop", clear)
+    }
+  }, [])
+
+  function dragOver(e: React.DragEvent) {
+    if (!hasMediaDrag(e.dataTransfer)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "copy"
+    setDropOver(true)
+  }
+
+  function dragLeave(e: React.DragEvent) {
+    // Moving onto the overlay or a handle inside the canvas isn't leaving it.
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+    setDropOver(false)
+  }
+
+  function drop(e: React.DragEvent) {
+    setDropOver(false)
+    const id = e.dataTransfer.getData(ASSET_DRAG_TYPE)
+    const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
+    if (!id && !inbox) return
+    e.preventDefault()
+    if (id) return onDrop({ kind: "asset", id })
+    try {
+      const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
+      if (typeof folder === "string" && typeof name === "string") onDrop({ kind: "inbox", folder, name })
+    } catch {
+      // Not our drag after all.
+    }
+  }
+
+  // The Alt hint: below the canvas when the gray margin has room for it, else inside at the bottom (above the play button).
+  // The overlay (and any drag on it) goes when the last clip does.
+  if (!hasClips && gesture) setGesture(null)
+  const hint = hasClips && gesture ? (gesture.snapping ? "Hold Alt to turn snapping off" : "Snapping off") : null
+  const hintOutside = box !== null && box.below >= HINT_ROOM
+  const hintPill = (className: string) => (
+    <div aria-hidden className={cn("pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow", className)}>
+      {hint}
+    </div>
+  )
+
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-black/90 p-4">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-neutral-200 p-4 dark:bg-neutral-300">
       <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
         <div
           className={cn("relative", !box && "max-h-full max-w-full")}
           style={box ? { width: box.w, height: box.h } : { height: "100%", aspectRatio: `${W} / ${H}` }}
+          onDragOver={dragOver}
+          onDragLeave={dragLeave}
+          onDrop={drop}
         >
           {/* isolate: the layers' z-index stays inside the canvas, under the overlay and the play button. */}
           <div className="absolute inset-0 isolate overflow-hidden rounded-md bg-black">
@@ -193,7 +264,7 @@ export function Preview({
               </div>
             )}
             {!hasClips && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/60">Import a clip and add it to the timeline</div>
+              <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/60">Drag media here or onto the timeline</div>
             )}
             {cantPlay && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center text-sm text-white/80">
@@ -208,12 +279,21 @@ export function Preview({
             <TransformOverlay
               width={W}
               height={H}
+              displayWidth={box?.w}
               selected={selected}
               hitTest={hitTest}
               onSelect={onSelect}
               onDraft={setDraft}
               onCommit={(id, t, group) => onChange((p) => setTransform(p, id, t), group)}
+              onGesture={setGesture}
             />
+          )}
+          {hint && !hintOutside && hintPill("bottom-14")}
+          {dropOver && (
+            // Above the overlay, and never in the way of the drop itself.
+            <div className="pointer-events-none absolute -inset-1 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-sky-500 bg-sky-500/10">
+              <span className="rounded-md bg-neutral-900/80 px-2.5 py-1 text-xs text-white shadow">Drop to add at {formatTimecode(player.time)}</span>
+            </div>
           )}
           {hasClips && (
             <Button
@@ -230,6 +310,7 @@ export function Preview({
           )}
         </div>
       </div>
+      {hint && hintOutside && hintPill("bottom-1")}
     </div>
   )
 }

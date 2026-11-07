@@ -6,16 +6,19 @@ import { ArrowLeft, Check, Download, Loader2, Redo2, RotateCcw, SquareSplitHoriz
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
-import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, setTransform, splitClip, totalLength, trackEnd, type Asset, type Edit, type Project } from "@/lib/video/project"
+import {
+  addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, freeTrackFor, removeAsset, removeClip, resolveStart, setTransform, splitClip, totalLength, trackEnd,
+  type Asset, type Edit, type Project,
+} from "@/lib/video/project"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
-import { Preview } from "./preview"
+import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline, type DropTarget } from "./timeline"
@@ -195,6 +198,74 @@ export function Editor({
     const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
     const start = resolveStart(p.tracks[track]?.clips ?? [], length, target.start, id)
     if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+  }
+
+  /**
+   * A file dropped on the player: a clip at the playhead (as it was at the
+   * drop) on the lowest layer free for its whole length there, a new layer when
+   * none is (up to MAX_TRACKS), selected so its frame shows. An Inbox file is
+   * imported first and placed in the project as it is then. One undo step.
+   */
+  async function dropOnPlayer(drop: MediaDrop) {
+    const at = playhead
+    let assetId: string
+    let asset: Asset
+    if (drop.kind === "asset") {
+      const known = latest.current.assets[drop.id]
+      if (!known) return
+      assetId = drop.id
+      asset = known
+    } else {
+      const imported = await importFile(drop.folder, drop.name)
+      if (!imported) return
+      assetId = imported.id
+      asset = imported.asset
+    }
+    const length = assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration
+    const track = freeTrackFor(latest.current, at, length)
+    if (track === null) {
+      toast.info("No free layer at the playhead. Move the playhead or remove a layer.")
+      return
+    }
+    const id = newId()
+    // Placed on the layer free in the project the edit applies to (it may be newer than `latest`).
+    edit((p) => {
+      const free = freeTrackFor(p, at, length)
+      return free === null ? p : addClip(p, assetId, free, { start: at }, id)
+    })
+    setSelectedId(id)
+    // A free layer takes it at the playhead; only the timeline's end limit could move it.
+    const start = resolveStart(latest.current.tracks[track]?.clips ?? [], length, at, id)
+    if (Math.abs(start - at) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+  }
+
+  /**
+   * Deletes a media item on the server, then the same here: the item and its
+   * clips go, and the undo history starts afresh (an older step could bring
+   * back clips of a file that's gone, and the server would refuse to save it).
+   * The selection goes with its clip (the check during render). True on success.
+   */
+  async function deleteMedia(assetId: string): Promise<boolean> {
+    const before = latest.current
+    const file = before.assets[assetId]?.file ?? "the file"
+    try {
+      const r = await deleteAssetAction(folder, assetId)
+      if ("error" in r) {
+        toast.error(r.error)
+        return false
+      }
+    } catch {
+      toast.error("Something went wrong deleting that file.")
+      return false
+    }
+    const n = removeAsset(latest.current, assetId).removedClips
+    setEditor((s) => {
+      const { project: next } = removeAsset({ ...s.meta, ...s.history.present }, assetId)
+      const { tracks, ...meta } = next
+      return { meta, history: createHistory<Edit>({ tracks }) }
+    })
+    toast.success(n > 0 ? `Removed ${file} and ${n} clip${n === 1 ? "" : "s"}` : `Removed ${file}`)
+    return true
   }
 
   /** A finished export: the browser downloads the kept copy (the route serves it by project, so no name is needed). */
@@ -399,7 +470,7 @@ export function Editor({
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
-          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} />
+          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} />
         </aside>
         <div ref={column} className="flex min-w-0 flex-1 flex-col">
           {/* With a set height the preview gives way first (flex-shrink) and the timeline grows; CSS keeps both minimums. */}
@@ -408,7 +479,7 @@ export function Editor({
             className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
             style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
-            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} />
+            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} />
           </div>
           <ResizeHandle
             label="Resize preview"
