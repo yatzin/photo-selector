@@ -5,7 +5,7 @@ import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
-import { endToEnd, newProject, totalLength, type Clip, type Project } from "./project"
+import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
 import { clipRect, cropLeftOf, cropRightOf, IDENTITY, type Transform } from "./transform"
 
 describe("parseProbe", () => {
@@ -200,6 +200,13 @@ describe("buildExportArgs with gaps on the base track", () => {
   it("keeps the old concat graph for base clips back to back from 0", () => {
     const g = graph(buildExportArgs(project([{ id: "c1", asset: "a", in: 1, out: 3, start: 0 }, { id: "c2", asset: "s", in: 0, out: 1.5, start: 2 }]), files, "o"))
     expect(g).toContain("concat=n=2:v=1:a=1[v][a]")
+  })
+
+  it("uses the concat graph for a snapped base that had gaps", () => {
+    const gapped = project([{ id: "c1", asset: "a", in: 1, out: 3, start: 2 }, { id: "c2", asset: "s", in: 0, out: 1.5, start: 6 }])
+    const g = graph(buildExportArgs(setBaseMagnetic(gapped, true), files, "o"))
+    expect(g).toContain("concat=n=2:v=1:a=1[v][a]")
+    expect(g).not.toContain("color=c=black")
   })
 })
 

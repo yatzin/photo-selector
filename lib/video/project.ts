@@ -16,8 +16,10 @@ export type Clip = { id: string; asset: string; in: number; out: number; start: 
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
  * lower ones. On every track clips sit at their own `start`, sorted by it,
  * with gaps allowed and no overlaps (nothing ripples). `muted` silences a track.
+ * `magnetic` (the timeline's Snap box, base track only) keeps the base's clips
+ * end to end from 0: every edit there inserts, ripples or closes the gap.
  */
-export type Track = { id: string; muted?: boolean; clips: Clip[] }
+export type Track = { id: string; muted?: boolean; magnetic?: boolean; clips: Clip[] }
 /**
  * Version 3: every clip has a `start`. Version 2 laid the base track end to
  * end (no starts there) and version 1 had one flat `clips` list; parseProject
@@ -185,6 +187,54 @@ function withTrack(p: Project, index: number, clips: Clip[]): Project {
   return { ...p, tracks: p.tracks.map((t, i) => (i === index ? { ...t, clips } : t)) }
 }
 
+/** True when the base track snaps its clips together (Track.magnetic; it means nothing on another track). */
+export function isMagnetic(p: Project): boolean {
+  return p.tracks[0]?.magnetic === true
+}
+
+/**
+ * Where a clip dropped at `time` goes on a snapped base: `index`, how many of
+ * `clips` (but `ignore`) have their midpoint before `time`, and `start`, where
+ * the clip before that slot ends now (0 for the first slot).
+ */
+export function baseInsertion(clips: Clip[], time: number, ignore?: string): { index: number; start: number } {
+  const others = sortByStart(clips.filter((c) => c.id !== ignore))
+  const index = others.filter((c) => c.start + clipLength(c) / 2 < time).length
+  return { index, start: index === 0 ? 0 : clipEnd(others[index - 1]) }
+}
+
+/** The base track's clips laid end to end from 0 in start order; the same project when they already are. */
+export function packBase(p: Project): Project {
+  const track = p.tracks[0]
+  if (!track) return p
+  const clips = sortByStart(track.clips)
+  if (isContiguousFromZero(clips) && clips.every((c, i) => c === track.clips[i])) return p
+  return withTrack(p, 0, endToEnd(clips))
+}
+
+/** `next` (an edit of `p`) with a snapped base packed again; `p` when that would end past MAX_TIMELINE. */
+function settle(p: Project, next: Project): Project {
+  if (next === p || !isMagnetic(next)) return next
+  const packed = packBase(next)
+  return trackEnd(packed.tracks[0]) > MAX_TIMELINE + EPS ? p : packed
+}
+
+/** Snap on: the base packs end to end in its current order (one edit with the flag). Off: only the flag goes; clips stay put. */
+export function setBaseMagnetic(p: Project, on: boolean): Project {
+  const track = p.tracks[0]
+  if (!track || isMagnetic(p) === on) return p
+  if (!on) return { ...p, tracks: [{ id: track.id, ...(track.muted ? { muted: true } : {}), clips: track.clips }, ...p.tracks.slice(1)] }
+  return packBase({ ...p, tracks: [{ ...track, magnetic: true }, ...p.tracks.slice(1)] })
+}
+
+/** `clip` inserted into a snapped base at the slot `time` picks (baseInsertion), the base packed; `p` when it would end past MAX_TIMELINE. */
+function insertBase(p: Project, clip: Clip, time: number): Project {
+  const others = sortByStart(p.tracks[0].clips.filter((c) => c.id !== clip.id))
+  others.splice(baseInsertion(others, time).index, 0, clip)
+  const next = withTrack(p, 0, endToEnd(others))
+  return trackEnd(next.tracks[0]) > MAX_TIMELINE + EPS ? p : next
+}
+
 /** A new track id: the lowest "t<n>" not in use. */
 function freeTrackId(p: Project): string {
   for (let n = 1; ; n++) if (!p.tracks.some((t) => t.id === `t${n}`)) return `t${n}`
@@ -208,7 +258,7 @@ export function setTrackMuted(p: Project, id: string, muted: boolean): Project {
   if (index < 0 || Boolean(p.tracks[index].muted) === muted) return p
   return {
     ...p,
-    tracks: p.tracks.map((t, i) => (i !== index ? t : muted ? { ...t, muted: true } : { id: t.id, clips: t.clips })),
+    tracks: p.tracks.map((t, i) => (i !== index ? t : muted ? { ...t, muted: true } : { id: t.id, ...(t.magnetic ? { magnetic: true } : {}), clips: t.clips })),
   }
 }
 
@@ -231,22 +281,29 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
 /**
  * A new clip of the whole asset (an image: DEFAULT_IMAGE long) on any track
  * at `at.start` (0 when absent), sliding past any clip it would overlap. A
- * track index one past the top adds a layer for it (up to MAX_TRACKS).
+ * track index one past the top adds a layer for it (up to MAX_TRACKS). On a
+ * snapped base it's inserted at the slot `at.start` picks (baseInsertion).
  */
 export function addClip(p: Project, assetId: string, trackIndex: number, at: { start?: number }, id: string): Project {
   const asset = p.assets[assetId]
   if (!asset || asset.duration < MIN_CLIP || hasClip(p, id)) return p
   const clip: Clip = { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, start: 0 }
+  if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
   return place(p, clip, trackIndex, at.start ?? 0)
 }
 
-/** Moves a clip along its track or to another one (in and out stay) to `at.start` (where it is when absent); see addClip for where it lands. */
+/**
+ * Moves a clip along its track or to another one (in and out stay) to
+ * `at.start` (where it is when absent); see addClip for where it lands. A
+ * clip leaving a snapped base closes its gap there.
+ */
 export function moveClip(p: Project, id: string, toTrack: number, at: { start?: number }): Project {
   const from = find(p, id)
   if (!from || !Number.isInteger(toTrack) || toTrack < 0 || toTrack > p.tracks.length) return p
   const without = withTrack(p, from.track, p.tracks[from.track].clips.filter((c) => c.id !== id))
-  const moved = place(without, from.clip, toTrack, at.start ?? from.clip.start)
-  return moved === without ? p : moved
+  const desired = at.start ?? from.clip.start
+  const moved = toTrack === 0 && isMagnetic(p) ? insertBase(without, from.clip, desired) : place(without, from.clip, toTrack, desired)
+  return moved === without ? p : settle(p, moved)
 }
 
 /** The free room around a clip: where the previous clip ends (or 0) and the next one starts. */
@@ -261,7 +318,8 @@ function room(clips: Clip[], index: number): { prevEnd: number; nextStart: numbe
  * `seconds - in`). The left edge moves `start` with `in` so the picture stays
  * where it was; neither edge passes a neighbour, 0 or MAX_TIMELINE, and
  * nothing else on the track moves. An image stretches freely up to its
- * neighbour (and MAX_IMAGE).
+ * neighbour (and MAX_IMAGE). On a snapped base the clips after it ripple
+ * instead (the start stays, either edge), up to MAX_TIMELINE for the last one.
  */
 export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: number): Project {
   const at = find(p, id)
@@ -269,16 +327,21 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   if (!at || !asset || Number.isNaN(seconds)) return p
   const { clip, track, index } = at
   const clips = p.tracks[track].clips
-  const replace = (next: Clip) => withTrack(p, track, clips.map((c) => (c.id === id ? next : c)))
+  const replace = (next: Clip) => settle(p, withTrack(p, track, clips.map((c) => (c.id === id ? next : c))))
   const image = assetKind(asset) === "image"
   const start = clip.start
-  const { prevEnd, nextStart } = room(clips, index)
-  const maxLength = Math.min(nextStart, MAX_TIMELINE) - start
+  const room0 = room(clips, index)
+  const magnetic = track === 0 && isMagnetic(p)
+  // The latest this clip may end: its neighbour, or on a snapped base where the clips after it would end at MAX_TIMELINE.
+  const limit = magnetic ? MAX_TIMELINE - (trackEnd(p.tracks[0]) - clipEnd(clip)) : Math.min(room0.nextStart, MAX_TIMELINE)
+  // On a snapped base the left edge may reach back by that same growth; the start stays and the rest ripples.
+  const prevEnd = magnetic ? start - (limit - clipEnd(clip)) : room0.prevEnd
+  const maxLength = limit - start
   if (edge === "in" && image) {
     // The right end stays; the length is clamped (to the previous clip or 0 too) and the start follows.
     const end = clipEnd(clip)
     const length = Math.max(MIN_CLIP, Math.min(MAX_IMAGE, end - prevEnd, clipLength(clip) - (seconds - clip.in)))
-    return replace({ ...clip, in: 0, out: length, start: end - length })
+    return replace({ ...clip, in: 0, out: length, start: magnetic ? start : end - length })
   }
   if (edge === "in") {
     // How far the left edge moves: at most to the previous clip (or 0), and leaving at least MIN_CLIP.
@@ -287,7 +350,7 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
     // Only possible when the clip is already shorter than MIN_CLIP (the epsilon absorbs float rounding).
     if (hi < -1e-9) return p
     const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
-    return replace({ ...clip, in: clip.in + delta, start: start + delta })
+    return replace({ ...clip, in: clip.in + delta, start: magnetic ? start : start + delta })
   }
   if (image) return replace({ ...clip, in: 0, out: Math.max(MIN_CLIP, Math.min(MAX_IMAGE, maxLength, seconds)) })
   const out = Math.min(asset.duration, clip.in + maxLength, Math.max(seconds, clip.in + MIN_CLIP))
@@ -314,7 +377,7 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
     const cut = clip.in + local
     next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
   }
-  return withTrack(p, track, next)
+  return settle(p, withTrack(p, track, next))
 }
 
 const sameTransform = (a: Transform | undefined, b: Transform | undefined) =>
@@ -334,16 +397,16 @@ export function setTransform(p: Project, clipId: string, t: Transform): Project 
   return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? clip : c)))
 }
 
-/** Takes a clip out, leaving a gap (nothing ripples). */
+/** Takes a clip out, leaving a gap (nothing ripples; on a snapped base the clips after it close the gap). */
 export function removeClip(p: Project, id: string): Project {
   const at = find(p, id)
   if (!at) return p
-  return withTrack(p, at.track, p.tracks[at.track].clips.filter((c) => c.id !== id))
+  return settle(p, withTrack(p, at.track, p.tracks[at.track].clips.filter((c) => c.id !== id)))
 }
 
 /**
  * Takes an asset out of the project: its entry in `assets` and every clip on
- * every track that uses it (each leaves a gap). `removedClips` counts them.
+ * every track that uses it (each leaves a gap, closed on a snapped base). `removedClips` counts them.
  * An unknown id gives back the same project and 0. deleteAssetAction does
  * this on the server; the editor applies it locally with the action's reply.
  */
@@ -357,7 +420,7 @@ export function removeAsset(p: Project, assetId: string): { project: Project; re
   })
   const assets = { ...p.assets }
   delete assets[assetId]
-  return { project: { ...p, assets, tracks }, removedClips }
+  return { project: settle(p, { ...p, assets, tracks }), removedClips }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -386,6 +449,8 @@ function isInt(v: unknown, max: number): v is number {
  * 0, the layout they had; version 2 overlay starts are kept. In version 3
  * every clip needs a finite start >= 0. Each track comes back sorted by start,
  * and clips overlapping on a track, or ending past MAX_TIMELINE, are refused.
+ * `magnetic` must be a boolean; it's kept on the base only, whose clips are
+ * then packed end to end (gaps and overlaps there aren't refused).
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -412,6 +477,7 @@ export function parseProject(json: unknown): Project | null {
   for (const [t, raw] of rawTracks.entries()) {
     if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length < 1 || raw.id.length > MAX_TRACK_ID || trackIds.has(raw.id)) return null
     if (raw.muted !== undefined && typeof raw.muted !== "boolean") return null
+    if (raw.magnetic !== undefined && typeof raw.magnetic !== "boolean") return null
     if (!Array.isArray(raw.clips)) return null
     trackIds.add(raw.id)
     // Before version 3 the base track had no starts: its clips ran end to end.
@@ -450,10 +516,16 @@ export function parseProject(json: unknown): Project | null {
       clips.push(clip)
     }
     clips = sortByStart(clips)
+    // A snapped base is packed again (a stray gap or overlap can't stay); the flag counts on the base only.
+    const magnetic = t === 0 && raw.magnetic === true
+    if (magnetic) {
+      clips = endToEnd(clips)
+      if (clips.length > 0 && clipEnd(clips[clips.length - 1]) > MAX_TIMELINE + EPS) return null
+    }
     for (let i = 1; i < clips.length; i++) {
       if (clipEnd(clips[i - 1]) > clips[i].start + EPS) return null
     }
-    tracks.push(raw.muted ? { id: raw.id, muted: true, clips } : { id: raw.id, clips })
+    tracks.push({ id: raw.id, ...(raw.muted ? { muted: true } : {}), ...(magnetic ? { magnetic: true } : {}), clips })
   }
 
   return { version: 3, name, width, height, fps, assets: parsedAssets, tracks }

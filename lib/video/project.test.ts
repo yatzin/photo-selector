@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTrack, allClips, assetKind, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MAX_TRACKS,
-  mergeClientProject, MIN_CLIP, moveClip, newProject, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setTrackMuted, setTransform, splitClip, totalLength, trackClipAt,
-  trackEnd, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setBaseMagnetic, setTrackMuted, setTransform,
+  splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
 } from "./project"
+import { commit, createHistory, undo } from "./history"
 import { IDENTITY, type Transform } from "./transform"
 
 function sample(): Project {
@@ -1075,5 +1076,204 @@ describe("removeAsset", () => {
     expect(same.project).toBe(src)
     expect(same.removedClips).toBe(0)
     expect(removeAsset(src, "__proto__").project).toBe(src)
+  })
+})
+
+describe("magnetic base track (Snap)", () => {
+  /** A base track with gaps: m1 [1, 3), m2 [5, 8) and an image m3 [10, 12); one overlay clip o1. */
+  function gapped(): Project {
+    return {
+      ...newProject("snap"),
+      assets: {
+        a: { file: "a.mp4", duration: 10, hasAudio: true },
+        i: { file: "i.jpg", duration: DEFAULT_IMAGE, hasAudio: false, kind: "image" },
+      },
+      tracks: [
+        { id: "t1", clips: [{ id: "m1", asset: "a", in: 0, out: 2, start: 1 }, { id: "m2", asset: "a", in: 4, out: 7, start: 5 }, { id: "m3", asset: "i", in: 0, out: 2, start: 10 }] },
+        { id: "t2", clips: [{ id: "o1", asset: "a", in: 0, out: 2, start: 4 }] },
+      ],
+    }
+  }
+  /** The same, snapped: m1 [0, 2), m2 [2, 5), m3 [5, 7). */
+  const packed = () => setBaseMagnetic(gapped(), true)
+  const order = (p: Project) => base(p).map((c) => c.id)
+  const starts = (p: Project) => base(p).map((c) => c.start)
+
+  it("packs the base end to end in start order when switched on, as one edit with the flag", () => {
+    const src = gapped()
+    const swapped = { ...src, tracks: [{ ...src.tracks[0], clips: [...src.tracks[0].clips].reverse() }, src.tracks[1]] }
+    const p = setBaseMagnetic(swapped, true)
+    expect(p.tracks[0].magnetic).toBe(true)
+    expect(order(p)).toEqual(["m1", "m2", "m3"])
+    expect(starts(p)).toEqual([0, 2, 5])
+    expect(p.tracks[1]).toBe(src.tracks[1])
+    const h = commit(createHistory<Edit>({ tracks: src.tracks }), { tracks: setBaseMagnetic(src, true).tracks })
+    expect(h.past).toHaveLength(1)
+    expect(undo(h).present.tracks).toBe(src.tracks)
+  })
+
+  it("is the same project when nothing changes, and switching off keeps every position", () => {
+    const src = gapped()
+    expect(setBaseMagnetic(src, false)).toBe(src)
+    const p = packed()
+    expect(setBaseMagnetic(p, true)).toBe(p)
+    const off = setBaseMagnetic(p, false)
+    expect(off.tracks[0]).toEqual({ id: "t1", clips: base(p) })
+    // Free again: a gap can open.
+    expect(starts(moveClip(off, "m3", 0, { start: 9 }))).toEqual([0, 2, 9])
+  })
+
+  it("packBase lays the base end to end in start order, keeping transforms", () => {
+    const src = gapped()
+    src.tracks[0].clips[1] = { ...src.tracks[0].clips[1], transform: { ...IDENTITY, x: 0.1 } }
+    const p = packBase(src)
+    expect(starts(p)).toEqual([0, 2, 5])
+    expect(base(p)[1].transform).toEqual({ ...IDENTITY, x: 0.1 })
+    expect(p.tracks[0].magnetic).toBeUndefined()
+  })
+
+  it("baseInsertion counts the clips whose midpoint is before the time", () => {
+    const clips = base(packed())
+    expect(baseInsertion(clips, 0.9)).toEqual({ index: 0, start: 0 })
+    expect(baseInsertion(clips, 1.1)).toEqual({ index: 1, start: 2 })
+    expect(baseInsertion(clips, 3.6)).toEqual({ index: 2, start: 5 })
+    expect(baseInsertion(clips, 99)).toEqual({ index: 3, start: 7 })
+    // Leaving m2 out: the boundary is the end of the clip before (its own slot stays where it was).
+    expect(baseInsertion(clips, 3, "m2")).toEqual({ index: 1, start: 2 })
+    expect(baseInsertion(clips, NaN)).toEqual({ index: 0, start: 0 })
+  })
+
+  it("inserts a dropped clip at the midpoint index and pushes the rest along", () => {
+    const p = addClip(packed(), "a", 0, { start: 3 }, "n")
+    expect(order(p)).toEqual(["m1", "n", "m2", "m3"])
+    expect(starts(p)).toEqual([0, 2, 12, 15])
+    expect(order(addClip(packed(), "i", 0, { start: 0.5 }, "n"))).toEqual(["n", "m1", "m2", "m3"])
+    expect(starts(addClip(packed(), "i", 0, { start: 50 }, "n"))).toEqual([0, 2, 5, 7])
+    expect(addClip(packed(), "a", 0, { start: 50 }, "n").tracks[0].magnetic).toBe(true)
+  })
+
+  it("reorders within the base by the same rule", () => {
+    const p = moveClip(packed(), "m3", 0, { start: 0.5 })
+    expect(order(p)).toEqual(["m3", "m1", "m2"])
+    expect(starts(p)).toEqual([0, 2, 4])
+    const q = moveClip(packed(), "m1", 0, { start: 6.5 })
+    expect(order(q)).toEqual(["m2", "m3", "m1"])
+    expect(starts(q)).toEqual([0, 3, 5])
+    // Its own slot: nothing moves.
+    expect(base(moveClip(packed(), "m2", 0, { start: 2 }))).toEqual(base(packed()))
+  })
+
+  it("closes the gap behind a clip moved out of the base", () => {
+    const p = moveClip(packed(), "m1", 1, { start: 0 })
+    expect(order(p)).toEqual(["m2", "m3"])
+    expect(starts(p)).toEqual([0, 3])
+    expect(overlay(p).map((c) => [c.id, c.start])).toEqual([["m1", 0], ["o1", 4]])
+  })
+
+  it("inserts and packs a clip moved into the base from a layer", () => {
+    const p = moveClip(packed(), "o1", 0, { start: 4 })
+    expect(order(p)).toEqual(["m1", "m2", "o1", "m3"])
+    expect(starts(p)).toEqual([0, 2, 5, 7])
+    expect(overlay(p)).toEqual([])
+  })
+
+  it("ripples the following clips when either edge is trimmed, the start staying put", () => {
+    const out = trimClip(packed(), "m1", "out", 1)
+    expect(starts(out)).toEqual([0, 1, 4])
+    const longer = trimClip(packed(), "m2", "out", 10)
+    expect(base(longer)[1].out).toBe(10)
+    expect(starts(longer)).toEqual([0, 2, 8])
+    const left = trimClip(packed(), "m2", "in", 6)
+    expect(base(left)[1]).toMatchObject({ in: 6, out: 7, start: 2 })
+    expect(starts(left)).toEqual([0, 2, 3])
+    const back = trimClip(packed(), "m2", "in", 0)
+    expect(base(back)[1]).toMatchObject({ in: 0, out: 7, start: 2 })
+    expect(starts(back)).toEqual([0, 2, 9])
+  })
+
+  it("stretches an image past its old neighbour, rippling, and from the left keeps its start", () => {
+    const p = moveClip(packed(), "m3", 0, { start: 0 })
+    expect(order(p)).toEqual(["m3", "m1", "m2"])
+    const right = trimClip(p, "m3", "out", 6)
+    expect(base(right)[0]).toMatchObject({ in: 0, out: 6, start: 0 })
+    expect(starts(right)).toEqual([0, 6, 8])
+    const left = trimClip(p, "m3", "in", -3)
+    expect(base(left)[0]).toMatchObject({ in: 0, out: 5, start: 0 })
+    expect(starts(left)).toEqual([0, 5, 7])
+  })
+
+  it("keeps the base within MAX_TIMELINE when a trim or insert would push it past", () => {
+    const src = packed()
+    src.assets.l = { file: "l.mp4", duration: MAX_TIMELINE, hasAudio: true }
+    expect(addClip(src, "l", 0, { start: 99 }, "long")).toBe(src)
+    const big = { ...src, tracks: [{ ...src.tracks[0], clips: [...base(src), { id: "long", asset: "l", in: 0, out: MAX_TIMELINE - 8, start: 7 }] }, src.tracks[1]] }
+    const t = trimClip(big, "m3", "out", MAX_IMAGE)
+    expect(trackEnd(t.tracks[0])).toBeCloseTo(MAX_TIMELINE, 6)
+    expect(base(t)[2].out).toBeCloseTo(3, 6)
+  })
+
+  it("keeps the base packed through split, delete and removing media", () => {
+    const s = splitClip(packed(), "m2", 3, "half")
+    expect(order(s)).toEqual(["m1", "m2", "half", "m3"])
+    expect(starts(s)).toEqual([0, 2, 3, 5])
+    const r = removeClip(packed(), "m2")
+    expect(starts(r)).toEqual([0, 2])
+    expect(r.tracks[0].magnetic).toBe(true)
+    const a = removeAsset(packed(), "a").project
+    expect(order(a)).toEqual(["m3"])
+    expect(starts(a)).toEqual([0])
+  })
+
+  it("leaves overlay tracks free, and keeps the flag through mute", () => {
+    const p = addClip(packed(), "i", 1, { start: 20 }, "n")
+    expect(overlay(p).map((c) => c.start)).toEqual([4, 20])
+    expect(setBaseMagnetic({ ...gapped(), tracks: [] }, true).tracks).toEqual([])
+    const muted = setTrackMuted(packed(), "t1", true)
+    expect(muted.tracks[0]).toMatchObject({ muted: true, magnetic: true })
+    expect(setTrackMuted(muted, "t1", false).tracks[0]).toEqual({ id: "t1", magnetic: true, clips: base(packed()) })
+  })
+
+  it("is the free layout everywhere when the flag is off", () => {
+    expect(starts(moveClip(gapped(), "m3", 0, { start: 20 }))).toEqual([1, 5, 20])
+    expect(starts(removeClip(gapped(), "m2"))).toEqual([1, 10])
+  })
+
+  it("parses the flag on the base only, repacking a snapped base rather than refusing gaps", () => {
+    const json = JSON.parse(JSON.stringify(gapped()))
+    json.tracks[0].magnetic = true
+    const p = parseProject(json)!
+    expect(p.tracks[0].magnetic).toBe(true)
+    expect(starts(p)).toEqual([0, 2, 5])
+    // Overlapping base clips under the flag pack too.
+    json.tracks[0].clips[1].start = 1.5
+    expect(starts(parseProject(json)!)).toEqual([0, 2, 5])
+    expect(parseProject({ ...json, tracks: [{ ...json.tracks[0], magnetic: "yes" }, json.tracks[1]] })).toBeNull()
+    expect(parseProject({ ...json, tracks: [json.tracks[0], { ...json.tracks[1], magnetic: 1 }] })).toBeNull()
+    const overlayFlag = parseProject({ ...json, tracks: [json.tracks[0], { ...json.tracks[1], magnetic: true }] })!
+    expect(overlayFlag.tracks[1]).toEqual(gapped().tracks[1])
+    const off = parseProject({ ...json, tracks: [{ ...json.tracks[0], magnetic: false, clips: gapped().tracks[0].clips }, json.tracks[1]] })!
+    expect(off.tracks[0]).toEqual(gapped().tracks[0])
+    expect(parseProject(JSON.parse(JSON.stringify(packed())))).toEqual(packed())
+  })
+
+  it("refuses a snapped base that packs past MAX_TIMELINE", () => {
+    const json = JSON.parse(JSON.stringify(gapped()))
+    json.assets.l = { file: "l.mp4", duration: MAX_TIMELINE, hasAudio: true }
+    // Free, it fits where it is.
+    json.tracks[0].clips.push({ id: "long", asset: "l", in: 0, out: MAX_TIMELINE - 13, start: 13 })
+    expect(parseProject(json)).not.toBeNull()
+    // Snapped, it would end past the limit.
+    json.tracks[0].clips[3].out = MAX_TIMELINE - 1
+    json.tracks[0].clips[3].start = 0.5
+    json.tracks[0].magnetic = true
+    expect(parseProject(json)).toBeNull()
+  })
+
+  it("merges a client's snapped base, repacked", () => {
+    const client = JSON.parse(JSON.stringify(gapped()))
+    client.tracks[0].magnetic = true
+    const merged = mergeClientProject(client, gapped())!
+    expect(merged.tracks[0].magnetic).toBe(true)
+    expect(starts(merged)).toEqual([0, 2, 5])
   })
 })
