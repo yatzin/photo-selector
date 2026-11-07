@@ -11,7 +11,7 @@ import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } fr
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
 import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
-import { createProject, deleteProject, importAsset, readProject, renameProject, reusableAsset, writeProject } from "@/lib/video/projects-server"
+import { createProject, deleteAsset, deleteProject, importAsset, readProject, renameProject, reusableAsset, writeProject } from "@/lib/video/projects-server"
 
 // Server actions for video projects. The user's folder always comes from the
 // session, never from the client; failures come back as { error }.
@@ -126,6 +126,30 @@ export async function importAssetAction(
       if ("error" in imported) return imported
       await writeProject(userFolder, f.data, { ...project, assets: { ...project.assets, [imported.id]: imported.asset } })
       return imported
+    })
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/**
+ * Deletes a media item from the project: the asset, every clip on every track
+ * that uses it (the stored project is the source of truth; the client sends
+ * only ids) and its file in assets/ (best effort). Refused while the project
+ * is exporting. The editor, on { ok }, applies removeAsset(project, assetId)
+ * (lib/video/project) to its own copy and resets the undo history, so a save
+ * or an undo can't bring back clips of an asset that's gone (the server would
+ * refuse that save). The next export renders afresh because its clips changed.
+ */
+export async function deleteAssetAction(folder: string, assetId: string): Promise<{ ok: true; removedClips: number } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  const id = plainName.safeParse(assetId)
+  if (!f.success || !id.success) return { error: "Invalid request." }
+  try {
+    return await withLock(`${userFolder}/${f.data}`, async () => {
+      if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
+      return deleteAsset(userFolder, f.data, id.data)
     })
   } catch (error) {
     return { error: errorText(error) }

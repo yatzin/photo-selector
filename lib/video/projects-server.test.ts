@@ -7,7 +7,7 @@ import { DEFAULT_IMAGE, MIN_CLIP, newProject } from "./project"
 vi.mock("./ffmpeg-server", () => ({ probeMedia: vi.fn(async () => ({ duration: 12.5, hasAudio: true })) }))
 
 import { probeMedia } from "./ffmpeg-server"
-import { assetPath, createProject, deleteProject, importAsset, listProjects, readProject, renameProject, reusableAsset, writeProject } from "./projects-server"
+import { assetPath, createProject, deleteAsset, deleteProject, importAsset, listProjects, readProject, renameProject, reusableAsset, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-video-${process.pid}-${Date.now()}`)
 const projects = path.join(tmp, "projects")
@@ -266,6 +266,78 @@ describe("reusableAsset", () => {
     await fs.rm(path.join(user, "P", "assets", a.asset.file))
     await fs.mkdir(path.join(user, "P", "assets", a.asset.file))
     expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toBeNull()
+  })
+})
+
+describe("deleteAsset", () => {
+  /** A project holding two imported files, with clips of the first on two tracks and one of the second. */
+  async function twoAssets() {
+    await createProject("mike", "P")
+    const a = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    const b = await importAsset("mike", "P", ["mike", "sub"], "deep.mp4")
+    if ("error" in a || "error" in b) throw new Error("import failed")
+    const p = {
+      ...newProject("P"),
+      assets: { [a.id]: a.asset, [b.id]: b.asset },
+      tracks: [
+        { id: "t1", clips: [{ id: "c1", asset: a.id, in: 0, out: 2, start: 0 }, { id: "c2", asset: b.id, in: 0, out: 2, start: 2 }] },
+        { id: "t2", clips: [{ id: "o1", asset: a.id, in: 1, out: 3, start: 5 }] },
+      ],
+    }
+    await writeProject("mike", "P", p)
+    return { a, b }
+  }
+
+  it("removes the asset, every clip using it on every track, and its file", async () => {
+    const { a, b } = await twoAssets()
+    expect(await deleteAsset("mike", "P", a.id)).toEqual({ ok: true, removedClips: 2 })
+    const p = await readProject("mike", "P")
+    expect(Object.keys(p!.assets)).toEqual([b.id])
+    expect(p!.tracks.map((t) => t.clips.map((c) => c.id))).toEqual([["c2"], []])
+    expect(p!.tracks[0].clips[0].start).toBe(2)
+    expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual(["deep.mp4"])
+  })
+
+  it("lets the same Inbox file be imported fresh afterwards", async () => {
+    const { a } = await twoAssets()
+    await deleteAsset("mike", "P", a.id)
+    const p = await readProject("mike", "P")
+    expect(await reusableAsset("mike", "P", p!, "mike/clip.mp4")).toBeNull()
+  })
+
+  it("still succeeds when the file is already gone, and leaves a directory in its place alone", async () => {
+    const { a, b } = await twoAssets()
+    await fs.rm(path.join(user, "P", "assets", a.asset.file))
+    expect(await deleteAsset("mike", "P", a.id)).toEqual({ ok: true, removedClips: 2 })
+    await fs.rm(path.join(user, "P", "assets", b.asset.file))
+    await fs.mkdir(path.join(user, "P", "assets", b.asset.file))
+    expect(await deleteAsset("mike", "P", b.id)).toEqual({ ok: true, removedClips: 1 })
+    expect(await exists(user, "P", "assets", b.asset.file)).toBe(true)
+  })
+
+  it("keeps a file another asset still names", async () => {
+    const { a } = await twoAssets()
+    const p = await readProject("mike", "P")
+    await writeProject("mike", "P", { ...p!, assets: { ...p!.assets, twin: { ...a.asset } } })
+    await deleteAsset("mike", "P", a.id)
+    expect(await exists(user, "P", "assets", a.asset.file)).toBe(true)
+  })
+
+  it("changes nothing for an unknown id, and refuses a missing project", async () => {
+    await twoAssets()
+    const before = await fs.readFile(path.join(user, "P", "project.json"), "utf8")
+    expect(await deleteAsset("mike", "P", "nope")).toEqual({ ok: true, removedClips: 0 })
+    expect(await fs.readFile(path.join(user, "P", "project.json"), "utf8")).toBe(before)
+    expect(await deleteAsset("mike", "Nope", "x")).toEqual({ error: "Project not found." })
+    expect(await deleteAsset("mike", "../P", "x")).toEqual({ error: "Project not found." })
+  })
+
+  it("never removes a file outside assets/ through a forged file name", async () => {
+    await createProject("mike", "P")
+    const p = await readProject("mike", "P")
+    await writeProject("mike", "P", { ...p!, assets: { x: { file: "../project.json", duration: 5, hasAudio: false } } })
+    expect(await deleteAsset("mike", "P", "x")).toEqual({ ok: true, removedClips: 0 })
+    expect(await exists(user, "P", "project.json")).toBe(true)
   })
 })
 

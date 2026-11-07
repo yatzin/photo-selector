@@ -6,7 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
-import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
+import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -256,6 +256,31 @@ export async function reusableAsset(userFolder: string, folder: string, p: Proje
     }
   }
   return null
+}
+
+/**
+ * Takes a media item out of the stored project (call it under the project
+ * lock): the asset entry, every clip on every track that uses it, and its file
+ * in assets/ when no other asset names that file. Removing the file is best
+ * effort and only for a regular file (not a link) inside assets/; a failure
+ * there still returns ok. An id the project doesn't have changes nothing.
+ */
+export async function deleteAsset(userFolder: string, folder: string, assetId: string): Promise<{ ok: true; removedClips: number } | { error: string }> {
+  const p = await readProject(userFolder, folder)
+  if (!p) return { error: "Project not found." }
+  if (!Object.hasOwn(p.assets, assetId)) return { ok: true, removedClips: 0 }
+  const { file } = p.assets[assetId]
+  const { project, removedClips } = removeAsset(p, assetId)
+  await writeProject(userFolder, folder, project)
+  if (!Object.values(project.assets).some((a) => a.file === file)) {
+    const target = assetPath(userFolder, folder, file)
+    try {
+      if (target && (await fs.lstat(target)).isFile()) await fs.rm(target, { force: true })
+    } catch {
+      // Already gone, or the OS won't let go of it yet: the project no longer points at it either way.
+    }
+  }
+  return { ok: true, removedClips }
 }
 
 export function outputDir(userFolder: string, folder: string): string | null {
