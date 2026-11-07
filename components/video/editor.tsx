@@ -16,6 +16,7 @@ import {
   setClipMuted, setClipText, setTransform, splitClip, totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { DEFAULT_TEXT } from "@/lib/video/text"
+import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
@@ -629,6 +630,7 @@ export function Editor({
           text={textClip.text}
           length={clipLength(textClip)}
           section={textSection}
+          usedColours={usedTextColours(project, textClip.id)}
           onApply={(t) => {
             const id = textClip.id
             edit((p) => setClipText(p, id, t))

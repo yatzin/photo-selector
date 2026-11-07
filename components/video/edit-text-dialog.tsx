@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
 import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
 import { ANIM_GROUPS } from "@/lib/video/text-animation"
+import { previewBackdrop } from "@/lib/video/text-colours"
 import { cn } from "@/lib/utils"
 import { FontPicker } from "./font-picker"
 
@@ -15,7 +16,10 @@ import { FontPicker } from "./font-picker"
 // Enter; nothing wraps), its colour, whether the letters run across or
 // stack down, and its font (components/video/font-picker: 50 fonts filtered
 // by mood, each name drawn in its font as it scrolls into view; a sample
-// above shows the text in the chosen font and colour). An Animation tab (the clip menu's
+// above shows the text in the chosen font and colour, on a dark or light
+// backdrop by whichever shows that colour better, lib/video/text-colours).
+// Under Colour, a swatch for each colour other text clips in the project use
+// (usedColours, most used first) sets it in one click. An Animation tab (the clip menu's
 // "Animation..." opens on it) sets how the text comes in at the clip's start
 // and goes out at its end, each a type and a length in seconds; in and out
 // together longer than the clip are shortened to fit (lib/video/text
@@ -82,12 +86,14 @@ function AnimField({ id, label, kind, type, seconds, max, autoFocus, onType, onS
   )
 }
 
-export function EditTextDialog({ text, length, section = "text", onApply, onClose }: {
+export function EditTextDialog({ text, length, section = "text", usedColours = [], onApply, onClose }: {
   text: ClipText
   /** The clip's length (seconds): the longest an animation may be. */
   length: number
   /** The tab it opens on. */
   section?: TextSection
+  /** Colours (#rrggbb) other text clips in the project use, shown as swatches. */
+  usedColours?: string[]
   onApply: (text: ClipText) => void
   onClose: () => void
 }) {
@@ -123,6 +129,8 @@ export function EditTextDialog({ text, length, section = "text", onApply, onClos
       : tooLong(inType, inSeconds) || tooLong(outType, outSeconds)
         ? `An animation runs at most the clip's ${length.toFixed(1)} s.`
         : null
+
+  const backdrop = previewBackdrop(color)
 
   function apply() {
     if (!next) return
@@ -249,13 +257,37 @@ export function EditTextDialog({ text, length, section = "text", onApply, onClos
                   <option value="vertical">Vertical (stacked letters)</option>
                 </select>
               </div>
+              {usedColours.length > 0 && (
+                <div role="group" aria-label="Colours in other texts" className="col-span-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">In other texts</span>
+                  {usedColours.map((c) => {
+                    const hex = c.toUpperCase()
+                    const on = color.toLowerCase() === c.toLowerCase()
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        title={hex}
+                        aria-label={`Use colour ${hex}`}
+                        aria-pressed={on}
+                        onClick={() => setColor(c.toLowerCase())}
+                        className={cn(
+                          "h-6 w-6 rounded-full border border-foreground/30 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-4 focus-visible:outline-ring",
+                          on && "ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                        )}
+                        style={{ backgroundColor: c }}
+                      />
+                    )
+                  })}
+                </div>
+              )}
             </div>
             <div className="grid gap-1.5">
               <Label id="edit-text-font-label">Font</Label>
               <div
                 aria-hidden
-                className="flex h-16 items-center justify-center overflow-hidden rounded-lg bg-neutral-500 px-3 text-[32px] leading-none whitespace-pre"
-                style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color }}
+                className="flex h-16 items-center justify-center overflow-hidden rounded-lg border border-input px-3 text-[32px] leading-none whitespace-pre motion-safe:transition-colors motion-safe:duration-200"
+                style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, backgroundColor: backdrop.background }}
               >
                 {content.split("\n")[0] || " "}
               </div>
