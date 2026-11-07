@@ -293,7 +293,8 @@ Not while the project is exporting, or while that file is being imported.
   the Snap box, drop markers) is a light sky blue so it stands out.
 - **Text.** **Add text** in the toolbar puts a 5 s "Text" clip at the
   playhead, white and centred, selects it and opens **Edit text**: the text
-  (Enter starts a new line; nothing wraps), its colour and its direction. It
+  (Enter starts a new line; nothing wraps), its colour, its direction and its
+  font. It
   goes on the selected clip's layer; with nothing selected (or a clip on a
   snapped layer 1) on the lowest layer above the base that's free there, or a
   new layer. Double-click a text clip on the timeline or the preview, or
@@ -302,10 +303,20 @@ Not while the project is exporting, or while that file is being imported.
   and move, resize (the corner handles are its size), crop, turn and flip it
   in the preview. Its menu also has **Horizontal** and **Vertical** (one
   letter a line, stacked; a space leaves a gap), with a check on the current
-  one. On the timeline it's a violet block showing its text. The font is
-  Geist Mono Bold, bundled with the app, so the export draws it exactly where
-  the preview does; letters it lacks (emoji, some scripts) come from a
-  fallback font and may differ.
+  one. On the timeline it's a violet block showing its text.
+- **Fonts.** Edit text lists 13 fonts, each name drawn in its own font with
+  its mood: Mono (clean, the default and the font older text keeps), Anton
+  (headline), Fredoka (happy), Pacifico (cute script), Bangers (comic),
+  Permanent Marker (marker), Press Start 2P (arcade), Rubik Glitch (glitch),
+  Playfair Display Black (elegant), Special Elite (true crime), Creepster
+  (horror), Nosifer (dripping) and Reenie Beanie (spooky scrawl). Click one or
+  move through the list with the arrow keys; the sample above it shows your
+  text in it. Bangers and Creepster show lower case as capitals. The fonts are
+  bundled with the app (`public/fonts`, each licence beside it: SIL Open Font
+  License 1.1, or Apache 2.0 for Permanent Marker and Special Elite), so the
+  export draws the text where the preview does: the box comes from each font's
+  stored letter widths, the same numbers on both sides. Letters a font lacks
+  (emoji, some scripts) come from a fallback font and may differ.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
   an image or text, Edit length... The arrow keys, Home and End move through it,
@@ -340,12 +351,12 @@ alone). A failed export leaves the previous copy. Exporting again
 with no changes since (renaming the project or importing an unused file
 doesn't count) skips the render and downloads the copy already there.
 Each text clip is drawn into a transparent PNG first (ffmpeg's drawtext with
-the bundled font, `public/fonts/GeistMono-Bold.ttf`, SIL Open Font License
-1.1), in a temporary folder removed with the export, and placed like an image.
+the clip's bundled font file from `public/fonts`), in a temporary folder
+removed with the export, and placed like an image.
 
 **Limits in this version**
-- No transitions or audio import yet. Text has one font and no size box (use
-  the corner handles).
+- No transitions or audio import yet. Text has no size box (use the corner
+  handles) and no outline or shadow.
 - Cuts only.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
