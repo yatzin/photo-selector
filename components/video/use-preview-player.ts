@@ -106,7 +106,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     if (index >= 0) return index + 1
     const track = projectRef.current.tracks[lane]
     if (!track) return Infinity
-    const starts = trackStarts(track, lane === 0)
+    const starts = trackStarts(track)
     const i = starts.findIndex((s) => s > t)
     return i < 0 ? Infinity : i
   }, [])
@@ -134,7 +134,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     (lane: number, t: number) => {
       const L = lanes.current[lane]
       const track = projectRef.current.tracks[lane]
-      const at = track ? trackClipAt(track, lane === 0, t) : null
+      const at = track ? trackClipAt(track, t) : null
       L.index = at ? at.index : -1
       const clip = at && track ? track.clips[at.index] : undefined
       if (clip && at && !isImage(clip)) load(lane, L.active, clip.asset, at.sourceTime)
@@ -252,7 +252,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         }
         // A file that ends (or stalls at its real end) before the clip's out point can't drive the clock.
         if (v.paused || v.ended || (Number.isFinite(v.duration) && v.currentTime >= v.duration - END_MARGIN)) continue
-        const start = trackStarts(p.tracks[lane], lane === 0)[lanes.current[lane].index]
+        const start = trackStarts(p.tracks[lane])[lanes.current[lane].index]
         t = Math.max(clock.current.t, start + (v.currentTime - clip.in))
         if (v.currentTime >= clip.out - END_MARGIN) t = Math.max(t, start + clipLength(clip))
         master = lane
@@ -293,14 +293,13 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       let swapped = false
       for (let lane = 0; lane < p.tracks.length; lane++) {
         const track = p.tracks[lane]
-        const isBase = lane === 0
         const L = lanes.current[lane]
-        const starts = trackStarts(track, isBase)
+        const starts = trackStarts(track)
         const current = track.clips[L.index]
         // Move on just before the current clip's out point, as if at its end.
         const end = current ? starts[L.index] + clipLength(current) : Infinity
         const look = t >= end - END_MARGIN ? Math.max(t, end) : t
-        const at = trackClipAt(track, isBase, look)
+        const at = trackClipAt(track, look)
         const index = at ? at.index : -1
         if (index === L.index) {
           // Keep a following lane's video with the clock (not while it's held for a stall).

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTrack, allClips, assetKind, clipAt, clipsAt, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MAX_TRACKS, mergeClientProject, MIN_CLIP,
-  moveClip, newProject, parseProject, removeClip, removeTrack, resolveStart, setTrackMuted, setTransform, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, allClips, assetKind, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MAX_TRACKS,
+  mergeClientProject, MIN_CLIP, moveClip, newProject, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setTrackMuted, setTransform, splitClip, totalLength, trackClipAt,
+  trackEnd, trackStarts, trimClip, type Clip, type Project,
 } from "./project"
-import { IDENTITY } from "./transform"
+import { IDENTITY, type Transform } from "./transform"
 
 function sample(): Project {
   return {
@@ -12,8 +13,8 @@ function sample(): Project {
     tracks: [{
       id: "t1",
       clips: [
-        { id: "c1", asset: "a", in: 0, out: 3 },
-        { id: "c2", asset: "a", in: 2, out: 4 },
+        { id: "c1", asset: "a", in: 0, out: 3, start: 0 },
+        { id: "c2", asset: "a", in: 2, out: 4, start: 3 },
       ],
     }],
   }
@@ -26,44 +27,91 @@ describe("newProject", () => {
   it("defaults to 1920x1080 at 30fps with one empty base track", () => {
     const p = newProject("x")
     expect([p.width, p.height, p.fps]).toEqual([1920, 1080, 30])
-    expect(p.version).toBe(2)
+    expect(p.version).toBe(3)
     expect(p.tracks).toEqual([{ id: "t1", clips: [] }])
   })
 })
 
-describe("clipStarts and totalLength", () => {
-  it("lays clips end to end", () => {
+describe("trackStarts, trackEnd and totalLength", () => {
+  it("reads each clip's start and the latest end", () => {
     const p = sample()
-    expect(clipStarts(base(p))).toEqual([0, 3])
+    expect(trackStarts(p.tracks[0])).toEqual([0, 3])
+    expect(trackEnd(p.tracks[0])).toBe(5)
     expect(totalLength(p)).toBe(5)
+  })
+
+  it("counts a gap before or between base clips", () => {
+    const p = { ...sample(), tracks: [{ id: "t1", clips: [{ ...base(sample())[0], start: 2 }, { ...base(sample())[1], start: 9 }] }] }
+    expect(totalLength(p)).toBe(11)
+    expect(trackEnd({ id: "x", clips: [] })).toBe(0)
+  })
+})
+
+describe("endToEnd and isContiguousFromZero", () => {
+  it("lays clips end to end from 0, replacing any start", () => {
+    expect(endToEnd([{ id: "a", asset: "a", in: 1, out: 3 }, { id: "b", asset: "a", in: 0, out: 1.5, start: 9 } as Clip]).map((c) => c.start)).toEqual([0, 2])
+  })
+
+  it("is true for clips back to back from 0 (or none), false with a gap", () => {
+    expect(isContiguousFromZero(base(sample()))).toBe(true)
+    expect(isContiguousFromZero([])).toBe(true)
+    expect(isContiguousFromZero([{ ...base(sample())[0], start: 0.5 }])).toBe(false)
+    expect(isContiguousFromZero([base(sample())[0], { ...base(sample())[1], start: 3.5 }])).toBe(false)
   })
 })
 
 describe("addClip", () => {
-  it("inserts at the index with the full asset length", () => {
-    const p = addClip(sample(), "a", 0, { index: 1 }, "n")
-    expect(base(p).map((c) => c.id)).toEqual(["c1", "n", "c2"])
-    expect(base(p)[1]).toEqual({ id: "n", asset: "a", in: 0, out: 10 })
+  it("places the clip at its start with the full asset length, sliding past overlaps; nothing ripples", () => {
+    const p = addClip(sample(), "a", 0, { start: 1 }, "n")
+    expect(base(p).map((c) => [c.id, c.start])).toEqual([["c1", 0], ["c2", 3], ["n", 5]])
+    expect(base(p)[2]).toEqual({ id: "n", asset: "a", in: 0, out: 10, start: 5 })
+  })
+
+  it("leaves a gap on the base track when placed past the end", () => {
+    const p = addClip(sample(), "a", 0, { start: 8 }, "n")
+    expect(base(p).map((c) => [c.id, c.start])).toEqual([["c1", 0], ["c2", 3], ["n", 8]])
+    expect(totalLength(p)).toBe(18)
+  })
+
+  it("fits in a gap before the first base clip", () => {
+    const src = { ...sample(), assets: { ...sample().assets, s: { file: "s.mp4", duration: 1, hasAudio: false } } }
+    const gapped = { ...src, tracks: [{ id: "t1", clips: base(src).map((c) => ({ ...c, start: c.start + 2 })) }] }
+    expect(base(addClip(gapped, "s", 0, { start: 0.5 }, "n"))[0]).toMatchObject({ id: "n", start: 0.5 })
   })
 
   it("does nothing for an asset shorter than MIN_CLIP", () => {
     const p = { ...sample(), assets: { ...sample().assets, z: { file: "z.mp4", duration: MIN_CLIP / 2, hasAudio: false } } }
-    expect(addClip(p, "z", 0, { index: 0 }, "n")).toBe(p)
+    expect(addClip(p, "z", 0, { start: 0 }, "n")).toBe(p)
   })
 })
 
 describe("trimClip", () => {
-  it("clamps in to out - MIN_CLIP", () => {
+  it("clamps in to out - MIN_CLIP, moving the start with it", () => {
     const p = trimClip(sample(), "c1", "in", 5)
     expect(base(p)[0].in).toBeCloseTo(3 - MIN_CLIP)
+    expect(base(p)[0].start).toBeCloseTo(3 - MIN_CLIP)
+    expect(base(p)[1].start).toBe(3)
   })
 
-  it("clamps out to the asset duration", () => {
-    expect(base(trimClip(sample(), "c1", "out", 99))[0].out).toBe(10)
+  it("clamps out to the asset duration, and to the next clip", () => {
+    expect(base(trimClip(sample(), "c2", "out", 99))[1].out).toBe(10)
+    expect(base(trimClip(sample(), "c1", "out", 99))[0].out).toBe(3)
   })
 
-  it("clamps negative seconds to 0", () => {
-    expect(base(trimClip(sample(), "c2", "in", -4))[1].in).toBe(0)
+  it("clamps negative seconds to 0, and stops at the previous clip", () => {
+    expect(base(trimClip(sample(), "c1", "in", -4))[0]).toMatchObject({ in: 0, start: 0 })
+    expect(base(trimClip(sample(), "c2", "in", -4))[1]).toMatchObject({ in: 2, start: 3 })
+  })
+
+  it("un-trims the left edge into a gap before it, nothing else moving", () => {
+    const p = { ...sample(), tracks: [{ id: "t1", clips: [base(sample())[0], { ...base(sample())[1], start: 4 }] }] }
+    const q = trimClip(p, "c2", "in", 0)
+    expect(base(q)[1]).toMatchObject({ in: 1, out: 4, start: 3 })
+    expect(base(q)[0]).toBe(base(p)[0])
+  })
+
+  it("shortening a base clip leaves a gap instead of rippling", () => {
+    expect(base(trimClip(sample(), "c1", "out", 1))[1].start).toBe(3)
   })
 
   it("clamps out to in + MIN_CLIP", () => {
@@ -72,9 +120,9 @@ describe("trimClip", () => {
 })
 
 describe("splitClip", () => {
-  it("splits at the timeline time", () => {
+  it("splits at the timeline time, the second part starting there", () => {
     const p = splitClip(sample(), "c1", 1, "s")
-    expect(base(p).map((c) => [c.id, c.in, c.out])).toEqual([["c1", 0, 1], ["s", 1, 3], ["c2", 2, 4]])
+    expect(base(p).map((c) => [c.id, c.in, c.out, c.start])).toEqual([["c1", 0, 1, 0], ["s", 1, 3, 1], ["c2", 2, 4, 3]])
   })
 
   it("uses the clip's offset on the timeline", () => {
@@ -138,7 +186,7 @@ describe("trimClip invariants", () => {
     const p: Project = {
       ...newProject("short"),
       assets: { s: { file: "s.mp4", duration: 0.1, hasAudio: false } },
-      tracks: [{ id: "t1", clips: [{ id: "c1", asset: "s", in: 0, out: 0.1 }] }],
+      tracks: [{ id: "t1", clips: [{ id: "c1", asset: "s", in: 0, out: 0.1, start: 0 }] }],
     }
     for (const edge of ["in", "out"] as const) {
       for (const s of [-1, 0, 0.05, 0.1, 5]) expect(trimClip(p, "c1", edge, s)).toBe(p)
@@ -146,7 +194,7 @@ describe("trimClip invariants", () => {
   })
 
   it("still allows a trim to exactly MIN_CLIP despite float rounding", () => {
-    const p: Project = { ...newProject("f"), assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0.7, out: 5 }] }] }
+    const p: Project = { ...newProject("f"), assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0.7, out: 5, start: 0 }] }] }
     expect(base(trimClip(p, "c1", "out", 0))[0].out).toBeCloseTo(0.7 + MIN_CLIP)
   })
 })
@@ -154,19 +202,26 @@ describe("trimClip invariants", () => {
 describe("addClip duplicate id", () => {
   it("is a no-op when the id is already used", () => {
     const p = sample()
-    expect(addClip(p, "a", 0, { index: 0 }, "c1")).toBe(p)
+    expect(addClip(p, "a", 0, { start: 0 }, "c1")).toBe(p)
   })
 })
 
 describe("moveClip", () => {
-  it("moves a clip to the end", () => {
-    expect(base(moveClip(sample(), "c1", 0, { index: 1 })).map((c) => c.id)).toEqual(["c2", "c1"])
+  it("moves a base clip past the end, leaving a gap where it was", () => {
+    const p = moveClip(sample(), "c1", 0, { start: 6 })
+    expect(base(p).map((c) => [c.id, c.start])).toEqual([["c2", 3], ["c1", 6]])
+  })
+
+  it("slides clear of a clip it would overlap, and stays put without a start", () => {
+    expect(base(moveClip(sample(), "c1", 0, { start: 4 })).map((c) => [c.id, c.start])).toEqual([["c2", 3], ["c1", 5]])
+    const p = sample()
+    expect(base(moveClip(p, "c2", 0, {}))).toEqual(base(p))
   })
 })
 
 describe("removeClip", () => {
-  it("drops the clip", () => {
-    expect(base(removeClip(sample(), "c1")).map((c) => c.id)).toEqual(["c2"])
+  it("drops the clip and leaves a gap on the base track", () => {
+    expect(base(removeClip(sample(), "c1"))).toEqual([{ id: "c2", asset: "a", in: 2, out: 4, start: 3 }])
   })
 })
 
@@ -178,11 +233,12 @@ describe("purity", () => {
     trimClip(p, "o1", "in", 1.5)
     splitClip(p, "c1", 1, "s")
     splitClip(p, "o1", 2, "s")
-    moveClip(p, "c1", 0, { index: 1 })
+    moveClip(p, "c1", 0, { start: 9 })
     moveClip(p, "c1", 1, { start: 9 })
     removeClip(p, "c1")
     removeClip(p, "o1")
-    addClip(p, "a", 0, { index: 0 }, "n")
+    removeAsset(p, "a")
+    addClip(p, "a", 0, { start: 0 }, "n")
     addClip(p, "a", 1, { start: 1 }, "n")
     addTrack(p)
     removeTrack(p, "t2")
@@ -203,9 +259,10 @@ describe("parseProject", () => {
     expect(parseProject({ ...sample(), width: 7680, height: 4320, fps: 120 })).not.toBeNull()
   })
 
-  it("rejects an unknown version, or version 2 without tracks", () => {
-    expect(parseProject({ ...sample(), version: 3 })).toBeNull()
+  it("rejects an unknown version, or version 2 or 3 without tracks", () => {
+    expect(parseProject({ ...sample(), version: 4 })).toBeNull()
     expect(parseProject({ version: 2 })).toBeNull()
+    expect(parseProject({ version: 3 })).toBeNull()
   })
 
   it("rejects non-objects", () => {
@@ -215,7 +272,7 @@ describe("parseProject", () => {
 
   it("rejects clips referencing an unknown asset", () => {
     const p = sample()
-    base(p).push({ id: "c3", asset: "missing", in: 0, out: 1 })
+    base(p).push({ id: "c3", asset: "missing", in: 0, out: 1, start: 5 })
     expect(parseProject(p)).toBeNull()
   })
 
@@ -233,7 +290,7 @@ describe("parseProject", () => {
   it("rejects out-of-range clips", () => {
     for (const [i, o] of [[-1, 3], [3, 3], [4, 3], [0, 11]]) {
       const p = sample()
-      base(p)[0] = { id: "c1", asset: "a", in: i, out: o }
+      base(p)[0] = { id: "c1", asset: "a", in: i, out: o, start: 0 }
       expect(parseProject(p)).toBeNull()
     }
   })
@@ -256,10 +313,10 @@ describe("parseProject: version 1 files", () => {
     clips: [{ id: "c1", asset: "a", in: 0, out: 3 }, { id: "c2", asset: "a", in: 2, out: 4 }],
   })
 
-  it("migrates flat clips to one base track and returns version 2", () => {
+  it("migrates flat clips to one base track, end to end from 0, and returns version 3", () => {
     const p = parseProject(v1())
-    expect(p?.version).toBe(2)
-    expect(p?.tracks).toEqual([{ id: "t1", clips: v1().clips }])
+    expect(p?.version).toBe(3)
+    expect(p?.tracks).toEqual([{ id: "t1", clips: [{ ...v1().clips[0], start: 0 }, { ...v1().clips[1], start: 3 }] }])
     expect(p).not.toHaveProperty("clips")
     expect(p && totalLength(p)).toBe(5)
   })
@@ -279,7 +336,7 @@ function layered(): Project {
       i: { file: "i.jpg", duration: DEFAULT_IMAGE, hasAudio: false, kind: "image" },
     },
     tracks: [
-      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 3 }, { id: "c2", asset: "a", in: 2, out: 4 }] },
+      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 3, start: 0 }, { id: "c2", asset: "a", in: 2, out: 4, start: 3 }] },
       { id: "t2", clips: [{ id: "o1", asset: "a", in: 4, out: 6, start: 1 }, { id: "o2", asset: "i", in: 0, out: 2, start: 5 }] },
     ],
   }
@@ -293,31 +350,38 @@ describe("parseProject: tracks", () => {
     expect(parseProject(JSON.parse(JSON.stringify(p)))).toEqual(p)
   })
 
-  it("drops muted: false and a start on the base track", () => {
+  it("drops muted: false", () => {
     const p = layered()
-    const parsed = parseProject({ ...p, tracks: [{ ...p.tracks[0], muted: false, clips: [{ ...base(p)[0], start: 4 }, base(p)[1]] }, p.tracks[1]] })
+    const parsed = parseProject({ ...p, tracks: [{ ...p.tracks[0], muted: false }, p.tracks[1]] })
     expect(parsed?.tracks[0]).toEqual({ id: "t1", clips: base(p) })
   })
 
-  it("sorts an overlay track by start", () => {
+  it("sorts every track by start and keeps gaps on the base", () => {
     const p = layered()
-    const parsed = parseProject({ ...p, tracks: [p.tracks[0], { id: "t2", clips: [...overlay(p)].reverse() }] })
+    const gapped = [{ ...base(p)[1], start: 8 }, { ...base(p)[0], start: 2 }]
+    const parsed = parseProject({ ...p, tracks: [{ id: "t1", clips: gapped }, { id: "t2", clips: [...overlay(p)].reverse() }] })
     expect(parsed && overlay(parsed).map((c) => c.id)).toEqual(["o1", "o2"])
+    expect(parsed && base(parsed).map((c) => [c.id, c.start])).toEqual([["c1", 2], ["c2", 8]])
   })
 
-  it("requires a finite, non-negative start on overlay clips", () => {
+  it("requires a finite, non-negative start on every clip, base track included", () => {
     for (const start of [undefined, -1, Infinity, NaN, "1"]) {
       const p = layered()
       const bad = { ...p, tracks: [p.tracks[0], { id: "t2", clips: [{ ...overlay(p)[0], start }] }] }
       expect(parseProject(bad)).toBeNull()
+      const badBase = { ...p, tracks: [{ id: "t1", clips: [{ ...base(p)[0], start }] }, p.tracks[1]] }
+      expect(parseProject(badBase)).toBeNull()
     }
   })
 
-  it("rejects overlapping clips on an overlay track, accepts touching ones", () => {
+  it("rejects overlapping clips on any track, accepts touching ones", () => {
     const p = layered()
     const at = (s: number) => ({ ...p, tracks: [p.tracks[0], { id: "t2", clips: [overlay(p)[0], { ...overlay(p)[1], start: s }] }] })
     expect(parseProject(at(2.9))).toBeNull()
     expect(parseProject(at(3))).not.toBeNull()
+    const onBase = (s: number) => ({ ...p, tracks: [{ id: "t1", clips: [base(p)[0], { ...base(p)[1], start: s }] }, p.tracks[1]] })
+    expect(parseProject(onBase(2.5))).toBeNull()
+    expect(parseProject(onBase(3))).not.toBeNull()
   })
 
   it("rejects no tracks, more than MAX_TRACKS, duplicate track ids and a bad track", () => {
@@ -341,6 +405,47 @@ describe("parseProject: tracks", () => {
   })
 })
 
+describe("parseProject: version 2 files", () => {
+  // A version 2 file: the base track end to end with no starts, overlays with starts.
+  const v2 = () => ({
+    version: 2, name: "v2", width: 1920, height: 1080, fps: 30,
+    assets: layered().assets,
+    tracks: [
+      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 3 }, { id: "c2", asset: "a", in: 2, out: 4 }, { id: "c3", asset: "i", in: 0, out: 1.5 }] },
+      { id: "t2", muted: true, clips: [{ id: "o1", asset: "a", in: 4, out: 6, start: 1 }] },
+    ],
+  })
+
+  it("lays the base end to end from 0 (the layout it had), keeps overlay starts, and returns version 3", () => {
+    const p = parseProject(v2())
+    expect(p?.version).toBe(3)
+    expect(p && base(p).map((c) => [c.id, c.start])).toEqual([["c1", 0], ["c2", 3], ["c3", 5]])
+    expect(p && overlay(p)).toEqual([{ id: "o1", asset: "a", in: 4, out: 6, start: 1 }])
+    expect(p?.tracks[1].muted).toBe(true)
+  })
+
+  it("keeps the same timeline: length and the clip at every time", () => {
+    const p = parseProject(v2())!
+    expect(totalLength(p)).toBe(6.5)
+    for (const t of [0, 1.5, 2.99, 3, 4.9, 5, 6.4, 6.5]) {
+      const old = [[0, 3, "c1", 0], [3, 5, "c2", 2], [5, 6.5, "c3", 0]].find(([s, e]) => t >= (s as number) && t < (e as number))
+      const hit = clipsAt(p, t).tracks[0]
+      expect(hit && [hit.clip.id, hit.sourceTime]).toEqual(old ? [old[2], (old[3] as number) + t - (old[0] as number)] : null)
+    }
+  })
+
+  it("ignores a start on a version 2 base clip, as version 2 did", () => {
+    const raw = v2()
+    raw.tracks[0].clips[1] = { ...raw.tracks[0].clips[1], start: 40 } as (typeof raw.tracks)[0]["clips"][number]
+    expect(parseProject(raw) && base(parseProject(raw)!)[1].start).toBe(3)
+  })
+
+  it("parses back to the same project once written as version 3", () => {
+    const p = parseProject(v2())!
+    expect(parseProject(JSON.parse(JSON.stringify(p)))).toEqual(p)
+  })
+})
+
 describe("mergeClientProject", () => {
   const stored: Project = {
     ...newProject("P"),
@@ -352,7 +457,7 @@ describe("mergeClientProject", () => {
     const client = {
       ...stored,
       assets: { a1: { file: "../../evil.mp4", duration: 10, hasAudio: true }, a2: { file: "x.mp4", duration: 5, hasAudio: false } },
-      tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5 }]),
+      tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: 0 }]),
     }
     const merged = mergeClientProject(client, stored)
     expect(merged?.assets).toEqual(stored.assets)
@@ -363,20 +468,20 @@ describe("mergeClientProject", () => {
     const client = {
       ...stored,
       assets: { a2: { file: "x.mp4", duration: 5, hasAudio: false } },
-      tracks: one([{ id: "c1", asset: "a2", in: 0, out: 5 }]),
+      tracks: one([{ id: "c1", asset: "a2", in: 0, out: 5, start: 0 }]),
     }
     expect(mergeClientProject(client, stored)).toBeNull()
   })
 
   it("keeps the stored name and settings (a stale tab can't revert a rename)", () => {
-    const client = { ...stored, name: "Stale", width: 1280, height: 720, fps: 25, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5 }]) }
+    const client = { ...stored, name: "Stale", width: 1280, height: 720, fps: 25, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: 0 }]) }
     const merged = mergeClientProject(client, stored)
     expect(merged && [merged.name, merged.width, merged.height, merged.fps]).toEqual(["P", 1920, 1080, 30])
     expect(merged && base(merged)).toHaveLength(1)
   })
 
   it("rejects a clip beyond the stored asset's duration", () => {
-    const client = { ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 50 }]) }
+    const client = { ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 50, start: 0 }]) }
     expect(mergeClientProject(client, stored)).toBeNull()
   })
 
@@ -385,19 +490,30 @@ describe("mergeClientProject", () => {
     expect(mergeClientProject(client, stored)?.tracks).toEqual(client.tracks)
   })
 
-  it("accepts a version 1 client and returns version 2", () => {
+  it("accepts a version 1 or 2 client and returns version 3", () => {
     const client = { ...stored, version: 1, tracks: undefined, clips: [{ id: "c1", asset: "a1", in: 0, out: 5 }] }
     const merged = mergeClientProject(client, stored)
-    expect(merged?.version).toBe(2)
-    expect(merged && base(merged)).toEqual([{ id: "c1", asset: "a1", in: 0, out: 5 }])
+    expect(merged?.version).toBe(3)
+    expect(merged && base(merged)).toEqual([{ id: "c1", asset: "a1", in: 0, out: 5, start: 0 }])
+    const v2 = { ...stored, version: 2, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5 }, { id: "c2", asset: "a1", in: 1, out: 2 }]) }
+    expect(mergeClientProject(v2, stored)?.tracks[0].clips.map((c) => c.start)).toEqual([0, 5])
+  })
+
+  it("takes base clips with gaps, and rejects a base clip without a start, overlapping or past MAX_TIMELINE", () => {
+    const merged = mergeClientProject({ ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: 2 }, { id: "c2", asset: "a1", in: 0, out: 1, start: 9 }]) }, stored)
+    expect(merged && base(merged).map((c) => c.start)).toEqual([2, 9])
+    expect(mergeClientProject({ ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5 }]) }, stored)).toBeNull()
+    expect(mergeClientProject({ ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: 0 }, { id: "c2", asset: "a1", in: 0, out: 1, start: 4 }]) }, stored)).toBeNull()
+    expect(mergeClientProject({ ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: MAX_TIMELINE - 4 }]) }, stored)).toBeNull()
+    expect(mergeClientProject({ ...stored, tracks: one([{ id: "c1", asset: "a1", in: 0, out: 5, start: MAX_TIMELINE - 5 }]) }, stored)).not.toBeNull()
   })
 
   it(`rejects more than ${MAX_CLIPS} clips in total, overlaps, too many tracks and bad starts`, () => {
-    const clip = (id: string, start?: number) => ({ id, asset: "a1", in: 0, out: 1, ...(start === undefined ? {} : { start }) })
+    const clip = (id: string, start: number) => ({ id, asset: "a1", in: 0, out: 1, start })
     const half = MAX_CLIPS / 2
-    const many = (n: number, prefix: string, overlay: boolean) => Array.from({ length: n }, (_, i) => clip(`${prefix}${i}`, overlay ? i : undefined))
-    expect(mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: many(half, "b", false) }, { id: "t2", clips: many(half, "o", true) }] }, stored)).not.toBeNull()
-    expect(mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: many(half, "b", false) }, { id: "t2", clips: many(half + 1, "o", true) }] }, stored)).toBeNull()
+    const many = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => clip(`${prefix}${i}`, i))
+    expect(mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: many(half, "b") }, { id: "t2", clips: many(half, "o") }] }, stored)).not.toBeNull()
+    expect(mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: many(half, "b") }, { id: "t2", clips: many(half + 1, "o") }] }, stored)).toBeNull()
     expect(mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: [] }, { id: "t2", clips: [clip("x", 0), clip("y", 0.5)] }] }, stored)).toBeNull()
     const five = Array.from({ length: MAX_TRACKS + 1 }, (_, i) => ({ id: `t${i}`, clips: [] }))
     expect(mergeClientProject({ ...stored, tracks: five }, stored)).toBeNull()
@@ -416,8 +532,8 @@ function withImage(): Project {
     tracks: [{
       id: "t1",
       clips: [
-        { id: "c1", asset: "a", in: 0, out: 3 },
-        { id: "p", asset: "i", in: 0, out: 4 },
+        { id: "c1", asset: "a", in: 0, out: 3, start: 0 },
+        { id: "p", asset: "i", in: 0, out: 4, start: 3 },
       ],
     }],
   }
@@ -434,7 +550,7 @@ describe("assetKind", () => {
 describe("image clips", () => {
   it("addClip gives an image clip the default length", () => {
     const p = { ...withImage(), assets: { ...withImage().assets, i: { ...withImage().assets.i, duration: 99 } } }
-    expect(base(addClip(p, "i", 0, { index: 0 }, "n"))[0]).toEqual({ id: "n", asset: "i", in: 0, out: DEFAULT_IMAGE })
+    expect(base(addClip(p, "i", 0, { start: 0 }, "n")).find((c) => c.id === "n")).toEqual({ id: "n", asset: "i", in: 0, out: DEFAULT_IMAGE, start: 7 })
   })
 
   it("trims the out edge to the new length, with in staying 0", () => {
@@ -443,13 +559,18 @@ describe("image clips", () => {
     expect(base(trimClip(withImage(), "p", "out", 300))[1]).toMatchObject({ in: 0, out: 300 })
   })
 
-  it("trims the in edge by shortening or lengthening the clip, with in staying 0", () => {
-    expect(base(trimClip(withImage(), "p", "in", 1.5))[1]).toMatchObject({ in: 0, out: 2.5 })
-    expect(base(trimClip(withImage(), "p", "in", -2))[1]).toMatchObject({ in: 0, out: 6 })
+  it("trims the in edge by shortening or lengthening the clip (moving its start), with in staying 0", () => {
+    expect(base(trimClip(withImage(), "p", "in", 1.5))[1]).toMatchObject({ in: 0, out: 2.5, start: 4.5 })
+    // Against the previous clip it can't grow left.
+    expect(base(trimClip(withImage(), "p", "in", -2))[1]).toMatchObject({ in: 0, out: 4, start: 3 })
+    const gap = { ...withImage(), tracks: [{ id: "t1", clips: [base(withImage())[0], { ...base(withImage())[1], start: 5 }] }] }
+    expect(base(trimClip(gap, "p", "in", -1))[1]).toMatchObject({ in: 0, out: 5, start: 4 })
   })
 
   it("clamps image lengths to MIN_CLIP..MAX_IMAGE", () => {
-    const len = (edge: "in" | "out", s: number) => base(trimClip(withImage(), "p", edge, s))[1].out
+    // The image alone, far enough along to grow left to MAX_IMAGE.
+    const lone = { ...withImage(), tracks: [{ id: "t1", clips: [{ ...base(withImage())[1], start: 700 }] }] }
+    const len = (edge: "in" | "out", s: number) => base(trimClip(lone, "p", edge, s))[0].out
     expect(len("out", 0)).toBe(MIN_CLIP)
     expect(len("out", MAX_IMAGE + 50)).toBe(MAX_IMAGE)
     expect(len("in", 10)).toBe(MIN_CLIP)
@@ -458,7 +579,7 @@ describe("image clips", () => {
     expect(len("out", -Infinity)).toBe(MIN_CLIP)
     expect(len("in", Infinity)).toBe(MIN_CLIP)
     expect(len("in", -Infinity)).toBe(MAX_IMAGE)
-    for (const edge of ["in", "out"] as const) expect(base(trimClip(withImage(), "p", edge, 3))[1].in).toBe(0)
+    for (const edge of ["in", "out"] as const) expect(base(trimClip(lone, "p", edge, 3))[0].in).toBe(0)
   })
 
   it("ignores NaN on an image clip", () => {
@@ -478,9 +599,9 @@ describe("image clips", () => {
     expect(splitClip(p, "p", 6.9, "s")).toBe(p)
   })
 
-  it("clipAt gives the time inside an image clip", () => {
-    expect(clipAt(base(withImage()), 4.5)).toEqual({ index: 1, sourceTime: 1.5 })
-    expect(clipAt(base(withImage()), 7)).toBeNull()
+  it("trackClipAt gives the time inside an image clip", () => {
+    expect(trackClipAt(withImage().tracks[0], 4.5)).toEqual({ index: 1, start: 3, sourceTime: 1.5 })
+    expect(trackClipAt(withImage().tracks[0], 7)).toBeNull()
   })
 })
 
@@ -492,14 +613,14 @@ describe("parseProject with images", () => {
 
   it("accepts an image clip longer than the asset's duration, up to MAX_IMAGE", () => {
     const p = withImage()
-    base(p)[1] = { id: "p", asset: "i", in: 0, out: MAX_IMAGE }
+    base(p)[1] = { id: "p", asset: "i", in: 0, out: MAX_IMAGE, start: 3 }
     expect(parseProject(p)).not.toBeNull()
   })
 
   it("rejects image clips that don't start at 0 or are out of range", () => {
     for (const [i, o] of [[1, 3], [0, MIN_CLIP / 2], [0, MAX_IMAGE + 1], [0, 0]]) {
       const p = withImage()
-      base(p)[1] = { id: "p", asset: "i", in: i, out: o }
+      base(p)[1] = { id: "p", asset: "i", in: i, out: o, start: 3 }
       expect(parseProject(p)).toBeNull()
     }
   })
@@ -515,12 +636,12 @@ describe("parseProject with images", () => {
 
   it("mergeClientProject keeps stored image assets and validates against them", () => {
     const stored = withImage()
-    const client = { ...stored, assets: { ...stored.assets, x: { file: "x.jpg", duration: 5, hasAudio: false, kind: "image" } }, tracks: [{ id: "t1", clips: [{ id: "p", asset: "i", in: 0, out: 60 }] }] }
+    const client = { ...stored, assets: { ...stored.assets, x: { file: "x.jpg", duration: 5, hasAudio: false, kind: "image" } }, tracks: [{ id: "t1", clips: [{ id: "p", asset: "i", in: 0, out: 60, start: 0 }] }] }
     const merged = mergeClientProject(client, stored)
     expect(merged?.assets).toEqual(stored.assets)
-    expect(merged && base(merged)).toEqual([{ id: "p", asset: "i", in: 0, out: 60 }])
+    expect(merged && base(merged)).toEqual([{ id: "p", asset: "i", in: 0, out: 60, start: 0 }])
     // A client can't stretch a video past its length by calling it an image.
-    const spoof = { ...stored, assets: { ...stored.assets, a: { ...stored.assets.a, kind: "image" } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 60 }] }] }
+    const spoof = { ...stored, assets: { ...stored.assets, a: { ...stored.assets.a, kind: "image" } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 60, start: 0 }] }] }
     expect(mergeClientProject(spoof, stored)).toBeNull()
   })
 })
@@ -545,10 +666,10 @@ describe("allClips, trackStarts and totalLength over tracks", () => {
     expect(allClips(layered()).map((c) => c.id)).toEqual(["c1", "c2", "o1", "o2"])
   })
 
-  it("lays out the base end to end and overlays by start", () => {
+  it("reads every track's starts", () => {
     const p = layered()
-    expect(trackStarts(p.tracks[0], true)).toEqual([0, 3])
-    expect(trackStarts(p.tracks[1], false)).toEqual([1, 5])
+    expect(trackStarts(p.tracks[0])).toEqual([0, 3])
+    expect(trackStarts(p.tracks[1])).toEqual([1, 5])
   })
 
   it("is the latest clip end over all tracks", () => {
@@ -568,6 +689,13 @@ describe("clipsAt", () => {
     const r = clipsAt(layered(), 4)
     expect(r.tracks[1]).toBeNull()
     expect(r.top).toMatchObject({ track: 0, index: 1, sourceTime: 3, clip: { id: "c2" } })
+  })
+
+  it("is null on the base track in a gap", () => {
+    const p = layered()
+    p.tracks[0].clips[1] = { ...p.tracks[0].clips[1], start: 4 }
+    expect(clipsAt(p, 3.5).tracks[0]).toBeNull()
+    expect(clipsAt(p, 4.5).tracks[0]).toMatchObject({ index: 1, sourceTime: 2.5 })
   })
 
   it("has only overlay clips past the base end and nothing past the total", () => {
@@ -629,7 +757,7 @@ describe("addClip on overlay tracks", () => {
     const p = layered()
     expect(addClip(p, "a", 5, { start: 0 }, "n")).toBe(p)
     expect(addClip(p, "a", -1, { start: 0 }, "n")).toBe(p)
-    expect(addClip(p, "a", 0, { index: 0 }, "o1")).toBe(p)
+    expect(addClip(p, "a", 0, { start: 0 }, "o1")).toBe(p)
     expect(addClip(p, "a", 1, { start: 9 }, "c1")).toBe(p)
   })
 })
@@ -642,11 +770,12 @@ describe("moveClip between tracks", () => {
     expect(overlay(p)[1]).toEqual({ id: "c2", asset: "a", in: 2, out: 4, start: 3 })
   })
 
-  it("moves an overlay clip into the base at an index, dropping its start", () => {
-    const p = moveClip(layered(), "o1", 0, { index: 1 })
-    expect(base(p).map((c) => c.id)).toEqual(["c1", "o1", "c2"])
-    expect(base(p)[1]).toEqual({ id: "o1", asset: "a", in: 4, out: 6 })
+  it("moves an overlay clip onto the base at a start, sliding clear of base clips", () => {
+    const p = moveClip(layered(), "o1", 0, { start: 7 })
+    expect(base(p).map((c) => c.id)).toEqual(["c1", "c2", "o1"])
+    expect(base(p)[2]).toEqual({ id: "o1", asset: "a", in: 4, out: 6, start: 7 })
     expect(overlay(p).map((c) => c.id)).toEqual(["o2"])
+    expect(base(moveClip(layered(), "o1", 0, { start: 4 }))[2].start).toBe(5)
   })
 
   it("moves within an overlay track, resolving overlaps without counting itself", () => {
@@ -661,7 +790,7 @@ describe("moveClip between tracks", () => {
 
   it("is a no-op for an unknown clip or track", () => {
     const p = layered()
-    expect(moveClip(p, "zz", 0, { index: 0 })).toBe(p)
+    expect(moveClip(p, "zz", 0, { start: 0 })).toBe(p)
     expect(moveClip(p, "c1", 7, { start: 0 })).toBe(p)
   })
 })
@@ -764,11 +893,13 @@ describe("the 6 hour timeline limit", () => {
     expect(parseProject(edge)).not.toBeNull()
   })
 
-  it("parseProject rejects a base track longer than 6 hours", () => {
+  it("parseProject rejects a version 2 base track longer than 6 hours, and a version 3 base clip ending past it", () => {
     const p = long()
     const clips = [{ id: "b1", asset: "h", in: 0, out: 4 * 3600 }, { id: "b2", asset: "h", in: 0, out: 2 * 3600 + 1 }]
-    expect(parseProject({ ...p, tracks: [{ id: "t1", clips }] })).toBeNull()
-    expect(parseProject({ ...p, tracks: [{ id: "t1", clips: [clips[0], { ...clips[1], out: 2 * 3600 }] }] })).not.toBeNull()
+    expect(parseProject({ ...p, version: 2, tracks: [{ id: "t1", clips }] })).toBeNull()
+    expect(parseProject({ ...p, version: 2, tracks: [{ id: "t1", clips: [clips[0], { ...clips[1], out: 2 * 3600 }] }] })).not.toBeNull()
+    expect(parseProject({ ...p, tracks: [{ id: "t1", clips: [{ ...clips[0], start: 2 * 3600 + 1 }] }] })).toBeNull()
+    expect(parseProject({ ...p, tracks: [{ id: "t1", clips: [{ ...clips[0], start: 2 * 3600 }] }] })).not.toBeNull()
   })
 
   it("resolveStart keeps a clip inside the limit", () => {
@@ -782,14 +913,14 @@ describe("the 6 hour timeline limit", () => {
     expect(addClip(p, "a", 1, { start: MAX_TIMELINE - 6 }, "n")).toBe(p)
   })
 
-  it("addClip refuses a base clip that would take the base past the limit", () => {
-    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 4 * 3600 }] }] }
+  it("addClip refuses a base clip that can't fit before the limit", () => {
+    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 4 * 3600, start: 0 }] }] }
     expect(addClip(p, "h", 0, {}, "n")).toBe(p)
     expect(base(addClip(p, "a", 0, {}, "n"))).toHaveLength(2)
   })
 
   it("trimClip stops an edge at the limit", () => {
-    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 3 * 3600 }, { id: "b2", asset: "h", in: 3600, out: 4 * 3600 }] }] }
+    const p = { ...long(), tracks: [{ id: "t1", clips: [{ id: "b1", asset: "h", in: 0, out: 3 * 3600, start: 0 }, { id: "b2", asset: "h", in: 3600, out: 4 * 3600, start: 3 * 3600 }] }] }
     expect(base(trimClip(p, "b1", "out", 4 * 3600))[0].out).toBe(3 * 3600)
     expect(base(trimClip(p, "b2", "in", 0))[1].in).toBe(3600)
     const q = { ...long(), tracks: [p.tracks[0], { id: "t2", clips: [{ id: "o", asset: "h", in: 0, out: 10, start: MAX_TIMELINE - 20 }] }] }
@@ -798,7 +929,7 @@ describe("the 6 hour timeline limit", () => {
 })
 
 describe("clip transforms", () => {
-  const half = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
+  const half: Transform = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
   const withTransform = (p: Project, id: string, t = half): Project =>
     ({ ...p, tracks: p.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.id === id ? { ...c, transform: t } : c)) })) })
   const clip = (p: Project, id: string) => allClips(p).find((c) => c.id === id)
@@ -814,7 +945,7 @@ describe("clip transforms", () => {
 
   it("setTransform with the identity removes the field", () => {
     const q = setTransform(withTransform(layered(), "c1"), "c1", IDENTITY)
-    expect(clip(q, "c1")).toEqual({ id: "c1", asset: "a", in: 0, out: 3 })
+    expect(clip(q, "c1")).toEqual({ id: "c1", asset: "a", in: 0, out: 3, start: 0 })
     expect("transform" in (clip(q, "c1") ?? {})).toBe(false)
   })
 
@@ -839,8 +970,8 @@ describe("clip transforms", () => {
   it("moveClip keeps it within and across tracks, trimClip keeps it", () => {
     const p = withTransform(layered(), "c1")
     expect(clip(moveClip(p, "c1", 1, { start: 8 }), "c1")?.transform).toEqual(half)
-    expect(clip(moveClip(p, "c1", 0, { index: 2 }), "c1")?.transform).toEqual(half)
-    expect(clip(moveClip(withTransform(layered(), "o1"), "o1", 0, { index: 0 }), "o1")?.transform).toEqual(half)
+    expect(clip(moveClip(p, "c1", 0, { start: 9 }), "c1")?.transform).toEqual(half)
+    expect(clip(moveClip(withTransform(layered(), "o1"), "o1", 0, { start: 9 }), "o1")?.transform).toEqual(half)
     expect(clip(trimClip(p, "c1", "out", 2), "c1")?.transform).toEqual(half)
   })
 
@@ -848,7 +979,28 @@ describe("clip transforms", () => {
     const p = withTransform(withTransform(layered(), "o2"), "c2", IDENTITY)
     const parsed = parseProject(JSON.parse(JSON.stringify(p)))
     expect(clip(parsed!, "o2")?.transform).toEqual(half)
-    expect(clip(parsed!, "c2")).toEqual({ id: "c2", asset: "a", in: 2, out: 4 })
+    expect(clip(parsed!, "c2")).toEqual({ id: "c2", asset: "a", in: 2, out: 4, start: 3 })
+  })
+
+  it("parseProject keeps a left and right crop, leaves out zero ones, and rejects bad ones", () => {
+    const sides = { ...half, cropLeft: 0.2, cropRight: 0.3 }
+    const parsed = parseProject(JSON.parse(JSON.stringify(withTransform(layered(), "o1", sides))))
+    expect(clip(parsed!, "o1")?.transform).toEqual(sides)
+    const zero = parseProject(JSON.parse(JSON.stringify(withTransform(layered(), "o1", { ...half, cropLeft: 0, cropRight: 0 }))))
+    expect(clip(zero!, "o1")?.transform).toEqual(half)
+    for (const bad of [{ ...half, cropLeft: -0.1 }, { ...half, cropRight: 0.95 }, { ...half, cropLeft: 0.5, cropRight: 0.5 }, { ...half, cropLeft: "0.1" }]) {
+      expect(parseProject(JSON.parse(JSON.stringify(withTransform(layered(), "o1", bad as typeof half))))).toBeNull()
+    }
+  })
+
+  it("setTransform keeps a left and right crop, and splitClip and moveClip carry it", () => {
+    const sides = { ...half, cropLeft: 0.2, cropRight: 0.1 }
+    const p = setTransform(layered(), "c1", sides)
+    expect(clip(p, "c1")?.transform).toEqual(sides)
+    expect(clip(splitClip(p, "c1", 1, "n"), "n")?.transform).toEqual(sides)
+    expect(clip(moveClip(p, "c1", 1, { start: 8 }), "c1")?.transform).toEqual(sides)
+    expect(setTransform(p, "c1", { ...sides })).toBe(p)
+    expect(clip(setTransform(p, "c1", { ...sides, cropLeft: 0 }), "c1")?.transform).toEqual({ ...half, cropRight: 0.1 })
   })
 
   it("parseProject copies only the transform's own fields", () => {
@@ -869,5 +1021,59 @@ describe("clip transforms", () => {
   it("mergeClientProject keeps the client's transforms", () => {
     const merged = mergeClientProject(JSON.parse(JSON.stringify(withTransform(layered(), "c1"))), layered())
     expect(clip(merged!, "c1")?.transform).toEqual(half)
+  })
+})
+
+describe("freeTrackFor", () => {
+  it("gives the lowest track where the span is free, gaps on the base included", () => {
+    const p = layered() // base 0-5; overlay 1-3 and 5-7
+    expect(freeTrackFor(p, 5, 1)).toBe(0)
+    expect(freeTrackFor(p, 3, 2)).toBe(1)
+    expect(freeTrackFor(p, 4, 0.5)).toBe(1)
+  })
+
+  it("gives a new track's index when no track is free and there's room, else null", () => {
+    const p = layered()
+    expect(freeTrackFor(p, 2, 2)).toBe(2)
+    expect(freeTrackFor(p, 2, 2, { max: 2 })).toBeNull()
+    const full = addTrack(addTrack(p))
+    expect(freeTrackFor(full, 2, 2)).toBe(2)
+    const busy = { ...full, tracks: full.tracks.map((t, i) => (i < 2 ? t : { ...t, clips: [{ id: `x${i}`, asset: "a", in: 0, out: 9, start: 0 }] })) }
+    expect(freeTrackFor(busy, 2, 2)).toBeNull()
+  })
+
+  it("leaves out a clip by id (the one being moved)", () => {
+    expect(freeTrackFor(layered(), 0, 3, { ignore: "c1" })).toBe(0)
+  })
+})
+
+describe("removeAsset", () => {
+  it("removes the asset and every clip using it on every track, leaving gaps", () => {
+    const src = layered()
+    const { project, removedClips } = removeAsset(src, "a")
+    expect(removedClips).toBe(3)
+    expect(project.assets).toEqual({ i: src.assets.i })
+    expect(base(project)).toEqual([])
+    expect(overlay(project)).toEqual([{ id: "o2", asset: "i", in: 0, out: 2, start: 5 }])
+    expect(project.tracks.map((t) => t.id)).toEqual(["t1", "t2"])
+  })
+
+  it("leaves other assets and tracks without its clips untouched", () => {
+    const src = layered()
+    const { project, removedClips } = removeAsset(src, "i")
+    expect(removedClips).toBe(1)
+    expect(project.assets.a).toBe(src.assets.a)
+    expect(project.tracks[0]).toBe(src.tracks[0])
+  })
+
+  it("removes an unused asset with no clips, and is a no-op for an unknown id", () => {
+    const src = { ...layered(), assets: { ...layered().assets, z: { file: "z.mp4", duration: 3, hasAudio: true } } }
+    const r = removeAsset(src, "z")
+    expect(r.removedClips).toBe(0)
+    expect(Object.keys(r.project.assets)).toEqual(["a", "i"])
+    const same = removeAsset(src, "nope")
+    expect(same.project).toBe(src)
+    expect(same.removedClips).toBe(0)
+    expect(removeAsset(src, "__proto__").project).toBe(src)
   })
 })

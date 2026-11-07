@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { exportFingerprint } from "./export-state"
-import { newProject, type Project } from "./project"
+import { newProject, removeAsset, type Project } from "./project"
 
 function project(): Project {
   return {
@@ -10,11 +10,13 @@ function project(): Project {
       i: { file: "photo.jpg", duration: 5, hasAudio: false, kind: "image" },
     },
     tracks: [
-      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4 }, { id: "c2", asset: "i", in: 0, out: 3 }] },
+      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }, { id: "c2", asset: "i", in: 0, out: 3, start: 4 }] },
       { id: "t2", clips: [{ id: "o1", asset: "a", in: 1, out: 2, start: 2 }] },
     ],
   }
 }
+
+const IDENTITY_LIKE = { x: 0, y: 0, scale: 1, cropTop: 0, cropBottom: 0 }
 
 /** The same object with every key in reverse order, deeply. */
 function reversed(value: unknown): unknown {
@@ -44,7 +46,8 @@ describe("exportFingerprint", () => {
     const fps = { ...p, fps: 25 }
     const size = { ...p, width: 1280, height: 720 }
     const layers = { ...p, tracks: [...p.tracks].reverse() }
-    for (const changed of [trimmed, moved, reordered, muted, otherFile, fps, size, layers]) expect(exportFingerprint(changed)).not.toBe(base)
+    const gap = { ...p, tracks: [{ ...p.tracks[0], clips: [p.tracks[0].clips[0], { ...p.tracks[0].clips[1], start: 5 }] }, p.tracks[1]] }
+    for (const changed of [trimmed, moved, reordered, muted, otherFile, fps, size, layers, gap]) expect(exportFingerprint(changed)).not.toBe(base)
   })
 
   it("is unchanged by renaming the project or importing an unused asset", () => {
@@ -62,6 +65,17 @@ describe("exportFingerprint", () => {
     expect(exportFingerprint(withT({ ...half, scale: 0.6 }))).not.toBe(exportFingerprint(withT(half)))
     expect(exportFingerprint(withT({ ...half, cropBottom: 0.1 }))).not.toBe(exportFingerprint(withT(half)))
     expect(exportFingerprint(withT({ x: 0, y: 0, scale: 1, cropTop: 0, cropBottom: 0 }))).toBe(exportFingerprint(p))
+    expect(exportFingerprint(withT({ ...half, cropLeft: 0.1 }))).not.toBe(exportFingerprint(withT(half)))
+    expect(exportFingerprint(withT({ ...half, cropRight: 0.1 }))).not.toBe(exportFingerprint(withT({ ...half, cropLeft: 0.1 })))
+    expect(exportFingerprint(withT({ ...half, cropLeft: 0, cropRight: 0 }))).toBe(exportFingerprint(withT(half)))
+    expect(exportFingerprint(withT({ ...IDENTITY_LIKE, cropLeft: 0 }))).toBe(exportFingerprint(p))
+  })
+
+  it("changes when a used asset is removed from the project (its clips go too), not for an unused one", () => {
+    const p = project()
+    expect(exportFingerprint(removeAsset(p, "a").project)).not.toBe(exportFingerprint(p))
+    const unused = { ...p, assets: { ...p.assets, z: { file: "unused.mp4", duration: 3, hasAudio: true } } }
+    expect(exportFingerprint(removeAsset(unused, "z").project)).toBe(exportFingerprint(p))
   })
 
   it("treats a video asset with no kind like one with kind video", () => {

@@ -4,18 +4,18 @@ import { useEffect, useRef, useState } from "react"
 import { Film, Image as ImageIcon, Plus, Volume2, VolumeX, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, clipLength, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_TRACKS, moveClip, removeTrack, resolveStart, setTrackMuted,
+  addClip, addTrack, assetKind, clipLength, DEFAULT_IMAGE, findAssetsBySource, MAX_TRACKS, moveClip, removeTrack, resolveStart, setTrackMuted,
   totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { newId } from "@/lib/video/ids"
-import { dropIndex, snapStart, trimDelta } from "@/lib/video/timeline-math"
+import { snapStart, trimDelta } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and stacked tracks (layers), the top layer at
-// the top and the base track (V1) at the bottom. Base clips sit end to end
-// (the track closes gaps); overlay clips sit at their own start and draw over
-// the layers below. Drag a clip along or between tracks, drag its edge
+// the top and the base track (V1) at the bottom. Clips on every track sit at
+// their own start, gaps allowed, and a higher layer draws over the ones below.
+// Drag a clip along or between tracks, drag its edge
 // handles to trim, drop a file from the left panel onto a track to add it (an
 // Inbox file is imported first), or onto the dashed row above to add a layer.
 
@@ -23,28 +23,25 @@ export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
 export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
 
-/** Where a clip lands: a track (one past the top makes a new layer), and its index on the base track or its start on an overlay. */
-export type DropTarget = { track: number; index?: number; start?: number }
+/** Where a clip lands: a track (one past the top makes a new layer) and its start there. */
+export type DropTarget = { track: number; start: number }
 
 const HEADER = 44 // px, the sticky column with each track's label and mute
 const ROW = 80 // px per track
 const NEW_ROW = 36 // px, the add-a-layer drop zone above the top track
 const TRACK_PAD = 240 // px of empty timeline after the last clip, room to drag overlay clips into
 const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
-const SNAP_PX = 8 // px within which a dragged overlay clip snaps to the playhead, 0 or another clip's edge
+const SNAP_PX = 8 // px within which a dragged clip snaps to the playhead, 0 or another clip's edge
 
 const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE))
 
-/** The time where a clip inserted at `index` among base `clips` would start. */
-const insertAt = (clips: Clip[], index: number) => (index < clips.length ? clipStarts(clips)[index] : clips.reduce((t, c) => t + clipLength(c), 0))
+const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start)
 
-const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.index === b.index && a.start === b.start)
-
-/** 0, the playhead and both edges of every clip but `ignore`: where a dragged overlay clip snaps. */
+/** 0, the playhead and both edges of every clip but `ignore`: where a dragged clip snaps. */
 function snapPoints(p: Project, playhead: number, ignore?: string): number[] {
   const points = [0, playhead]
-  p.tracks.forEach((t, i) => {
-    const starts = trackStarts(t, i === 0)
+  p.tracks.forEach((t) => {
+    const starts = trackStarts(t)
     t.clips.forEach((c, k) => {
       if (c.id !== ignore) points.push(starts[k], starts[k] + clipLength(c))
     })
@@ -153,13 +150,12 @@ export function Timeline({
   }
 
   /**
-   * Where a clip `length` long lands on `track`: on the base, the index for
-   * `probe` (a time); on an overlay, its left edge `left` snapped and slid
-   * clear of the clips there. `ignore` is the clip being moved.
+   * Where a clip `length` long lands on `track`: its left edge `left` (the
+   * pointer time) snapped and slid clear of the clips there. `ignore` is the
+   * clip being moved.
    */
-  function targetFor(track: number, left: number, probe: number, length: number, ignore?: string): DropTarget {
+  function targetFor(track: number, left: number, length: number, ignore?: string): DropTarget {
     const { project: p, playhead: t, zoom: z } = live.current
-    if (track === 0) return { track, index: dropIndex(p.tracks[0].clips.filter((c) => c.id !== ignore), probe) }
     const start = snapStart(left, length, snapPoints(p, t, ignore), SNAP_PX, z)
     return { track, start: resolveStart(p.tracks[track]?.clips ?? [], length, start, ignore) }
   }
@@ -219,7 +215,7 @@ export function Timeline({
   }
 
   /** Press on a clip: a click selects it, a drag moves it along its track or onto another one. */
-  function startMove(e: React.PointerEvent, clip: Clip, track: number, index: number, left: number) {
+  function startMove(e: React.PointerEvent, clip: Clip, track: number, left: number) {
     if (e.button !== 0) return
     const startX = e.clientX
     const startY = e.clientY
@@ -233,7 +229,7 @@ export function Timeline({
         if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return
         moved = true
         const newLeft = Math.max(0, left + dx / live.current.zoom)
-        to = targetFor(rowAt(ev.clientY), newLeft, newLeft + length / 2, length, clip.id)
+        to = targetFor(rowAt(ev.clientY), newLeft, length, clip.id)
         setDrag({ id: clip.id, length, dx, dy, target: to })
       },
       () => {
@@ -241,7 +237,7 @@ export function Timeline({
         if (!moved) return onSelect(clip.id)
         const t = to
         if (!t) return
-        const stays = t.track === track && (track === 0 ? t.index === index : Math.abs((t.start ?? 0) - left) < 1e-9)
+        const stays = t.track === track && Math.abs(t.start - left) < 1e-9
         if (!stays) onChange((p) => moveClip(p, clip.id, t.track, t))
       }
     )
@@ -253,7 +249,7 @@ export function Timeline({
     e.preventDefault()
     e.dataTransfer.dropEffect = "copy"
     const t = timeAt(e.clientX)
-    const next = targetFor(track, t, t, outside?.length ?? DEFAULT_IMAGE)
+    const next = targetFor(track, t, outside?.length ?? DEFAULT_IMAGE)
     setDrop((prev) => (sameTarget(prev, next) ? prev : next))
   }
 
@@ -273,7 +269,7 @@ export function Timeline({
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
-      const to = targetFor(track, t, t, assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration)
+      const to = targetFor(track, t, assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration)
       const id = newId()
       onChange((p) => addClip(p, assetId, to.track, to, id))
       return
@@ -281,7 +277,7 @@ export function Timeline({
     try {
       const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
       // The clip's real length is known after the import; addClip slides it clear of overlaps again then.
-      if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, targetFor(track, t, t, outside?.length ?? DEFAULT_IMAGE))
+      if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, targetFor(track, t, outside?.length ?? DEFAULT_IMAGE))
     } catch {
       // Not our drag after all.
     }
@@ -343,7 +339,7 @@ export function Timeline({
                 {dragging ? "Drop here to add a layer" : "Drag media here for a new layer"}
               </span>
               {/* -2 px: the ghost sits inside this row's border, and lines up with the time grid. */}
-              {target?.track === project.tracks.length && ghost(target.start ?? 0, -2)}
+              {target?.track === project.tracks.length && ghost(target.start, -2)}
             </div>
           </div>
         )}
@@ -352,14 +348,8 @@ export function Timeline({
           const track = shown.tracks[i]
           const isBase = i === 0
           const muted = Boolean(track.muted)
-          // An in-edge trim on the base keeps every clip where it was, so the left edge
-          // follows the pointer, and ripples on release; an out-edge trim ripples as you drag.
-          const layoutTrack = trim?.edge === "in" && isBase ? project.tracks[0] : track
-          const starts = trackStarts(layoutTrack, isBase)
+          const starts = trackStarts(track)
           const label = isBase ? "Layer 1 (base)" : `Layer ${i + 1}`
-          // Where the dragged clip (or a dropped file) would go on the base: an insertion line.
-          const others = drag ? track.clips.filter((c) => c.id !== drag.id) : track.clips
-          const marker = isBase && target?.track === 0 && target.index !== undefined ? insertAt(others, target.index) : null
           return (
             <div key={track.id} className="flex border-b border-border/60" style={{ height: ROW }}>
               <div className="sticky left-0 z-30 flex shrink-0 flex-col items-center justify-center gap-0.5 border-r border-border/60 bg-card text-[11px]" style={{ width: HEADER }}>
@@ -409,9 +399,7 @@ export function Timeline({
                   const asset = project.assets[clip.asset]
                   const file = asset?.file
                   const image = asset !== undefined && assetKind(asset) === "image"
-                  // Zero except for the base clip whose in edge is being dragged: how far that edge has moved.
-                  const inShift = isBase ? clipLength(layoutTrack.clips[k]) - clipLength(clip) : 0
-                  const left = starts[k] + inShift
+                  const left = starts[k]
                   return (
                     <div
                       key={clip.id}
@@ -419,7 +407,7 @@ export function Timeline({
                       tabIndex={0}
                       aria-label={`${label}, clip ${k + 1} of ${track.clips.length}, ${image ? "image " : ""}${file ?? "missing file"}, at ${formatTimecode(starts[k])}, ${clipLength(clip).toFixed(1)} seconds`}
                       aria-pressed={selectedId === clip.id}
-                      onPointerDown={(e) => startMove(e, clip, i, k, starts[k])}
+                      onPointerDown={(e) => startMove(e, clip, i, starts[k])}
                       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
                       className={cn(
                         "group absolute top-2 bottom-2 touch-none select-none overflow-hidden rounded-lg border outline-none",
@@ -468,8 +456,7 @@ export function Timeline({
                     </div>
                   )
                 })}
-                {!isBase && target?.track === i && ghost(target.start ?? 0)}
-                {marker !== null && <div className="pointer-events-none absolute inset-y-1 z-30 w-0.5 -translate-x-1/2 rounded-full bg-primary" style={{ left: marker * zoom }} />}
+                {target?.track === i && ghost(target.start)}
               </div>
             </div>
           )

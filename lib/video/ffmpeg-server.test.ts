@@ -5,8 +5,8 @@ import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
-import { newProject, totalLength, type Clip, type Project } from "./project"
-import { clipRect, IDENTITY, type Transform } from "./transform"
+import { endToEnd, newProject, totalLength, type Clip, type Project } from "./project"
+import { clipRect, cropLeftOf, cropRightOf, IDENTITY, type Transform } from "./transform"
 
 describe("parseProbe", () => {
   it("reads duration and audio", () => {
@@ -23,8 +23,8 @@ describe("parseProbe", () => {
   })
 })
 
-/** One base track holding `clips`. */
-const base = (clips: Clip[]) => [{ id: "t1", clips }]
+/** One base track holding `clips` end to end from 0. */
+const base = (clips: Omit<Clip, "start">[]) => [{ id: "t1", clips: endToEnd(clips) }]
 
 function twoClips(): Project {
   return {
@@ -119,7 +119,7 @@ describe("buildExportArgs with layers", () => {
         b: { file: "b.mp4", duration: 5, hasAudio: true },
       },
       tracks: [
-        { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4 }] },
+        { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] },
         { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1 }] },
         { id: "t3", muted: true, clips: [{ id: "m", asset: "b", in: 1, out: 2, start: 2.5 }] },
       ],
@@ -175,6 +175,34 @@ describe("buildExportArgs with layers", () => {
   })
 })
 
+describe("buildExportArgs with gaps on the base track", () => {
+  const frame = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30"
+  const project = (clips: Clip[]): Project => ({ ...twoClips(), tracks: [{ id: "t1", clips }] })
+
+  it("puts a base clip with a gap before it on the black canvas from its start, its audio delayed", () => {
+    const g = graph(buildExportArgs(project([{ id: "c1", asset: "a", in: 1, out: 3, start: 2 }]), files, "o"))
+    expect(g).not.toContain("concat")
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=4,format=yuv420p[bg]")
+    expect(g).toContain(`[0:v]trim=1:3,setpts=PTS-STARTPTS,${frame},setpts=PTS+2/TB[v0]`)
+    expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0*W:y=(H-h/1)/2+0*H+0*h/1:eval=init:enable='between(t,2,4)':eof_action=pass[v]")
+    expect(g).toContain("adelay=delays=96000S:all=1[a0]")
+    expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:4[asil]")
+  })
+
+  it("leaves black between two base clips with a gap, each enabled for its own span", () => {
+    const g = graph(buildExportArgs(project([{ id: "c1", asset: "a", in: 1, out: 3, start: 0 }, { id: "c2", asset: "s", in: 0, out: 1.5, start: 3 }]), files, "o"))
+    expect(g).not.toContain("concat")
+    expect(g).toContain("d=4.5,format=yuv420p[bg]")
+    expect(g).toContain("enable='between(t,0,2)'")
+    expect(g).toContain("enable='between(t,3,4.5)'")
+  })
+
+  it("keeps the old concat graph for base clips back to back from 0", () => {
+    const g = graph(buildExportArgs(project([{ id: "c1", asset: "a", in: 1, out: 3, start: 0 }, { id: "c2", asset: "s", in: 0, out: 1.5, start: 2 }]), files, "o"))
+    expect(g).toContain("concat=n=2:v=1:a=1[v][a]")
+  })
+})
+
 describe("buildExportArgs with transforms", () => {
   const half: Transform = { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2 }
   const fit = "scale=1920:1080:force_original_aspect_ratio=decrease,setsar=1,fps=30"
@@ -189,7 +217,7 @@ describe("buildExportArgs with transforms", () => {
   const tFiles = { a: "/x/a.mp4", i: "/x/i.webp", s: "/x/s.mp4" }
 
   it("overlays a transformed base clip on the black canvas: fit, scale, crop, then place", () => {
-    const p = project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 1, out: 4, transform: half }, { id: "c2", asset: "s", in: 0, out: 2 }] }])
+    const p = project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 1, out: 4, start: 0, transform: half }, { id: "c2", asset: "s", in: 0, out: 2, start: 3 }] }])
     const g = graph(buildExportArgs(p, tFiles, "o"))
     expect(g).toContain("color=c=black:s=1920x1080:r=30:d=5,format=yuv420p[bg]")
     expect(g).toContain(`[0:v]trim=1:4,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2,crop=iw:round(ih*0.7/2)*2:0:round(ih*0.1/2)*2,setsar=1,setpts=PTS+0/TB[v0]`)
@@ -207,7 +235,7 @@ describe("buildExportArgs with transforms", () => {
 
   it("puts every clip on the canvas in track order when only an overlay is transformed", () => {
     const p = project([
-      { id: "t1", muted: true, clips: [{ id: "c1", asset: "a", in: 0, out: 4 }] },
+      { id: "t1", muted: true, clips: [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] },
       { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1, transform: { ...IDENTITY, scale: 0.3, x: -0.3 } }] },
       { id: "t3", clips: [{ id: "v", asset: "a", in: 2, out: 3, start: 2.5 }] },
     ])
@@ -224,6 +252,16 @@ describe("buildExportArgs with transforms", () => {
     expect(g).not.toContain("[0:a]")
     expect(g).toContain("[2:a]atrim=2:3,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=120000S:all=1[a2]")
     expect(g).toContain("[asil][a2]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("crops left and right as well as top and bottom, with even sizes and offsets", () => {
+    const t: Transform = { ...IDENTITY, scale: 0.5, cropLeft: 0.2, cropRight: 0.1 }
+    const p = project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: t }] }])
+    const g = graph(buildExportArgs(p, tFiles, "o"))
+    expect(g).toContain("crop=round(iw*0.7/2)*2:ih:round(iw*0.2/2)*2:0,setsar=1")
+    expect(g).toContain("overlay=x=(W-w/0.7)/2+0*W+0.2*w/0.7:y=(H-h/1)/2+0*H+0*h/1:eval=init")
+    const both = project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: { ...t, cropTop: 0.1, cropBottom: 0.2 } }] }])
+    expect(graph(buildExportArgs(both, tFiles, "o"))).toContain("crop=round(iw*0.7/2)*2:round(ih*0.7/2)*2:round(iw*0.2/2)*2:round(ih*0.1/2)*2")
   })
 
   it("builds exactly the old graph when every transform is the identity", () => {
@@ -248,23 +286,29 @@ describe("buildExportArgs with transforms", () => {
       { x: -1.3, y: 0.7, scale: 2.5, cropTop: 0, cropBottom: 0.45 },
       { x: 0.123456, y: -0.654321, scale: 0.1234, cropTop: 0.333, cropBottom: 0.5 },
       { x: 0, y: 0, scale: 5, cropTop: 0.9, cropBottom: 0.05 },
+      { x: 0.1, y: 0.2, scale: 0.8, cropTop: 0, cropBottom: 0, cropLeft: 0.25, cropRight: 0.1 },
+      { x: -0.4, y: 0.05, scale: 1.7, cropTop: 0.15, cropBottom: 0.2, cropLeft: 0.05, cropRight: 0.4 },
+      { x: 0.3, y: -0.3, scale: 0.4, cropTop: 0.1, cropBottom: 0, cropRight: 0.33 },
+      { x: 0, y: 0, scale: 2, cropTop: 0, cropBottom: 0, cropLeft: 0.9, cropRight: 0.05 },
     ]
     for (const [W, H] of canvases) for (const a of aspects) for (const t of transforms) {
       const r = clipRect(a, W, H, t)
       const { x, y } = overlayPosition(t)
       const keep = 1 - t.cropTop - t.cropBottom
+      const keepW = 1 - cropLeftOf(t) - cropRightOf(t)
       // Exact sizes: the formulas match clipRect to the float.
-      expect(evaluate(x, { W, H, w: r.w, h: r.h * keep })).toBeCloseTo(r.visible.x, 3)
-      expect(evaluate(y, { W, H, w: r.w, h: r.h * keep })).toBeCloseTo(r.visible.y, 3)
+      expect(evaluate(x, { W, H, w: r.w * keepW, h: r.h * keep })).toBeCloseTo(r.visible.x, 3)
+      expect(evaluate(y, { W, H, w: r.w * keepW, h: r.h * keep })).toBeCloseTo(r.visible.y, 3)
       // ffmpeg's whole-pixel sizes (fit rounded, even scale, even crop) land within 3 px of the
-      // preview while at least half the height is kept (the crop's rounding grows as 1/keep).
-      if (keep < 0.5) continue
+      // preview while at least half the width and height is kept (the crop's rounding grows as 1/keep).
+      if (keep < 0.5 || keepW < 0.5) continue
       const fit = clipRect(a, W, H, IDENTITY)
       const sw = Math.floor((Math.round(fit.w) * t.scale) / 2) * 2
       const sh = Math.floor((Math.round(fit.h) * t.scale) / 2) * 2
       const ch = keep < 1 ? Math.round((sh * keep) / 2) * 2 : sh
-      expect(Math.abs(evaluate(x, { W, H, w: sw, h: ch }) - r.visible.x)).toBeLessThanOrEqual(3)
-      expect(Math.abs(evaluate(y, { W, H, w: sw, h: ch }) - r.visible.y)).toBeLessThanOrEqual(3)
+      const cw = keepW < 1 ? Math.round((sw * keepW) / 2) * 2 : sw
+      expect(Math.abs(evaluate(x, { W, H, w: cw, h: ch }) - r.visible.x)).toBeLessThanOrEqual(3)
+      expect(Math.abs(evaluate(y, { W, H, w: cw, h: ch }) - r.visible.y)).toBeLessThanOrEqual(3)
     }
   })
 })
@@ -411,7 +455,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
       ...newProject("Layers"),
       assets: { v: { file: "v", duration: 5, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
       tracks: [
-        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 4 }] },
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 4, start: 0 }] },
         { id: "t2", clips: [{ id: "2", asset: "i", in: 0, out: 2, start: 1 }] },
       ],
     }
@@ -435,7 +479,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
       ...newProject("Past"),
       assets: { v: { file: "v", duration: 5, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
       tracks: [
-        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 2 }] },
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 2, start: 0 }] },
         { id: "t2", clips: [{ id: "2", asset: "i", in: 0, out: 1, start: 3 }] },
       ],
     }
@@ -471,6 +515,46 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     let last = 0
     for (const m of audio.matchAll(/time=(\d+):(\d+):(\d+\.\d+)/g)) last = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
     expect(Math.abs(last - 3)).toBeLessThan(0.3)
+  }, 60_000)
+
+  it("crops a base clip's left and right, leaving black where the picture was cut", async () => {
+    const { blue } = await blueAndRed()
+    const p: Project = {
+      ...newProject("SideCrop"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true } },
+      // Full size with a quarter cut off the left and a quarter off the right: the strip is x 480-1440.
+      tracks: base([{ id: "1", asset: "v", in: 0, out: 2, transform: { ...IDENTITY, cropLeft: 0.25, cropRight: 0.25 } }]),
+    }
+    const r = await exportProject(p, { v: blue }, "sidecrop.mp4")
+    const at = async (x: number, y: number) => {
+      const px = await ffmpeg(["-ss", "1", "-i", r.out, "-frames:v", "1", "-vf", `crop=2:2:${x}:${y},format=rgb24`, "-f", "rawvideo", "-"])
+      return [px.stdout[0], px.stdout[1], px.stdout[2]]
+    }
+    for (const [x, y] of [[500, 540], [960, 100], [1420, 900]]) expect((await at(x, y))[2]).toBeGreaterThan(150)
+    for (const [x, y] of [[100, 540], [460, 540], [1460, 540], [1800, 540]]) expect(Math.max(...(await at(x, y)))).toBeLessThan(40)
+  }, 60_000)
+
+  it("leaves black and silence in a gap between two base clips, with the full length", async () => {
+    const { blue } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Gap"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true } },
+      tracks: [{ id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 1, start: 0 }, { id: "2", asset: "v", in: 1, out: 2, start: 2.5 }] }],
+    }
+    const r = await exportProject(p, { v: blue }, "gap.mp4")
+    expect(Math.abs(r.duration - 3.5)).toBeLessThan(0.3)
+    expect((await centre(r.out, 0.5))[2]).toBeGreaterThan(150)
+    expect(Math.max(...(await centre(r.out, 1.75)))).toBeLessThan(40)
+    expect((await centre(r.out, 3))[2]).toBeGreaterThan(150)
+    // The sine is heard in the clips and not in the gap.
+    const level = async (from: number, length: number) => {
+      const stats = (await ffmpeg(["-ss", String(from), "-t", String(length), "-i", r.out, "-map", "0:a", "-af", "volumedetect", "-f", "null", "-"])).stderr
+      const m = /max_volume:\s*(-inf|-?[\d.]+) dB/.exec(stats)
+      return m ? (m[1] === "-inf" ? -Infinity : Number(m[1])) : NaN
+    }
+    expect(await level(1.3, 0.9)).toBeLessThan(-60)
+    expect(await level(0.2, 0.6)).toBeGreaterThan(-40)
+    expect(await level(2.7, 0.6)).toBeGreaterThan(-40)
   }, 60_000)
 
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {

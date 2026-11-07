@@ -76,19 +76,19 @@ describe("readProject / writeProject", () => {
     expect(await readProject("mike", "../Bad")).toBeNull()
   })
 
-  it("reads a version 1 file as version 2 and writes version 2 back", async () => {
+  it("reads a version 1 file as version 3 and writes version 3 back", async () => {
     await createProject("mike", "Old v1")
     const file = path.join(user, "Old v1", "project.json")
     const clips = [{ id: "c1", asset: "a", in: 0, out: 5 }]
     await fs.writeFile(file, JSON.stringify({ version: 1, name: "Old v1", width: 1920, height: 1080, fps: 30, assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } }, clips }))
     const p = await readProject("mike", "Old v1")
-    expect(p?.version).toBe(2)
-    expect(p?.tracks).toEqual([{ id: "t1", clips }])
+    expect(p?.version).toBe(3)
+    expect(p?.tracks).toEqual([{ id: "t1", clips: [{ ...clips[0], start: 0 }] }])
     await writeProject("mike", "Old v1", p!)
     const saved = JSON.parse(await fs.readFile(file, "utf8"))
-    expect(saved.version).toBe(2)
+    expect(saved.version).toBe(3)
     expect(saved).not.toHaveProperty("clips")
-    expect(saved.tracks).toEqual([{ id: "t1", clips }])
+    expect(saved.tracks).toEqual([{ id: "t1", clips: [{ ...clips[0], start: 0 }] }])
   })
 
   it("survives 20 concurrent writes with a parseable file and no .tmp", async () => {
@@ -107,7 +107,7 @@ describe("listProjects", () => {
     await createProject("mike", "Two")
     await createProject("mike", "Broken")
     await fs.writeFile(path.join(user, "Broken", "project.json"), "x")
-    const p = { ...newProject("Two"), assets: { a: { file: "a.mp4", duration: 10, hasAudio: false } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 5 }] }] }
+    const p = { ...newProject("Two"), assets: { a: { file: "a.mp4", duration: 10, hasAudio: false } }, tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 5, start: 0 }] }] }
     await writeProject("mike", "Two", p)
     const list = await listProjects("mike")
     expect(list.map((x) => [x.folder, x.name, x.clips]).sort()).toEqual([["One", "One", 0], ["Two", "Two", 1]])

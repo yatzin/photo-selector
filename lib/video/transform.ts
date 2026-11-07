@@ -2,11 +2,17 @@
 // The picture is first fit inside the canvas keeping its aspect ratio (the
 // letterbox), then `scale` multiplies that size about its centre, `x` and `y`
 // move the centre away from the canvas centre as fractions of the canvas width
-// and height (+x right, +y down), and `cropTop`/`cropBottom` cut fractions of
-// the scaled height off the top and bottom without moving what's left. The
+// and height (+x right, +y down), `cropTop`/`cropBottom` cut fractions of the
+// scaled height off the top and bottom and `cropLeft`/`cropRight` fractions of
+// the scaled width off the left and right, without moving what's left. The
 // preview, its handles and the export all use clipRect, so they agree.
 
-export type Transform = { x: number; y: number; scale: number; cropTop: number; cropBottom: number }
+/**
+ * `cropLeft` and `cropRight` are optional: absent means 0 (projects from before
+ * they existed), and normalizeTransform leaves them out when they are 0, so an
+ * old transform keeps its exact shape.
+ */
+export type Transform = { x: number; y: number; scale: number; cropTop: number; cropBottom: number; cropLeft?: number; cropRight?: number }
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Corner = "tl" | "tr" | "bl" | "br"
 /** Canvas lines (px) a snapped edge or centre sits on: vertical lines at `x`, horizontal ones at `y`. */
@@ -23,34 +29,49 @@ const EPS = 1e-9
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
 
+/** The left and right crop, 0 when absent. */
+export const cropLeftOf = (t: Transform) => t.cropLeft ?? 0
+export const cropRightOf = (t: Transform) => t.cropRight ?? 0
+
 /** True for no transform or one that leaves the picture as fit. */
 export function isIdentity(t: Transform | undefined): boolean {
-  return !t || (t.x === 0 && t.y === 0 && t.scale === 1 && t.cropTop === 0 && t.cropBottom === 0)
+  return !t || (t.x === 0 && t.y === 0 && t.scale === 1 && t.cropTop === 0 && t.cropBottom === 0 && cropLeftOf(t) === 0 && cropRightOf(t) === 0)
 }
 
-/** A transform with every field present, finite and inside its limits (nothing clamped). */
+const validCrops = (a: number, b: number) => a >= 0 && a <= MAX_CROP && b >= 0 && b <= MAX_CROP && a + b <= MAX_CROP_SUM + EPS
+
+/** A transform with every field present (cropLeft and cropRight may be absent), finite and inside its limits (nothing clamped). */
 export function isValidTransform(v: unknown): v is Transform {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const { x, y, scale, cropTop, cropBottom } = v as Record<string, unknown>
-  if (!finite(x) || !finite(y) || !finite(scale) || !finite(cropTop) || !finite(cropBottom)) return false
+  const { x, y, scale, cropTop, cropBottom, cropLeft = 0, cropRight = 0 } = v as Record<string, unknown>
+  if (!finite(x) || !finite(y) || !finite(scale) || !finite(cropTop) || !finite(cropBottom) || !finite(cropLeft) || !finite(cropRight)) return false
   return (
     Math.abs(x) <= MAX_OFFSET && Math.abs(y) <= MAX_OFFSET && scale >= MIN_SCALE && scale <= MAX_SCALE &&
-    cropTop >= 0 && cropTop <= MAX_CROP && cropBottom >= 0 && cropBottom <= MAX_CROP && cropTop + cropBottom <= MAX_CROP_SUM + EPS
+    validCrops(cropTop, cropBottom) && validCrops(cropLeft, cropRight)
   )
 }
 
-/** Clamps every field into its limits (a crop sum over the limit comes off the bottom); a non-finite field becomes the identity's. */
+/**
+ * Clamps every field into its limits (a crop sum over the limit comes off the
+ * bottom, or the right); a non-finite field becomes the identity's. A zero
+ * cropLeft or cropRight is left out.
+ */
 export function normalizeTransform(t: Transform): Transform {
-  const pick = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback)
+  const pick = (v: number | undefined, fallback: number) => (v !== undefined && Number.isFinite(v) ? v : fallback)
   const cropTop = clamp(pick(t.cropTop, 0), 0, MAX_CROP)
   let cropBottom = clamp(pick(t.cropBottom, 0), 0, MAX_CROP)
   if (cropTop + cropBottom > MAX_CROP_SUM) cropBottom = MAX_CROP_SUM - cropTop
+  const cropLeft = clamp(pick(t.cropLeft, 0), 0, MAX_CROP)
+  let cropRight = clamp(pick(t.cropRight, 0), 0, MAX_CROP)
+  if (cropLeft + cropRight > MAX_CROP_SUM) cropRight = MAX_CROP_SUM - cropLeft
   return {
     x: clamp(pick(t.x, 0), -MAX_OFFSET, MAX_OFFSET),
     y: clamp(pick(t.y, 0), -MAX_OFFSET, MAX_OFFSET),
     scale: clamp(pick(t.scale, 1), MIN_SCALE, MAX_SCALE),
     cropTop,
     cropBottom,
+    ...(cropLeft > 0 ? { cropLeft } : {}),
+    ...(cropRight > 0 ? { cropRight } : {}),
   }
 }
 
@@ -72,7 +93,8 @@ export function clipRect(contentAspect: number, canvasW: number, canvasH: number
   const h = ch * t.scale
   const x = canvasW / 2 + t.x * canvasW - w / 2
   const y = canvasH / 2 + t.y * canvasH - h / 2
-  return { x, y, w, h, visible: { x, y: y + t.cropTop * h, w, h: h * (1 - t.cropTop - t.cropBottom) } }
+  const cl = cropLeftOf(t)
+  return { x, y, w, h, visible: { x: x + cl * w, y: y + t.cropTop * h, w: w * (1 - cl - cropRightOf(t)), h: h * (1 - t.cropTop - t.cropBottom) } }
 }
 
 /** Moves the picture by fractions of the canvas. */
@@ -120,15 +142,30 @@ export function dragCorner(
   return scaleAbout(t0, contentAspect, canvasW, canvasH, corner, k)
 }
 
-/** The top or bottom handle dragged by `dy` (canvas px): inward crops, outward un-crops down to 0. Only that edge's crop changes. */
-export function dragEdge(t0: Transform, edge: "top" | "bottom", contentAspect: number, canvasW: number, canvasH: number, dy: number): Transform {
-  const h = clipRect(contentAspect, canvasW, canvasH, t0).h
-  if (!(h > 0)) return t0
+export type Edge = "top" | "bottom" | "left" | "right"
+
+/**
+ * An edge handle dragged by `d` canvas px: `dy` for top and bottom, `dx` for
+ * left and right (+ is down or right). Inward crops, outward un-crops down to
+ * 0; only that edge's crop changes.
+ */
+export function dragEdge(t0: Transform, edge: Edge, contentAspect: number, canvasW: number, canvasH: number, d: number): Transform {
+  const r = clipRect(contentAspect, canvasW, canvasH, t0)
+  if (edge === "left" || edge === "right") {
+    if (!(r.w > 0)) return t0
+    if (edge === "left") {
+      const cropLeft = clamp(cropLeftOf(t0) + d / r.w, 0, Math.min(MAX_CROP, MAX_CROP_SUM - cropRightOf(t0)))
+      return normalizeTransform({ ...t0, cropLeft })
+    }
+    const cropRight = clamp(cropRightOf(t0) - d / r.w, 0, Math.min(MAX_CROP, MAX_CROP_SUM - cropLeftOf(t0)))
+    return normalizeTransform({ ...t0, cropRight })
+  }
+  if (!(r.h > 0)) return t0
   if (edge === "top") {
-    const cropTop = clamp(t0.cropTop + dy / h, 0, Math.min(MAX_CROP, MAX_CROP_SUM - t0.cropBottom))
+    const cropTop = clamp(t0.cropTop + d / r.h, 0, Math.min(MAX_CROP, MAX_CROP_SUM - t0.cropBottom))
     return normalizeTransform({ ...t0, cropTop })
   }
-  const cropBottom = clamp(t0.cropBottom - dy / h, 0, Math.min(MAX_CROP, MAX_CROP_SUM - t0.cropTop))
+  const cropBottom = clamp(t0.cropBottom - d / r.h, 0, Math.min(MAX_CROP, MAX_CROP_SUM - t0.cropTop))
   return normalizeTransform({ ...t0, cropBottom })
 }
 

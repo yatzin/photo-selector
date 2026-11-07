@@ -14,6 +14,9 @@ describe("isIdentity", () => {
     expect(isIdentity(t({ scale: 0.5 }))).toBe(false)
     expect(isIdentity(t({ cropBottom: 0.1 }))).toBe(false)
     expect(isIdentity(t({ x: 0.01 }))).toBe(false)
+    expect(isIdentity(t({ cropLeft: 0.1 }))).toBe(false)
+    expect(isIdentity(t({ cropRight: 0.1 }))).toBe(false)
+    expect(isIdentity(t({ cropLeft: 0, cropRight: 0 }))).toBe(true)
   })
 })
 
@@ -30,7 +33,15 @@ describe("isValidTransform", () => {
       { ...IDENTITY, scale: 0.09 }, { ...IDENTITY, scale: 5.1 }, { ...IDENTITY, x: 2.01 }, { ...IDENTITY, y: -2.01 },
       { ...IDENTITY, cropTop: -0.01 }, { ...IDENTITY, cropBottom: 0.91 }, { ...IDENTITY, cropTop: 0.5, cropBottom: 0.46 },
       { ...IDENTITY, x: NaN }, { ...IDENTITY, scale: Infinity }, { ...IDENTITY, y: "0" }, { x: 0, y: 0, scale: 1, cropTop: 0 },
+      { ...IDENTITY, cropLeft: -0.01 }, { ...IDENTITY, cropRight: 0.91 }, { ...IDENTITY, cropLeft: 0.5, cropRight: 0.46 },
+      { ...IDENTITY, cropLeft: NaN }, { ...IDENTITY, cropRight: "0.1" }, { ...IDENTITY, cropLeft: null },
     ]) expect(isValidTransform(bad)).toBe(false)
+  })
+
+  it("accepts a left and right crop, or none (absent is 0)", () => {
+    expect(isValidTransform({ ...IDENTITY, cropLeft: 0.9, cropRight: 0.05 })).toBe(true)
+    expect(isValidTransform({ ...IDENTITY, cropLeft: 0.45, cropRight: 0.5 })).toBe(true)
+    expect(isValidTransform({ ...IDENTITY, cropRight: 0.2 })).toBe(true)
   })
 })
 
@@ -42,6 +53,14 @@ describe("normalizeTransform", () => {
 
   it("takes the excess of a crop sum over 0.95 off the bottom", () => {
     expect(normalizeTransform(t({ cropTop: 0.6, cropBottom: 0.6 }))).toEqual(t({ cropTop: 0.6, cropBottom: 0.35 }))
+  })
+
+  it("clamps the left and right crop, takes the excess off the right, and leaves out a zero one", () => {
+    expect(normalizeTransform(t({ cropLeft: 0.6, cropRight: 0.6 }))).toEqual(t({ cropLeft: 0.6, cropRight: 0.35 }))
+    expect(normalizeTransform(t({ cropLeft: 2, cropRight: -1 }))).toEqual(t({ cropLeft: 0.9 }))
+    const zero = normalizeTransform(t({ cropLeft: 0, cropRight: NaN }))
+    expect(zero).toEqual(IDENTITY)
+    expect("cropLeft" in zero || "cropRight" in zero).toBe(false)
   })
 
   it("turns non-finite values into the identity's", () => {
@@ -78,6 +97,17 @@ describe("clipRect", () => {
     expect(r.visible.w).toBe(W)
     expect(r.visible.y).toBeCloseTo(0.25 * H)
     expect(r.visible.h).toBeCloseTo(0.25 * H)
+  })
+
+  it("crops the left and right without moving or scaling what's left", () => {
+    const t0 = t({ scale: 0.5, x: 0.1, cropLeft: 0.2, cropRight: 0.3, cropTop: 0.1 })
+    const r = clipRect(16 / 9, W, H, t0)
+    const full = clipRect(16 / 9, W, H, t({ scale: 0.5, x: 0.1 }))
+    expect(r).toMatchObject({ x: full.x, y: full.y, w: full.w, h: full.h })
+    expect(r.visible.x).toBeCloseTo(full.x + 0.2 * 960)
+    expect(r.visible.w).toBeCloseTo(0.5 * 960)
+    expect(r.visible.y).toBeCloseTo(full.y + 0.1 * 540)
+    expect(r.visible.h).toBeCloseTo(0.9 * 540)
   })
 
   it("falls back to the canvas aspect for a bad aspect", () => {
@@ -177,6 +207,36 @@ describe("dragEdge", () => {
     const t0 = t({ x: 0.2, y: 0.1, scale: 0.7 })
     const r = dragEdge(t0, "bottom", 16 / 9, W, H, -50)
     expect({ ...r, cropBottom: 0 }).toEqual(t0)
+  })
+
+  it("crops the left when dragged right and the right when dragged left, against the scaled width", () => {
+    expect(dragEdge(IDENTITY, "left", 16 / 9, W, H, 192).cropLeft).toBeCloseTo(0.1)
+    expect(dragEdge(IDENTITY, "right", 16 / 9, W, H, -384).cropRight).toBeCloseTo(0.2)
+    expect(dragEdge(t({ scale: 0.5 }), "left", 16 / 9, W, H, 96).cropLeft).toBeCloseTo(0.1)
+  })
+
+  it("un-crops left and right when dragged outward, down to 0 (the field goes)", () => {
+    expect(dragEdge(t({ cropLeft: 0.2 }), "left", 16 / 9, W, H, -192).cropLeft).toBeCloseTo(0.1)
+    expect(dragEdge(t({ cropLeft: 0.2 }), "left", 16 / 9, W, H, -5000)).toEqual(IDENTITY)
+    expect(dragEdge(t({ cropRight: 0.2 }), "right", 16 / 9, W, H, 5000)).toEqual(IDENTITY)
+  })
+
+  it("stops left and right at 0.9 each and 0.95 together, and leaves the rest alone", () => {
+    expect(dragEdge(IDENTITY, "left", 16 / 9, W, H, 50000).cropLeft).toBe(0.9)
+    const r = dragEdge(t({ cropLeft: 0.5, cropTop: 0.2 }), "right", 16 / 9, W, H, -50000)
+    expect(r.cropLeft).toBe(0.5)
+    expect(r.cropRight).toBeCloseTo(0.45)
+    expect(r.cropTop).toBe(0.2)
+    const left = dragEdge(t({ cropRight: 0.1 }), "left", 16 / 9, W, H, 100)
+    expect(left).toMatchObject({ x: 0, y: 0, scale: 1, cropTop: 0, cropBottom: 0, cropRight: 0.1 })
+  })
+
+  it("keeps the opposite corner of the visible strip on a corner drag with a left/right crop", () => {
+    const t0 = t({ scale: 0.6, cropLeft: 0.2, cropRight: 0.1 })
+    const before = clipRect(16 / 9, W, H, t0).visible
+    const after = clipRect(16 / 9, W, H, dragCorner(t0, "tl", 16 / 9, W, H, 50, 28)).visible
+    expect(after.x + after.w).toBeCloseTo(before.x + before.w, 6)
+    expect(after.y + after.h).toBeCloseTo(before.y + before.h, 6)
   })
 })
 

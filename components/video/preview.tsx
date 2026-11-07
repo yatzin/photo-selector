@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { Pause, Play, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { assetKind, clipsAt, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { clipRect, IDENTITY, isIdentity, type Transform } from "@/lib/video/transform"
+import { clipRect, cropLeftOf, cropRightOf, IDENTITY, isIdentity, type Transform } from "@/lib/video/transform"
 import { cn } from "@/lib/utils"
 import { TransformOverlay, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
@@ -29,12 +29,15 @@ import type { PreviewPlayer } from "./use-preview-player"
 function placement(aspect: number, W: number, H: number, t: Transform): CSSProperties {
   if (isIdentity(t)) return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
   const r = clipRect(aspect, W, H, t)
+  const cl = cropLeftOf(t)
+  const cr = cropRightOf(t)
+  const cropped = t.cropTop > 0 || t.cropBottom > 0 || cl > 0 || cr > 0
   return {
     left: `${(r.x / W) * 100}%`,
     top: `${(r.y / H) * 100}%`,
     width: `${(r.w / W) * 100}%`,
     height: `${(r.h / H) * 100}%`,
-    clipPath: t.cropTop > 0 || t.cropBottom > 0 ? `inset(${t.cropTop * 100}% 0 ${t.cropBottom * 100}% 0)` : undefined,
+    clipPath: cropped ? `inset(${t.cropTop * 100}% ${cr * 100}% ${t.cropBottom * 100}% ${cl * 100}%)` : undefined,
   }
 }
 
@@ -123,7 +126,7 @@ export function Preview({
   const nextStills = project.tracks
     .map((track, i) => {
       const hit = hits[i]
-      const starts = trackStarts(track, i === 0)
+      const starts = trackStarts(track)
       const next = hit ? track.clips[hit.index + 1] : track.clips[starts.findIndex((s) => s > look)]
       const a = next && project.assets[next.asset]
       return next && a && assetKind(a) === "image" ? imageUrl(next.asset) : ""

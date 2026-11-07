@@ -11,7 +11,7 @@ import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
-import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, setTransform, splitClip, totalLength, type Asset, type Edit, type Project } from "@/lib/video/project"
+import { addClip, allClips, assetKind, clipsAt, DEFAULT_IMAGE, removeClip, resolveStart, setTransform, splitClip, totalLength, trackEnd, type Asset, type Edit, type Project } from "@/lib/video/project"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { FileTree, type InboxFolder } from "./file-tree"
@@ -186,17 +186,15 @@ export function Editor({
     const imported = await importFile(inboxFolder, name)
     if (!imported) return
     const id = newId()
-    // Clips may have changed while importing; addClip clamps the index and slides an overlay clip clear of the
-    // others, and a layer removed meanwhile makes the clip a new top layer rather than dropping it.
+    // Clips may have changed while importing; addClip slides the clip clear of the others, and a layer
+    // removed meanwhile makes the clip a new top layer rather than dropping it.
     edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
     // The ghost had a guessed length before the import: say so when the real length slid the clip along.
     const p = latest.current
     const track = Math.min(target.track, p.tracks.length)
-    if (track > 0 && target.start !== undefined) {
-      const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
-      const start = resolveStart(p.tracks[track]?.clips ?? [], length, target.start)
-      if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
-    }
+    const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
+    const start = resolveStart(p.tracks[track]?.clips ?? [], length, target.start, id)
+    if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
   }
 
   /** A finished export: the browser downloads the kept copy (the route serves it by project, so no name is needed). */
@@ -267,7 +265,8 @@ export function Editor({
 
   function addToTimeline(assetId: string) {
     const id = newId()
-    edit((p) => addClip(p, assetId, 0, { index: p.tracks[0].clips.length }, id))
+    // After the base track's last clip.
+    edit((p) => addClip(p, assetId, 0, { start: trackEnd(p.tracks[0]) }, id))
   }
 
   const { pause } = player

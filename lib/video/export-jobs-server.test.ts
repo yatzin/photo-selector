@@ -50,7 +50,7 @@ async function makeProject(withClips = true, withFile = true): Promise<string> {
   await writeProject("mike", r.folder, {
     ...p,
     assets: { a: { file: "a.mp4", duration: 5, hasAudio: true } },
-    tracks: [{ id: "t1", clips: withClips ? [{ id: "c1", asset: "a", in: 0, out: 4 }] : [] }],
+    tracks: [{ id: "t1", clips: withClips ? [{ id: "c1", asset: "a", in: 0, out: 4, start: 0 }] : [] }],
   })
   return r.folder
 }
@@ -329,7 +329,7 @@ describe("startExport with images", () => {
     await writeProject("mike", folder, {
       ...p,
       assets: { ...p.assets, i: { file: "photo.png", duration: 5, hasAudio: false, kind: "image" } },
-      tracks: [{ id: "t1", clips: [...p.tracks[0].clips, { id: "p", asset: "i", in: 0, out: 2 }] }],
+      tracks: [{ id: "t1", clips: [...p.tracks[0].clips, { id: "p", asset: "i", in: 0, out: 2, start: 4 }] }],
     })
     return folder
   }
