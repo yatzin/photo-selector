@@ -35,6 +35,8 @@ export function Editor({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(DEFAULT_ZOOM)
   const [importing, setImporting] = useState<string | null>(null)
+  // The guard against a second import: a ref, so two quick drops in one render can't both start.
+  const importingRef = useRef(false)
   const { state: save, flush, isDirty } = useAutosave(folder, project)
   const [exportProgress, setExportProgress] = useState<number | null>(null)
   const exportTimer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -98,10 +100,11 @@ export function Editor({
 
   /** Copies an Inbox file into Project media (or finds the copy already there); its asset id, or null when it failed. */
   async function importFile(inboxFolder: string, name: string, fromDrop = false): Promise<string | null> {
-    if (importing) {
+    if (importingRef.current) {
       if (fromDrop) toast.info("Wait for the current import to finish.")
       return null
     }
+    importingRef.current = true
     setImporting(`${inboxFolder}/${name}`)
     try {
       const r = await importAssetAction(folder, [inboxFolder], name)
@@ -117,6 +120,7 @@ export function Editor({
       toast.error("Something went wrong importing that file.")
       return null
     } finally {
+      importingRef.current = false
       setImporting(null)
     }
   }

@@ -6,7 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
-import { DEFAULT_IMAGE, findAssetBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
+import { DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -244,16 +244,18 @@ export async function importAsset(
   }
 }
 
-/** The asset already copied from this Inbox path, if its file is still in assets/. */
+/** The first asset copied from this Inbox path whose file is still a regular file in assets/. */
 export async function reusableAsset(userFolder: string, folder: string, p: Project, source: string): Promise<{ id: string; asset: Asset } | null> {
-  const found = findAssetBySource(p, source)
-  const file = found && assetPath(userFolder, folder, found.asset.file)
-  if (!found || !file) return null
-  try {
-    return (await fs.stat(file)).isFile() ? found : null
-  } catch {
-    return null
+  for (const found of findAssetsBySource(p, source)) {
+    const file = assetPath(userFolder, folder, found.asset.file)
+    if (!file) continue
+    try {
+      if ((await fs.lstat(file)).isFile()) return found
+    } catch {
+      continue
+    }
   }
+  return null
 }
 
 export function outputDir(userFolder: string, folder: string): string | null {

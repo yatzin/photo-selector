@@ -217,6 +217,41 @@ describe("reusableAsset", () => {
     await fs.rm(path.join(user, "P", "assets", "clip.mp4"))
     expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toBeNull()
   })
+
+  it("after a deleted copy imports fresh once, then reuses the new copy", async () => {
+    await createProject("mike", "P")
+    const a = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    if ("error" in a) throw new Error(a.error)
+    let p = { ...newProject("P"), assets: { [a.id]: a.asset } }
+    await fs.rm(path.join(user, "P", "assets", a.asset.file))
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toBeNull()
+    const b = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    if ("error" in b) throw new Error(b.error)
+    p = { ...p, assets: { ...p.assets, [b.id]: b.asset } }
+    // The fresh copy may take the freed name, so either record can point at it; it must resolve to the live file.
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toMatchObject({ asset: { file: b.asset.file } })
+    expect(await fs.readdir(path.join(user, "P", "assets"))).toEqual([b.asset.file])
+  })
+
+  it("skips a record whose copy is gone and reuses a later one that still exists", async () => {
+    await createProject("mike", "P")
+    const a = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    const b = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    if ("error" in a || "error" in b) throw new Error("import failed")
+    const p = { ...newProject("P"), assets: { [a.id]: a.asset, [b.id]: b.asset } }
+    await fs.rm(path.join(user, "P", "assets", a.asset.file))
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toEqual({ id: b.id, asset: b.asset })
+  })
+
+  it("ignores a directory standing where the copy was", async () => {
+    await createProject("mike", "P")
+    const a = await importAsset("mike", "P", ["mike"], "clip.mp4")
+    if ("error" in a) throw new Error(a.error)
+    const p = { ...newProject("P"), assets: { [a.id]: a.asset } }
+    await fs.rm(path.join(user, "P", "assets", a.asset.file))
+    await fs.mkdir(path.join(user, "P", "assets", a.asset.file))
+    expect(await reusableAsset("mike", "P", p, "mike/clip.mp4")).toBeNull()
+  })
 })
 
 describe("assetPath", () => {

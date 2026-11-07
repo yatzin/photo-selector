@@ -243,14 +243,22 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     // (both, when an image is showing and neither was just played).
     for (const slot of image ? [0, 1] : [1 - activeSlot.current]) {
       const v = el(slot)
-      if (primed.current[slot] || !v?.src) continue
+      if (!v || primed.current[slot]) continue
+      if (!v.src) {
+        // An empty slot would get its first src at a cut, unprimed, and Safari would
+        // refuse that play(): load an upcoming video (any video, failing that) into it now.
+        const held = loaded.current[1 - slot]
+        const upcoming = clipsRef.current.slice(clipIndex.current + 1).find((c) => !isImage(c) && c.asset !== held) ?? nextVideo(0)
+        if (!upcoming) continue
+        load(slot, upcoming.asset, upcoming.in)
+      }
       primed.current[slot] = true
       void v.play().catch(() => {})
       v.pause()
     }
     cancelAnimationFrame(raf.current)
     raf.current = requestAnimationFrame((n) => tickRef.current(n))
-  }, [seek, playSlot, isImage])
+  }, [seek, playSlot, isImage, nextVideo, load])
 
   useEffect(() => {
     tickRef.current = tick

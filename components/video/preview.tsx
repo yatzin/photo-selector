@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Pause, Play, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { assetKind, clipAt, type Project } from "@/lib/video/project"
@@ -20,6 +20,14 @@ export function Preview({ player, project, imageUrl }: { player: PreviewPlayer; 
   const missing = currentAsset !== undefined && player.missing.has(currentAsset)
   const asset = currentAsset !== undefined ? project.assets[currentAsset] : undefined
   const still = currentAsset !== undefined && asset !== undefined && assetKind(asset) === "image" ? imageUrl(currentAsset) : ""
+  const nextClip = current ? project.clips[current.index + 1] : undefined
+  const nextAsset = nextClip && project.assets[nextClip.asset]
+  const nextStill = nextClip && nextAsset && assetKind(nextAsset) === "image" ? imageUrl(nextClip.asset) : ""
+
+  // Fetch the next image before the cut so a video-to-image cut doesn't flash black.
+  useEffect(() => {
+    if (nextStill) new Image().src = nextStill
+  }, [nextStill])
 
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black/90 p-4">

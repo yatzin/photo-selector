@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, assetKind, clipAt, clipStarts, DEFAULT_IMAGE, findAssetBySource, MAX_IMAGE, mergeClientProject, MIN_CLIP, moveClip, newProject, parseProject, removeClip,
+  addClip, assetKind, clipAt, clipStarts, DEFAULT_IMAGE, findAssetsBySource, MAX_IMAGE, mergeClientProject, MIN_CLIP, moveClip, newProject, parseProject, removeClip,
   splitClip, totalLength, trimClip, type Project,
 } from "./project"
 
@@ -387,14 +387,17 @@ describe("parseProject with images", () => {
   })
 })
 
-describe("findAssetBySource", () => {
-  it("finds the asset imported from that Inbox file", () => {
-    expect(findAssetBySource(withImage(), "mike/i.jpg")).toEqual({ id: "i", asset: withImage().assets.i })
+describe("findAssetsBySource", () => {
+  it("finds every asset imported from that Inbox file, in order", () => {
+    expect(findAssetsBySource(withImage(), "mike/i.jpg")).toEqual([{ id: "i", asset: withImage().assets.i }])
+    const p = withImage()
+    const twice = { ...p, assets: { ...p.assets, j: { ...p.assets.i, file: "i (1).jpg" } } }
+    expect(findAssetsBySource(twice, "mike/i.jpg").map((f) => f.id)).toEqual(["i", "j"])
   })
 
-  it("is null when no asset came from there", () => {
-    expect(findAssetBySource(withImage(), "mike/other.jpg")).toBeNull()
-    expect(findAssetBySource(withImage(), "")).toBeNull()
-    expect(findAssetBySource(newProject("x"), "mike/i.jpg")).toBeNull()
+  it("is empty when no asset came from there", () => {
+    expect(findAssetsBySource(withImage(), "mike/other.jpg")).toEqual([])
+    expect(findAssetsBySource(withImage(), "")).toEqual([])
+    expect(findAssetsBySource(newProject("x"), "mike/i.jpg")).toEqual([])
   })
 })

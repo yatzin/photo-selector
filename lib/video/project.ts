@@ -24,11 +24,10 @@ export function assetKind(a: Asset): "image" | "video" {
   return a.kind === "image" ? "image" : "video"
 }
 
-/** The asset copied from this Inbox path ("<folder>/<name>"), if any. */
-export function findAssetBySource(p: Project, source: string): { id: string; asset: Asset } | null {
-  if (!source) return null
-  for (const [id, asset] of Object.entries(p.assets)) if (asset.source === source) return { id, asset }
-  return null
+/** Every asset copied from this Inbox path ("<folder>/<name>"), oldest first; a deleted copy can leave more than one. */
+export function findAssetsBySource(p: Project, source: string): { id: string; asset: Asset }[] {
+  if (!source) return []
+  return Object.entries(p.assets).filter(([, asset]) => asset.source === source).map(([id, asset]) => ({ id, asset }))
 }
 
 export function newProject(name: string): Project {

@@ -174,7 +174,9 @@ Importing copies a file from the Inbox into `assets/`. The original stays in the
 The Inbox list shows a thumbnail for each video and image. Dragging an Inbox
 file onto the timeline imports it and adds it where you drop it. Importing the
 same Inbox file again (button or drag) reuses the copy already in the project
-instead of copying it twice.
+instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
+under the same name reuses the existing copy (delete that copy from `assets/`
+to import the new one).
 
 **Editing.**
 - Drag a clip or image onto the timeline.
