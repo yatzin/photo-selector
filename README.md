@@ -194,8 +194,9 @@ Not while the project is exporting, or while that file is being imported.
 - An image starts as a 5 s clip. Drag either edge to stretch or shorten it,
   from 0.2 s up to 10 minutes. It exports letterboxed with silence.
 - Drag a clip's edges to trim it, or drag the clip along its track to move it.
-- **Layers.** The timeline has up to four tracks: V1 at the bottom is the
-  base, V2 to V4 above it are layers. The preview shows every layer with a
+- **Layers.** The timeline has up to four tracks, numbered 1 to 4 in the
+  timeline's left column: 1 at the bottom is the base, 2 to 4 above it are
+  layers. The preview shows every layer with a
   clip at the playhead, the higher ones on top, and every layer's sound is
   mixed. A clip you haven't moved, scaled or cropped fills the frame
   (letterboxed in black) and covers the layers below.
@@ -211,24 +212,31 @@ Not while the project is exporting, or while that file is being imported.
   slim slider at the timeline's right edge makes them taller or shorter
   (0.6x to 2x; double-click it to reset), remembered in this browser; the
   timeline scrolls up and down when they don't fit.
+- **Mouse wheel.** Over the layer numbers it makes the rows taller (up) or
+  shorter (down), with any number of layers, in step with the slider. Over the
+  ruler it zooms time in (up) or out (down) around the pointer, in step with
+  the Zoom slider; **Ctrl/Cmd** + wheel does the same over the clips. Over the
+  clips the wheel scrolls the timeline sideways (a trackpad's sideways swipe
+  too), and **Shift** + wheel scrolls up and down when the layers don't fit.
 - **Timeline length.** The timeline is as long as its content plus a little
   room, never narrower than the view. Dragging a clip, an edge or a file
   towards the end makes it longer as you go, and dragging near the left or
   right edge of the view scrolls it. When the last clip goes (deleted, moved
   or trimmed), the timeline shrinks back.
-- **Free placement.** On every track, the base (V1) included, clips stay where
+- **Free placement.** On every track, the base (layer 1) included, clips stay where
   you put them and gaps are fine: removing, trimming or moving a clip leaves
   the rest where they are. A gap shows black and is silent, in the preview
   and the export. Dragging a clip sideways moves it freely; it snaps to the
   playhead, the start and other clips' edges. Clips on one track never
   overlap: a clip dropped on another slides to the free space after it.
   Trimming a clip's left edge keeps the picture where it was.
-- **Snap (V1).** The magnet box in V1's header, off by default, snaps the
-  base layer's clips together: ticking it closes every gap on V1 (one undo
-  step), and while it's on V1 stays end to end. A clip dropped or dragged onto
-  V1 goes in between two clips (a line shows where), trimming ripples the
-  clips after it, and deleting or moving a clip away closes its gap. Unticking
-  it frees V1 again; clips stay where they are. Layers above V1 are always free.
+- **Snap (layer 1).** The magnet box beside layer 1's number, off by
+  default, snaps the base layer's clips together: ticking it closes every gap
+  on layer 1 (one undo step), and while it's on layer 1 stays end to end. A
+  clip dropped or dragged onto layer 1 goes in between two clips (a line shows
+  where), trimming ripples the clips after it, and deleting or moving a clip
+  away closes its gap. Unticking it frees layer 1 again; clips stay where they
+  are. Layers above it are always free.
 - **Move, resize and crop on screen.** Click a clip in the preview to select
   it (the topmost one under the pointer; empty canvas deselects). The
   timeline highlights the same clip. Drag it to move it. Drag a corner to
@@ -247,13 +255,25 @@ Not while the project is exporting, or while that file is being imported.
   handle takes the arrow keys to resize or crop. **Reset** in the toolbar
   puts the selected clip back to fill the frame. Images and videos work the
   same, and the export matches the preview.
-- The speaker button beside a track mutes it in the preview and the export.
+- **Mute a clip.** A video clip with sound has a small speaker button at its
+  top right (it shows on hover and on the selected clip, and stays while the
+  clip is muted). It mutes that clip alone in the preview and the export; a
+  split keeps the mute on both halves. **M** mutes or unmutes the selected
+  clip. Layers have no mute of their own: a project saved with a muted layer
+  opens with each of that layer's clips muted.
+- **Waveforms.** Each video clip with sound shows its sound as a waveform
+  over its thumbnail, for the part of the file the clip plays, so it follows
+  zoom and trims. The waveform button in the toolbar hides or shows them
+  (remembered in this browser). The server reads a file's sound once, on the
+  first request, and keeps the result next to it in `assets/` as
+  `.<file>.peaks`; deleting the media item deletes it too.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut), Reset when the selected
-  clip is moved, scaled or cropped, and the zoom slider at the right.
+  Delete (each button's tooltip names its shortcut), the waveform button,
+  Reset when the selected clip is moved, scaled or cropped, and the zoom
+  slider at the right.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
-  there), **Delete** removes the selected clip, **Esc** deselects, **Space**
-  plays.
+  there), **Delete** removes the selected clip, **M** mutes or unmutes it,
+  **Esc** deselects, **Space** plays.
 - Undo and redo (toolbar, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Shift+Z** or **Ctrl+Y**)
   cover the last 50 timeline edits. Imports aren't undone: an undone clip's
   file stays in Project media.
