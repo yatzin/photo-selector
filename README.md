@@ -187,8 +187,10 @@ to import the new one).
   from 0.2 s up to 10 minutes. It exports letterboxed with silence.
 - Drag a clip's edges to trim it, or drag the clip to reorder.
 - **Layers.** The timeline has up to four tracks: V1 at the bottom is the
-  base, V2 to V4 above it are layers. Whatever plays on a higher layer covers
-  the ones below (full frame, letterboxed), and every layer's sound is mixed.
+  base, V2 to V4 above it are layers. The preview shows every layer with a
+  clip at the playhead, the higher ones on top, and every layer's sound is
+  mixed. A clip you haven't moved, scaled or cropped fills the frame
+  (letterboxed in black) and covers the layers below.
   Drop media onto a layer's row to put it there, or onto the dashed row above
   the top layer (it shows while you drag) to make a new layer. The **+** at
   the left of the ruler adds an empty layer; an empty layer has an **×** to
@@ -199,10 +201,24 @@ to import the new one).
   the start and other clips' edges. Clips on one layer never overlap: a clip
   dropped on another slides to the free space after it. Trimming a layer
   clip's left edge keeps the picture where it was.
+- **Move, resize and crop on screen.** Click a clip in the preview to select
+  it (the topmost one under the pointer; empty canvas deselects). The
+  timeline highlights the same clip. Drag it to move it. Drag a corner to
+  enlarge or shrink it with its shape kept; the opposite corner stays put.
+  Drag the top or bottom handle to crop the picture from that edge (drag
+  back out to undo the crop). While you drag, the picture snaps to the
+  frame's centre and edges and a thin line shows it; hold **Alt** to stop
+  snapping. **Esc** during a drag cancels it, and each drag is one undo step.
+  Once a clip is moved, shrunk or cropped, the layers below show around it,
+  and black where nothing covers (the base layer too). With a clip selected
+  in the preview, the arrow keys nudge it by 1% (**Shift**: 5%); a focused
+  handle takes the arrow keys to resize or crop. **Reset** in the toolbar
+  puts the selected clip back to fill the frame. Images and videos work the
+  same, and the export matches the preview.
 - The speaker button beside a track mutes it in the preview and the export.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut), and the zoom slider at
-  the right.
+  Delete (each button's tooltip names its shortcut), Reset when the selected
+  clip is moved, scaled or cropped, and the zoom slider at the right.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
   there), **Delete** removes the selected clip, **Esc** deselects, **Space**
   plays.
