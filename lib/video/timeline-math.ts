@@ -11,24 +11,31 @@ export function trimDelta(edge: "in" | "out", clip: Clip, deltaPx: number, zoom:
 }
 
 /**
+ * The nearest of `points` (seconds) to any of `edges` (one or two dragged
+ * edges, seconds) within `thresholdPx` at `zoom` px/s: how far to shift the
+ * edges, the point one of them lands on and which edge that is (its index);
+ * null when none is that near. The first point and edge win a tie.
+ */
+export function snapEdges(edges: number[], points: number[], thresholdPx: number, zoom: number): { shift: number; at: number; edge: number } | null {
+  const limit = thresholdPx / zoom
+  let best: { shift: number; at: number; edge: number } | null = null
+  for (const p of points) {
+    for (let edge = 0; edge < edges.length; edge++) {
+      const d = p - edges[edge]
+      if (Math.abs(d) <= limit && (!best || Math.abs(d) < Math.abs(best.shift))) best = { shift: d, at: p, edge }
+    }
+  }
+  return best
+}
+
+/**
  * A clip's start (it is `length` long) pulled onto the nearest of `points`
  * (seconds) when its start or its end lies within `thresholdPx` of one at
  * `zoom` px/s; never below 0.
  */
 export function snapStart(start: number, length: number, points: number[], thresholdPx: number, zoom: number): number {
-  const limit = thresholdPx / zoom
-  let best = start
-  let distance = Infinity
-  for (const p of points) {
-    for (const candidate of [p, p - length]) {
-      const d = Math.abs(candidate - start)
-      if (d <= limit && d < distance) {
-        best = candidate
-        distance = d
-      }
-    }
-  }
-  return Math.max(0, best)
+  const s = snapEdges([start, start + length], points, thresholdPx, zoom)
+  return Math.max(0, !s ? start : s.edge === 0 ? s.at : s.at - length)
 }
 
 /**

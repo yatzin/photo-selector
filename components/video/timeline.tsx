@@ -5,12 +5,12 @@ import { Film, Image as ImageIcon, Magnet, Plus, Volume2, VolumeX, X } from "luc
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, assetKind, baseInsertion, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, MAX_TRACKS, moveClip, removeTrack, resolveStart,
-  setBaseMagnetic, setClipMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, leftTrimDraft, MAX_TRACKS, moveClip, removeTrack,
+  resolveStart, setBaseMagnetic, setClipMuted, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { newId } from "@/lib/video/ids"
 import {
-  autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapStart, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { ClipWaveform } from "./clip-waveform"
@@ -26,7 +26,11 @@ import { Thumb } from "./thumb"
 // something is dragged towards the end, and any drag near the left or right
 // edge scrolls the view. From three layers the rows are half height, with a
 // vertical zoom on the right. Layer 1's Snap box keeps its clips end to end: a
-// drop or drag there shows an insertion line between clips instead of a ghost.
+// drop or drag there shows an insertion line between clips instead of a ghost,
+// and a left-edge trim there shows the plain trim while dragging and packs on
+// release. A dragged clip, a dragged trim edge and a file's ghost snap to the
+// playhead, 0 and every other clip's edges on any layer (a fuchsia line marks
+// the point); holding Alt turns that off, as a hint over the timeline says.
 // The mouse wheel zooms the rows over the layer numbers, zooms time over the
 // ruler (or with Ctrl/Cmd over the clips) and scrolls sideways over the clips
 // (Shift: up and down). A clip with sound has its own mute button and, when
@@ -47,17 +51,18 @@ const MIN_NEW_ROW = 24 // px, that zone at its smallest (it follows short rows d
 const TRACK_PAD = 240 // px of empty timeline after the last clip, room to drag overlay clips into
 const DRAG_EXTRA = 10 // s of timeline kept past a dragged item's end, so it can go on to the right
 const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
-const SNAP_PX = 8 // px within which a dragged clip snaps to the playhead, 0 or another clip's edge
+const SNAP_PX = 8 // px within which a dragged clip or edge snaps to the playhead, 0 or another clip's edge
 const ROW_ZOOM_KEY = "ps.video.rowZoom"
 
 export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE))
 
 const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start)
 
-/** 0, the playhead and both edges of every clip but `ignore`: where a dragged clip snaps. */
-function snapPoints(p: Project, playhead: number, ignore?: string): number[] {
+/** 0, the playhead and both edges of every clip but `ignore` (on every track but `skipTrack`): where a dragged clip or edge snaps. */
+function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: number): number[] {
   const points = [0, playhead]
-  p.tracks.forEach((t) => {
+  p.tracks.forEach((t, i) => {
+    if (i === skipTrack) return
     const starts = trackStarts(t)
     t.clips.forEach((c, k) => {
       if (c.id !== ignore) points.push(starts[k], starts[k] + clipLength(c))
@@ -93,6 +98,8 @@ export function Timeline({
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
+  // A drag that snaps: whether Alt has snapping off, and the time it's snapped to (null: none), for the hint and the guide line.
+  const [snap, setSnap] = useState<{ off: boolean; at: number | null } | null>(null)
   // A clip being dragged: how far it has moved (content px, scrolling included), where it would land and where its end is.
   const [drag, setDrag] = useState<{ id: string; length: number; dx: number; dy: number; target: DropTarget | null; end: number } | null>(null)
   // The clip last dropped by a drag: it lands where its ghost was, without sliding there from where it started (until the next press).
@@ -112,13 +119,15 @@ export function Timeline({
   const stopFollowing = useRef<(() => void) | null>(null)
   // Auto-pan while a drag is near an edge: the pointer's x, what to redo after each scroll step, and the rAF loop.
   const pan = useRef<{ x: number; onPan: () => void; frame: number | null; last: number; carry: number } | null>(null)
-  // The last file drag over a row, so auto-pan can move its ghost along.
-  const fileDrag = useRef<{ clientX: number; track: number } | null>(null)
+  // The last file drag over a row, so auto-pan can move its ghost along (with Alt, snapping off).
+  const fileDrag = useRef<{ clientX: number; track: number; alt: boolean } | null>(null)
   // A wheel zoom asked for but not rendered yet: the zoom and the scrollLeft that keeps the pointer's time in place.
   const pendingZoom = useRef<{ zoom: number; scrollLeft: number } | null>(null)
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   // The row zoom the wheel last asked for, so quick notches add up before the next render catches up.
   const wheelRowZoom = useRef<number | null>(null)
+  // Alt held during a pointer drag (snapping off), kept up to date by follow.
+  const altHeld = useRef(false)
 
   const row = rowHeight(project.tracks.length, rowZoom)
   const tight = row < TIGHT_ROW
@@ -189,6 +198,7 @@ export function Timeline({
     const onEnd = () => {
       setOutside(null)
       setDrop(null)
+      setSnap(null)
       fileDrag.current = null
       stopPan()
     }
@@ -202,7 +212,8 @@ export function Timeline({
     }
   }, [])
 
-  const shown = trim ? trimClip(project, trim.id, trim.edge, trim.seconds) : project
+  // A left-edge trim on a snapped base shows unpacked while dragging (leftTrimDraft); anything else is the trim itself.
+  const shown = !trim ? project : trim.edge === "in" ? leftTrimDraft(project, trim.id, trim.seconds).draft : trimClip(project, trim.id, trim.edge, trim.seconds)
   const total = Math.max(totalLength(project), totalLength(shown))
   const canAddTrack = project.tracks.length < MAX_TRACKS
   const dragging = outside !== null || drag !== null
@@ -231,16 +242,23 @@ export function Timeline({
 
   /**
    * Where a clip `length` long lands on `track`: its left edge `left` snapped
-   * and slid clear of the clips there. `ignore` is the clip being moved. On a
-   * snapped V1 it's the slot the pointer time `at` picks (baseInsertion), its
-   * start that slot's boundary.
+   * (unless `snapOn` is false) and slid clear of the clips there, and `guide`,
+   * the time its start or end snapped to (null when it didn't, or the slide
+   * took it off). `ignore` is the clip being moved. On a snapped V1 it's the
+   * slot the pointer time `at` picks (baseInsertion), its start that slot's
+   * boundary, with no snapping.
    */
-  function targetFor(track: number, left: number, length: number, ignore?: string, at = left): DropTarget {
+  function targetFor(track: number, left: number, length: number, ignore?: string, at = left, snapOn = true): { to: DropTarget; guide: number | null } {
     const { project: p, playhead: t, zoom: z } = live.current
-    if (track === 0 && isMagnetic(p)) return { track, start: baseInsertion(p.tracks[0].clips, at, ignore).start }
-    const start = snapStart(left, length, snapPoints(p, t, ignore), SNAP_PX, z)
-    return { track, start: resolveStart(p.tracks[track]?.clips ?? [], length, start, ignore) }
+    if (track === 0 && isMagnetic(p)) return { to: { track, start: baseInsertion(p.tracks[0].clips, at, ignore).start }, guide: null }
+    const s = snapOn ? snapEdges([left, left + length], snapPoints(p, t, ignore), SNAP_PX, z) : null
+    const snapped = Math.max(0, !s ? left : s.edge === 0 ? s.at : s.at - length)
+    const start = resolveStart(p.tracks[track]?.clips ?? [], length, snapped, ignore)
+    return { to: { track, start }, guide: s && Math.abs(start - snapped) < 1e-9 ? s.at : null }
   }
+
+  /** The hint and guide for a snapping drag landing on `track`: none on a snapped V1 (its insertion line doesn't snap). */
+  const snapState = (track: number, off: boolean, guide: number | null) => (track === 0 && isMagnetic(live.current.project) ? null : { off, at: off ? null : guide })
 
   /** Zooms time by `factor` around the pointer at `clientX`; false when the zoom is already at its limit. */
   function zoomAt(clientX: number, factor: number): boolean {
@@ -342,32 +360,50 @@ export function Timeline({
    * Window listeners for one pointer drag, removed on release (or unmount).
    * `onMove` returns false while the press isn't a drag yet; once it is, the
    * view auto-pans near its edges and `onMove` runs again with the last
-   * pointer position after every pan step.
+   * pointer position after every pan step. A drag that `snaps` keeps altHeld
+   * up to date (the pointer's altKey, and Alt pressed or released without a
+   * move, which runs `onMove` again); Alt's browser default is held off.
    */
-  function follow(onMove: (e: PointerEvent) => boolean | void, onEnd: () => void) {
+  function follow(onMove: (e: PointerEvent) => boolean | void, onEnd: () => void, snaps = false) {
     stopFollowing.current?.()
     let last: PointerEvent | null = null
     const move = (e: PointerEvent) => {
       last = e
+      if (snaps) altHeld.current = e.altKey
       if (onMove(e) === false) return
       panAt(e.clientX, () => {
         if (last) onMove(last)
       })
     }
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Alt") return
+      e.preventDefault()
+      const down = e.type === "keydown"
+      if (down === altHeld.current) return
+      altHeld.current = down
+      if (last) onMove(last)
+    }
     const up = () => {
       stop()
       onEnd()
+      setSnap(null)
     }
     const stop = () => {
       window.removeEventListener("pointermove", move)
       window.removeEventListener("pointerup", up)
       window.removeEventListener("pointercancel", up)
+      window.removeEventListener("keydown", key, true)
+      window.removeEventListener("keyup", key, true)
       stopPan()
       if (stopFollowing.current === stop) stopFollowing.current = null
     }
     window.addEventListener("pointermove", move)
     window.addEventListener("pointerup", up)
     window.addEventListener("pointercancel", up)
+    if (snaps) {
+      window.addEventListener("keydown", key, true)
+      window.addEventListener("keyup", key, true)
+    }
     stopFollowing.current = stop
   }
 
@@ -378,7 +414,14 @@ export function Timeline({
   })
   const scrollNow = () => ({ x: scroller.current?.scrollLeft ?? 0, y: scroller.current?.scrollTop ?? 0 })
 
-  function startTrim(e: React.PointerEvent, clip: Clip, edge: "in" | "out") {
+  /**
+   * Drag a clip's edge handle: the dragged edge snaps to the playhead, 0 and
+   * the other clips' edges on every layer (on a snapped V1, the other layers'
+   * only: its own clips ride along). On a snapped V1 the left edge shows the
+   * plain trim while dragging and the base packs on release (leftTrimDraft);
+   * the right edge ripples live there, as before. One undo step.
+   */
+  function startTrim(e: React.PointerEvent, clip: Clip, edge: "in" | "out", track: number) {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
@@ -386,21 +429,39 @@ export function Timeline({
     const scroll0 = scrollNow()
     let moved = false
     let seconds: number | null = null
+    altHeld.current = e.altKey
     onSelect(clip.id)
     follow(
       (ev) => {
         const cdx = ev.clientX - startX
         if (!moved && Math.abs(cdx) < DRAG_THRESHOLD) return false
         moved = true
-        const s = trimDelta(edge, clip, cdx + scrolledSince(scroll0).x, live.current.zoom)
+        const { project: p, playhead: t, zoom: z } = live.current
+        let s = trimDelta(edge, clip, cdx + scrolledSince(scroll0).x, z)
+        const off = altHeld.current
+        let guide: number | null = null
+        if (!off) {
+          // Either edge sits at start + (seconds - in) on the timeline, an image's too (its in is 0).
+          const hit = snapEdges([clip.start + s - clip.in], snapPoints(p, t, clip.id, track === 0 && isMagnetic(p) ? 0 : undefined), SNAP_PX, z)
+          if (hit) {
+            s += hit.shift
+            // A guide only when the edge got there (a neighbour or a limit may have stopped it).
+            const c = (edge === "in" ? leftTrimDraft(p, clip.id, s).draft : trimClip(p, clip.id, edge, s)).tracks[track]?.clips.find((x) => x.id === clip.id)
+            if (c && Math.abs((edge === "in" ? c.start : clipEnd(c)) - hit.at) < 1e-6) guide = hit.at
+          }
+        }
         seconds = s
         setTrim({ id: clip.id, edge, seconds: s })
+        setSnap({ off, at: guide })
       },
       () => {
         setTrim(null)
         const s = seconds
-        if (s !== null) onChange((p) => trimClip(p, clip.id, edge, s))
-      }
+        if (s === null) return
+        // Off a snapped base leftTrimDraft's seconds are s itself.
+        onChange((p) => (edge === "in" ? trimClip(p, clip.id, "in", leftTrimDraft(p, clip.id, s).seconds) : trimClip(p, clip.id, edge, s)))
+      },
+      true
     )
   }
 
@@ -423,6 +484,7 @@ export function Timeline({
     const length = clipLength(clip)
     let moved = false
     let to: DropTarget | null = null
+    altHeld.current = e.altKey
     setLanded(null)
     follow(
       (ev) => {
@@ -435,8 +497,11 @@ export function Timeline({
         const dx = cdx + scrolled.x
         const dy = cdy + scrolled.y
         const newLeft = Math.max(0, left + dx / live.current.zoom)
-        to = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX))
-        setDrag({ id: clip.id, length, dx, dy, target: to, end: Math.max(newLeft, to.start) + length })
+        const off = altHeld.current
+        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX), !off)
+        to = r.to
+        setDrag({ id: clip.id, length, dx, dy, target: r.to, end: Math.max(newLeft, r.to.start) + length })
+        setSnap(snapState(r.to.track, off, r.guide))
       },
       () => {
         setDrag(null)
@@ -446,14 +511,17 @@ export function Timeline({
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
         if (!stays) onChange((p) => moveClip(p, clip.id, t.track, t))
-      }
+      },
+      true
     )
   }
 
-  /** The ghost of a file dragged over `track` with the pointer at `clientX`. */
-  function placeGhost(clientX: number, track: number) {
-    const next = targetFor(track, timeAt(clientX), live.current.outside?.length ?? DEFAULT_IMAGE)
+  /** The ghost of a file dragged over `track` with the pointer at `clientX` (Alt held: no snapping). */
+  function placeGhost(clientX: number, track: number, alt: boolean) {
+    const { to: next, guide } = targetFor(track, timeAt(clientX), live.current.outside?.length ?? DEFAULT_IMAGE, undefined, undefined, !alt)
     setDrop((prev) => (sameTarget(prev, next) ? prev : next))
+    const s = snapState(track, alt, guide)
+    setSnap((prev) => (prev?.off === s?.off && prev?.at === s?.at ? prev : s))
   }
 
   // Drag and drop of files onto a track row (`track` one past the top is the add-a-layer row).
@@ -461,8 +529,8 @@ export function Timeline({
     if (!hasMediaDrag(e.dataTransfer)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = "copy"
-    fileDrag.current = { clientX: e.clientX, track }
-    placeGhost(e.clientX, track)
+    fileDrag.current = { clientX: e.clientX, track, alt: e.altKey }
+    placeGhost(e.clientX, track, e.altKey)
   }
 
   function dragLeave(e: React.DragEvent) {
@@ -470,6 +538,7 @@ export function Timeline({
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
     fileDrag.current = null
     setDrop(null)
+    setSnap(null)
   }
 
   // A file dragged anywhere over the timeline (rows, ruler, headers) auto-pans near the edges; the ghost follows when it's over a row.
@@ -477,7 +546,7 @@ export function Timeline({
     if (!hasMediaDrag(e.dataTransfer)) return
     panAt(e.clientX, () => {
       const f = fileDrag.current
-      if (f) placeGhost(f.clientX, f.track)
+      if (f) placeGhost(f.clientX, f.track, f.alt)
     })
   }
 
@@ -490,15 +559,17 @@ export function Timeline({
     const assetId = e.dataTransfer.getData(ASSET_DRAG_TYPE)
     const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
     setDrop(null)
+    setSnap(null)
     fileDrag.current = null
     stopPan()
     if (!assetId && !inbox) return
     e.preventDefault()
     const t = timeAt(e.clientX)
+    const snapOn = !e.altKey
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
-      const to = targetFor(track, t, assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration)
+      const { to } = targetFor(track, t, assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, undefined, undefined, snapOn)
       const id = newId()
       onChange((p) => addClip(p, assetId, to.track, to, id))
       return
@@ -506,7 +577,7 @@ export function Timeline({
     try {
       const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
       // The clip's real length is known after the import; addClip slides it clear of overlaps again then.
-      if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, targetFor(track, t, outside?.length ?? DEFAULT_IMAGE))
+      if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn).to)
     } catch {
       // Not our drag after all.
     }
@@ -516,15 +587,18 @@ export function Timeline({
   const inset = tight ? "top-1 bottom-1" : "top-2 bottom-2"
   const ghost = (start: number, shift = 0) => (
     <div
-      className={cn("pointer-events-none absolute z-10 rounded-lg border-2 border-dashed border-primary bg-primary/10", inset)}
+      className={cn("pointer-events-none absolute z-10 rounded-lg border-2 border-dashed border-editor-accent bg-editor-accent/10", inset)}
       style={{ left: start * zoom + shift, width: Math.max(targetLength * zoom - 2, 8) }}
     />
   )
   // On a snapped V1: where the clip goes in, between two clips.
   const insertLine = (start: number) => (
-    <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-primary" style={{ left: start * zoom }} />
+    <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: start * zoom }} />
   )
   const magnetic = isMagnetic(project)
+  // A drag that snaps shows the Alt hint, and the guide line while it's snapped.
+  const snapHint = snap && (drag || trim || drop) ? snap : null
+  const guide = snapHint && !snapHint.off ? snapHint.at : null
 
   const allEmpty = project.tracks.every((t) => t.clips.length === 0)
   const rows = shown.tracks.map((_, i) => i).reverse()
@@ -553,7 +627,7 @@ export function Timeline({
                   {formatTimecode(t).slice(0, -2)}
                 </span>
               ))}
-              <div className="pointer-events-none absolute bottom-0 h-2 w-2 -translate-x-1/2 rounded-full bg-primary" style={{ left: playhead * zoom }} />
+              <div className="pointer-events-none absolute bottom-0 h-2 w-2 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: playhead * zoom }} />
             </div>
           </div>
 
@@ -567,7 +641,7 @@ export function Timeline({
                 aria-label="Drop here to add a layer"
                 className={cn(
                   "relative my-1 flex-1 rounded-md border-2 border-dashed text-[11px]",
-                  dragging ? "border-primary/60 bg-primary/5 text-foreground" : "border-transparent text-muted-foreground/60"
+                  dragging ? "border-editor-accent/60 bg-editor-accent/5 text-foreground" : "border-transparent text-muted-foreground/60"
                 )}
                 onDragOver={(e) => dragOver(e, project.tracks.length)}
                 onDragLeave={dragLeave}
@@ -611,7 +685,7 @@ export function Timeline({
                         className={cn(
                           "flex shrink-0 items-center justify-center rounded border",
                           tight ? "h-4 w-4" : "h-5 w-5",
-                          magnetic ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                          magnetic ? "border-editor-accent bg-editor-accent/15 text-editor-accent" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                         )}
                       >
                         <Magnet className="h-3 w-3" />
@@ -672,7 +746,7 @@ export function Timeline({
                           isBase ? "bg-muted" : "bg-sky-500/15",
                           !moving && !trim && landed !== clip.id && "transition-[left] duration-150 motion-reduce:transition-none",
                           selectedId === clip.id
-                            ? "z-10 border-primary ring-2 ring-primary"
+                            ? "z-10 border-editor-accent ring-2 ring-editor-accent"
                             : isBase
                               ? "border-border hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
                               : "border-sky-500/60 hover:border-sky-400 focus-visible:ring-2 focus-visible:ring-ring",
@@ -735,14 +809,14 @@ export function Timeline({
                           <span
                             key={edge}
                             aria-hidden
-                            onPointerDown={(e) => startTrim(e, clip, edge)}
+                            onPointerDown={(e) => startTrim(e, clip, edge, i)}
                             className={cn(
-                              "absolute inset-y-0 flex w-3 cursor-ew-resize touch-none items-center justify-center bg-primary/80 opacity-0 transition-opacity group-hover:opacity-100",
+                              "absolute inset-y-0 flex w-3 cursor-ew-resize touch-none items-center justify-center bg-editor-accent/80 opacity-0 transition-opacity group-hover:opacity-100",
                               selectedId === clip.id && "opacity-100",
                               edge === "in" ? "left-0 rounded-l-lg" : "right-0 rounded-r-lg"
                             )}
                           >
-                            <span className="h-[60%] max-h-5 w-0.5 rounded-full bg-primary-foreground/90" />
+                            <span className="h-[60%] max-h-5 w-0.5 rounded-full bg-editor-accent-foreground/90" />
                           </span>
                         ))}
                       </div>
@@ -753,9 +827,21 @@ export function Timeline({
               </div>
             )
           })}
-          <div className="pointer-events-none absolute top-6 bottom-0 z-20 w-px bg-primary" style={{ left: header + playhead * zoom }} />
+          <div className="pointer-events-none absolute top-6 bottom-0 z-20 w-px bg-editor-accent" style={{ left: header + playhead * zoom }} />
+          {/* 2 px, centred on the snapped time, across every row: the same guide the preview draws. */}
+          {guide !== null && <div aria-hidden className="pointer-events-none absolute top-6 bottom-0 z-30 w-0.5 -translate-x-1/2 bg-fuchsia-400" style={{ left: header + guide * zoom }} />}
         </div>
       </div>
+      {snapHint && (
+        // Over the view, not the scrolled content: top centre of the clips area, just under the ruler.
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-7 z-50 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow dark:bg-neutral-100/90 dark:text-neutral-900"
+          style={{ left: header + Math.max(0, (viewport > 0 ? viewport : 600) - header) / 2 }}
+        >
+          {snapHint.off ? "Snapping off" : "Hold Alt to turn snapping off"}
+        </div>
+      )}
       {project.tracks.length >= 3 && (
         <div className="flex w-7 shrink-0 flex-col items-center gap-1 border-l border-border/60 bg-card py-2" title="Layer height (double-click to reset)">
           <span aria-hidden className="text-[9px] leading-none text-muted-foreground">{Math.round(rowZoom * 100)}%</span>
@@ -770,7 +856,7 @@ export function Timeline({
             value={rowZoom}
             onChange={(e) => setRowZoom(Number(e.target.value))}
             onDoubleClick={() => setRowZoom(1)}
-            className="min-h-0 w-4 flex-1 accent-primary [direction:rtl] [writing-mode:vertical-lr]"
+            className="min-h-0 w-4 flex-1 accent-editor-accent [direction:rtl] [writing-mode:vertical-lr]"
           />
         </div>
       )}

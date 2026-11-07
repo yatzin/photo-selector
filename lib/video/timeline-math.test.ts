@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { Clip } from "./project"
 import {
-  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, pxToTime, rowHeight, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, pxToTime, rowHeight, snapEdges, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "./timeline-math"
 
 const clip = (id: string, a: number, b: number): Clip => ({ id, asset: "a", in: a, out: b, start: 0 })
@@ -40,6 +40,26 @@ describe("snapStart", () => {
   it("leaves the start alone when nothing is near, and never goes below 0", () => {
     expect(snap(2.5, 1, [2, 4])).toBe(2.5)
     expect(snap(-0.5, 1, [])).toBe(0)
+  })
+})
+
+describe("snapEdges", () => {
+  // 8 px at 40 px/s is 0.2 s.
+  const snap = (edges: number[], points: number[]) => snapEdges(edges, points, 8, 40)
+  it("pulls one dragged edge onto the nearest point within the threshold", () => {
+    expect(snap([2.15], [0, 2, 9])).toEqual({ shift: 2 - 2.15, at: 2, edge: 0 })
+    expect(snap([1.9], [2, 1.95])).toEqual({ shift: 1.95 - 1.9, at: 1.95, edge: 0 })
+  })
+  it("takes whichever of two edges is nearer a point, across every point", () => {
+    // A clip from 3.1 to 5.05: its end is nearer 5 than its start is to 3.
+    expect(snap([3.1, 5.05], [3, 5])).toEqual({ shift: 5 - 5.05, at: 5, edge: 1 })
+    expect(snap([3.02, 5.1], [3, 5])).toEqual({ shift: 3 - 3.02, at: 3, edge: 0 })
+  })
+  it("is null when nothing is near, and counts the threshold in pixels at the zoom", () => {
+    expect(snap([2.5], [2, 3])).toBeNull()
+    expect(snap([2.5], [])).toBeNull()
+    expect(snapEdges([2.5], [2.58], 8, 200)).toBeNull()
+    expect(snapEdges([2.5], [2.58], 8, 80)).toEqual({ shift: 2.58 - 2.5, at: 2.58, edge: 0 })
   })
 })
 
