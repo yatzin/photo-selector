@@ -71,6 +71,17 @@ describe("exportFingerprint", () => {
     expect(exportFingerprint(withT({ ...IDENTITY_LIKE, cropLeft: 0 }))).toBe(exportFingerprint(p))
   })
 
+  it("changes with a rotation or a flip, and treats zero and false like none", () => {
+    const p = project()
+    const withT = (t: object) => ({ ...p, tracks: [{ ...p.tracks[0], clips: [{ ...p.tracks[0].clips[0], transform: t }, p.tracks[0].clips[1]] }, p.tracks[1]] }) as Project
+    const half = { x: 0, y: 0, scale: 0.5, cropTop: 0, cropBottom: 0 }
+    const prints = [half, { ...half, rotation: 30 }, { ...half, rotation: -30 }, { ...half, flipH: true }, { ...half, flipV: true }].map((t) => exportFingerprint(withT(t)))
+    expect(new Set(prints).size).toBe(prints.length)
+    expect(exportFingerprint(withT({ ...half, rotation: 0, flipH: false, flipV: false }))).toBe(exportFingerprint(withT(half)))
+    expect(exportFingerprint(withT({ ...IDENTITY_LIKE, rotation: 0, flipH: false }))).toBe(exportFingerprint(p))
+    expect(exportFingerprint(withT({ ...IDENTITY_LIKE, flipV: true }))).not.toBe(exportFingerprint(p))
+  })
+
   it("changes when a used asset is removed from the project (its clips go too), not for an unused one", () => {
     const p = project()
     expect(exportFingerprint(removeAsset(p, "a").project)).not.toBe(exportFingerprint(p))

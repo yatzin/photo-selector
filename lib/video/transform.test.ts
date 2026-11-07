@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
-  clipRect, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, isValidTransform, normalizeTransform, scaleAbout, snapCorner, snapEdge, snapToCanvas, type Transform,
+  clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, isValidTransform, normalizeAngle, normalizeTransform, rotatedBounds,
+  rotatedCorners, rotatePoint, scaleAbout, snapAngle, snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Transform,
 } from "./transform"
 
 const W = 1920
@@ -308,5 +309,130 @@ describe("snapCorner", () => {
   it("does nothing away from the lines", () => {
     const t1 = dragCorner(t({ scale: 0.5 }), "br", 16 / 9, W, H, 100, 56, { anchor: "opposite" })
     expect(snapCorner(t({ scale: 0.5 }), "br", 16 / 9, W, H, t1, 6)).toEqual({ t: t1, guides: { x: [], y: [] } })
+  })
+})
+
+describe("rotation and flips", () => {
+  it("count as a transform, and their absence or zero as none", () => {
+    expect(isIdentity(t({ rotation: 0, flipH: false, flipV: false }))).toBe(true)
+    expect(isIdentity(t({ rotation: 1 }))).toBe(false)
+    expect(isIdentity(t({ flipH: true }))).toBe(false)
+    expect(isIdentity(t({ flipV: true }))).toBe(false)
+  })
+
+  it("validate: a finite rotation in (-180, 180] and boolean flips", () => {
+    expect(isValidTransform(t({ rotation: 180, flipH: true, flipV: false }))).toBe(true)
+    expect(isValidTransform(t({ rotation: -179.5 }))).toBe(true)
+    for (const bad of [{ rotation: -180 }, { rotation: 181 }, { rotation: NaN }, { rotation: "5" }, { flipH: 1 }, { flipV: "true" }, { flipH: null }]) {
+      expect(isValidTransform({ ...IDENTITY, ...bad })).toBe(false)
+    }
+  })
+
+  it("normalise: the angle into (-180, 180], zero and false left out", () => {
+    expect(normalizeAngle(190)).toBe(-170)
+    expect(normalizeAngle(-180)).toBe(180)
+    expect(normalizeAngle(540)).toBe(180)
+    expect(normalizeAngle(-360)).toBe(0)
+    expect(Object.is(normalizeAngle(-0), 0)).toBe(true)
+    expect(normalizeTransform(t({ rotation: 370, flipH: true, flipV: false }))).toEqual(t({ rotation: 10, flipH: true }))
+    const plain = normalizeTransform(t({ rotation: 360, flipH: false }))
+    expect(plain).toEqual(IDENTITY)
+    expect("rotation" in plain || "flipH" in plain || "flipV" in plain).toBe(false)
+    expect(normalizeTransform(t({ rotation: NaN }))).toEqual(IDENTITY)
+  })
+
+  it("withRotation and toggleFlip change only their field", () => {
+    const t0 = t({ x: 0.1, scale: 0.5, cropLeft: 0.2 })
+    expect(withRotation(t0, -200)).toEqual({ ...t0, rotation: 160 })
+    expect(withRotation(withRotation(t0, 45), 0)).toEqual(t0)
+    expect(toggleFlip(t0, "h")).toEqual({ ...t0, flipH: true })
+    expect(toggleFlip(toggleFlip(t0, "v"), "v")).toEqual(t0)
+  })
+
+  it("leave clipRect alone: flips mirror inside the same window, and the rect is the unturned one", () => {
+    const t0 = t({ x: 0.1, scale: 0.5, cropLeft: 0.2, cropTop: 0.1 })
+    expect(clipRect(4 / 3, W, H, { ...t0, rotation: 30, flipH: true, flipV: true })).toEqual(clipRect(4 / 3, W, H, t0))
+  })
+})
+
+describe("rotation geometry", () => {
+  it("turns points clockwise (y down) about a centre", () => {
+    const p = rotatePoint({ x: 10, y: 0 }, { x: 0, y: 0 }, 90)
+    expect(p.x).toBeCloseTo(0, 9)
+    expect(p.y).toBeCloseTo(10, 9)
+    const back = toLocal(p.x, p.y, 90)
+    expect(back.x).toBeCloseTo(10, 9)
+    expect(back.y).toBeCloseTo(0, 9)
+  })
+
+  it("rotates the visible strip's corners about the content centre, not the strip's own centre", () => {
+    // Full width, the left half cropped: the strip is the right half, and it turns about the canvas centre.
+    const t0 = t({ cropLeft: 0.5, rotation: 180 })
+    const v = clipRect(16 / 9, W, H, t0).visible
+    const [tl, tr, br, bl] = rotatedCorners(v, contentCentre(W, H, t0), 180)
+    expect(tl.x).toBeCloseTo(960, 6)
+    expect(tl.y).toBeCloseTo(1080, 6)
+    expect(tr.x).toBeCloseTo(0, 6)
+    expect(br.y).toBeCloseTo(0, 6)
+    expect(bl.x).toBeCloseTo(960, 6)
+    const b = rotatedBounds(16 / 9, W, H, t0)
+    expect(b.x).toBeCloseTo(0, 6)
+    expect(b.w).toBeCloseTo(960, 6)
+  })
+
+  it("takes a 90 degree picture's bounds with width and height swapped", () => {
+    const b = rotatedBounds(16 / 9, W, H, t({ scale: 0.5, rotation: 90 }))
+    expect(b.w).toBeCloseTo(540, 6)
+    expect(b.h).toBeCloseTo(960, 6)
+    expect(b.x + b.w / 2).toBeCloseTo(960, 6)
+  })
+
+  it("hit-tests the turned strip", () => {
+    const t0 = t({ scale: 0.5, rotation: 90 })
+    // Unturned the strip is x 480-1440, y 270-810; turned it is x 690-1230, y 60-1020.
+    expect(containsPoint(16 / 9, W, H, t0, 960, 100)).toBe(true)
+    expect(containsPoint(16 / 9, W, H, t0, 500, 540)).toBe(false)
+    expect(containsPoint(16 / 9, W, H, t({ scale: 0.5 }), 500, 540)).toBe(true)
+  })
+
+  it("snaps the angle to 15 degree steps within 3 degrees", () => {
+    expect(snapAngle(43)).toBe(45)
+    expect(snapAngle(41)).toBe(41)
+    expect(snapAngle(-2.5)).toBe(0)
+    expect(snapAngle(88)).toBe(90)
+    expect(snapAngle(179)).toBe(180)
+    expect(snapAngle(-178)).toBe(180)
+  })
+
+  it("scales a rotated picture about the opposite corner where it shows, in its own axes", () => {
+    const aspect = 4 / 3
+    for (const rotation of [30, 90, -135]) {
+      const t0 = t({ scale: 0.6, x: 0.1, y: -0.1, cropTop: 0.1, cropLeft: 0.2, rotation })
+      const shown = (tt: Transform) => rotatedCorners(clipRect(aspect, W, H, tt).visible, contentCentre(W, H, tt), rotation)
+      // The bottom right corner dragged outward along the picture's own diagonal: the top left stays where it shows.
+      const v = clipRect(aspect, W, H, t0).visible
+      const out = rotatePoint({ x: v.w * 0.1, y: v.h * 0.1 }, { x: 0, y: 0 }, rotation)
+      const t1 = dragCorner(t0, "br", aspect, W, H, out.x, out.y, { anchor: "opposite" })
+      expect(t1.scale).toBeCloseTo(0.66, 9)
+      expect(t1.rotation).toBe(rotation)
+      const [a0] = shown(t0)
+      const [a1] = shown(t1)
+      expect(a1.x).toBeCloseTo(a0.x, 6)
+      expect(a1.y).toBeCloseTo(a0.y, 6)
+      // Keyboard scaling (scaleAbout) keeps that corner too.
+      const [a2] = shown(scaleAbout(t0, aspect, W, H, "br", 0.8))
+      expect(a2.x).toBeCloseTo(a0.x, 6)
+      expect(a2.y).toBeCloseTo(a0.y, 6)
+    }
+  })
+
+  it("keeps the content centre (the pivot) when an edge is cropped, so the rest stays on screen", () => {
+    const t0 = t({ scale: 0.7, rotation: 40 })
+    const t1 = dragEdge(t0, "left", 16 / 9, W, H, 100)
+    expect(contentCentre(W, H, t1)).toEqual(contentCentre(W, H, t0))
+    const [, tr0, br0] = rotatedCorners(clipRect(16 / 9, W, H, t0).visible, contentCentre(W, H, t0), 40)
+    const [, tr1, br1] = rotatedCorners(clipRect(16 / 9, W, H, t1).visible, contentCentre(W, H, t1), 40)
+    expect(tr1.x).toBeCloseTo(tr0.x, 6)
+    expect(br1.y).toBeCloseTo(br0.y, 6)
   })
 })

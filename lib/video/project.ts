@@ -1,4 +1,4 @@
-import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, type Transform } from "./transform"
+import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
@@ -362,6 +362,31 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   return replace({ ...clip, out })
 }
 
+/**
+ * A snapped base clip's left edge being dragged to source time `seconds`
+ * (see trimClip), as it shows while the pointer is down: `draft` has the edge
+ * where the pointer is, the start moving with it and nothing else on the track
+ * moving (no packing, no ripple; it may reach over the previous clip, not past
+ * 0, the source's start, MIN_CLIP or MAX_IMAGE). `seconds` is what to commit
+ * on release with trimClip, which then packs the base as usual: the same edge
+ * move, clamped as the draft was. Off a snapped base it's trimClip itself.
+ */
+export function leftTrimDraft(p: Project, id: string, seconds: number): { draft: Project; seconds: number } {
+  const at = find(p, id)
+  const asset = at && p.assets[at.clip.asset]
+  if (!at || !asset || at.track !== 0 || !isMagnetic(p) || Number.isNaN(seconds)) return { draft: trimClip(p, id, "in", seconds), seconds }
+  const { clip } = at
+  // The most the committed trim may grow the clip: the base's end stays inside MAX_TIMELINE.
+  const growth = MAX_TIMELINE - trackEnd(p.tracks[0])
+  const length = clipLength(clip)
+  const lo = -Math.min(clip.start, growth, assetKind(asset) === "image" ? MAX_IMAGE - length : clip.in)
+  const hi = length - MIN_CLIP
+  if (hi < -1e-9) return { draft: p, seconds: clip.in }
+  const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
+  const next: Clip = assetKind(asset) === "image" ? { ...clip, out: length - delta, start: clip.start + delta } : { ...clip, in: clip.in + delta, start: clip.start + delta }
+  return { draft: withTrack(p, 0, p.tracks[0].clips.map((c) => (c.id === id ? next : c))), seconds: clip.in + delta }
+}
+
 /** Cuts a clip in two at `timelineTime`; the second part gets `newId` and starts there. */
 export function splitClip(p: Project, id: string, timelineTime: number, newId: string): Project {
   const at = find(p, id)
@@ -387,7 +412,7 @@ const sameTransform = (a: Transform | undefined, b: Transform | undefined) =>
   isIdentity(a) && isIdentity(b)
     ? true
     : a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.scale === b.scale && a.cropTop === b.cropTop && a.cropBottom === b.cropBottom &&
-      cropLeftOf(a) === cropLeftOf(b) && cropRightOf(a) === cropRightOf(b)
+      cropLeftOf(a) === cropLeftOf(b) && cropRightOf(a) === cropRightOf(b) && rotationOf(a) === rotationOf(b) && !a.flipH === !b.flipH && !a.flipV === !b.flipV
 
 /** Sets a clip's transform (clamped into its limits); the identity removes the field. The same project when nothing changes. */
 export function setTransform(p: Project, clipId: string, t: Transform): Project {
@@ -511,10 +536,14 @@ export function parseProject(json: unknown): Project | null {
       const clip: Clip = { id: c.id, asset: c.asset, in: c.in, out: c.out, start }
       if (c.transform !== undefined) {
         if (!isValidTransform(c.transform)) return null
-        // Only the transform's own fields; a zero left or right crop is left out.
+        // Only the transform's own fields; a zero left or right crop or rotation and a false flip are left out.
         if (!isIdentity(c.transform)) {
-          const { x, y, scale, cropTop, cropBottom, cropLeft, cropRight } = c.transform
-          clip.transform = { x, y, scale, cropTop, cropBottom, ...(cropLeft ? { cropLeft } : {}), ...(cropRight ? { cropRight } : {}) }
+          const { x, y, scale, cropTop, cropBottom, cropLeft, cropRight, rotation, flipH, flipV } = c.transform
+          clip.transform = {
+            x, y, scale, cropTop, cropBottom,
+            ...(cropLeft ? { cropLeft } : {}), ...(cropRight ? { cropRight } : {}), ...(rotation ? { rotation } : {}),
+            ...(flipH ? { flipH } : {}), ...(flipV ? { flipV } : {}),
+          }
         }
       }
       if (c.muted === true || raw.muted === true) clip.muted = true

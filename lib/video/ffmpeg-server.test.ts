@@ -6,7 +6,7 @@ import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
 import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
-import { clipRect, cropLeftOf, cropRightOf, IDENTITY, type Transform } from "./transform"
+import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
 
 describe("parseProbe", () => {
   it("reads duration and audio", () => {
@@ -281,6 +281,80 @@ describe("buildExportArgs with transforms", () => {
     }
     const bare: Project = { ...layers, tracks: [plain.tracks[0], { id: "t2", clips: [{ id: "o", asset: "a", in: 0, out: 1, start: 1 }] }] }
     expect(buildExportGraph(layers, files)).toEqual(buildExportGraph(bare, files))
+  })
+
+  it("flips after the scale and before the crop, placed as an unflipped clip is", () => {
+    const t: Transform = { ...IDENTITY, scale: 0.5, cropLeft: 0.2, flipH: true, flipV: true }
+    const g = graph(buildExportArgs(project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: t }] }]), tFiles, "o"))
+    expect(g).toContain(`${fit},scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2,hflip,vflip,crop=round(iw*0.8/2)*2:ih:round(iw*0.2/2)*2:0,setsar=1,setpts=PTS+0/TB[v0]`)
+    expect(g).toContain("overlay=x=(W-w/0.8)/2+0*W+0.2*w/0.8:y=(H-h/1)/2+0*H+0*h/1:eval=init")
+    expect(g).not.toContain("rotate")
+    const h = graph(buildExportArgs(project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: { ...IDENTITY, flipH: true } }] }]), tFiles, "o"))
+    expect(h).toContain(`${fit},scale=trunc(iw*1/2)*2:trunc(ih*1/2)*2,hflip,setsar=1,setpts`)
+    expect(h).not.toContain("vflip")
+  })
+
+  it("rotates a clip on RGBA about its content centre into a frame that holds it, transparent corners", () => {
+    const t: Transform = { ...IDENTITY, x: 0.1, y: -0.2, scale: 0.5, rotation: 90 }
+    const p = project([
+      { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: t }] },
+      { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 0, transform: { ...IDENTITY, rotation: -45 } }] },
+    ])
+    const g = graph(buildExportArgs(p, tFiles, "o"))
+    expect(g).toContain(`[0:v]trim=0:2,setpts=PTS-STARTPTS,${fit},scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2,format=rgba,rotate=1.570796:ow=rotw(1.570796):oh=roth(1.570796):c=black@0,setsar=1,format=yuva420p,setpts=PTS+0/TB[v0]`)
+    expect(g).toContain("[bg][v0]overlay=x=(W-w)/2+0.1*W:y=(H-h)/2-0.2*H:eval=init")
+    // A turned still keeps its alpha.
+    expect(g).toContain("rotate=-0.785398:ow=rotw(-0.785398):oh=roth(-0.785398):c=black@0,setsar=1,format=yuva420p,format=yuva420p,setpts=PTS+0/TB[v1]")
+  })
+
+  it("flips, crops (transparent, full size) and rotates, in that order", () => {
+    const t: Transform = { x: 0, y: 0, scale: 0.8, cropTop: 0.1, cropBottom: 0.2, cropLeft: 0.25, cropRight: 0.05, rotation: 30, flipH: true }
+    const g = graph(buildExportArgs(project([{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 2, start: 0, transform: t }] }]), tFiles, "o"))
+    const box = (x: string, y: string, w: string, h: string) => `drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=black@0:t=fill:replace=1`
+    expect(g).toContain(
+      [
+        "scale=trunc(iw*0.8/2)*2:trunc(ih*0.8/2)*2,hflip,format=rgba",
+        box("0", "0", "iw", "round(ih*0.1)"),
+        box("0", "ih-round(ih*0.2)", "iw", "round(ih*0.2)"),
+        box("0", "0", "round(iw*0.25)", "ih"),
+        box("iw-round(iw*0.05)", "0", "round(iw*0.05)", "ih"),
+        "rotate=0.523599:ow=rotw(0.523599):oh=roth(0.523599):c=black@0,setsar=1,format=yuva420p",
+      ].join(",")
+    )
+    expect(g).not.toContain("crop=")
+    expect(g).toContain("overlay=x=(W-w)/2+0*W:y=(H-h)/2+0*H:eval=init")
+  })
+
+  it("keeps a turned picture's content centre and visible corners where the preview has them", () => {
+    const evaluate = (expr: string, v: Record<string, number>) => new Function(...Object.keys(v), `return ${expr}`)(...Object.values(v)) as number
+    const transforms: Transform[] = [
+      { ...IDENTITY, rotation: 90 },
+      { x: 0.25, y: -0.1, scale: 0.5, cropTop: 0.1, cropBottom: 0.2, rotation: 45, flipH: true },
+      { x: -0.3, y: 0.2, scale: 1.4, cropTop: 0, cropBottom: 0.3, cropLeft: 0.4, cropRight: 0.1, rotation: -120, flipV: true },
+      { x: 0.1, y: 0.1, scale: 0.7, cropTop: 0, cropBottom: 0, rotation: 180 },
+    ]
+    for (const [W, H] of [[1920, 1080], [1080, 1920]]) for (const a of [16 / 9, 9 / 16, 1]) for (const t of transforms) {
+      const r = clipRect(a, W, H, t)
+      const rad = ((t.rotation ?? 0) * Math.PI) / 180
+      // rotate's output: the whole scaled frame (crop transparent) turned, rotw x roth.
+      const w = Math.abs(r.w * Math.cos(rad)) + Math.abs(r.h * Math.sin(rad))
+      const h = Math.abs(r.w * Math.sin(rad)) + Math.abs(r.h * Math.cos(rad))
+      const { x, y } = overlayPosition(t)
+      const ox = evaluate(x, { W, H, w, h })
+      const oy = evaluate(y, { W, H, w, h })
+      const c = contentCentre(W, H, t)
+      expect(ox + w / 2).toBeCloseTo(c.x, 6)
+      expect(oy + h / 2).toBeCloseTo(c.y, 6)
+      // Each visible corner, taken through ffmpeg's frame (offset from the frame centre, turned), lands where the preview draws it.
+      const shown = rotatedCorners(r.visible, c, t.rotation ?? 0)
+      const vs = [[r.visible.x, r.visible.y], [r.visible.x + r.visible.w, r.visible.y], [r.visible.x + r.visible.w, r.visible.y + r.visible.h], [r.visible.x, r.visible.y + r.visible.h]]
+      vs.forEach(([vx, vy], k) => {
+        const fx = vx - (r.x + r.w / 2)
+        const fy = vy - (r.y + r.h / 2)
+        expect(ox + w / 2 + fx * Math.cos(rad) - fy * Math.sin(rad)).toBeCloseTo(shown[k].x, 6)
+        expect(oy + h / 2 + fx * Math.sin(rad) + fy * Math.cos(rad)).toBeCloseTo(shown[k].y, 6)
+      })
+    }
   })
 
   it("places the picture where the preview does (overlay x/y against clipRect)", () => {
@@ -559,6 +633,64 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     }
     for (const [x, y] of [[500, 540], [960, 100], [1420, 900]]) expect((await at(x, y))[2]).toBeGreaterThan(150)
     for (const [x, y] of [[100, 540], [460, 540], [1460, 540], [1800, 540]]) expect(Math.max(...(await at(x, y)))).toBeLessThan(40)
+  }, 60_000)
+
+  /** RGB of a 2x2 patch at canvas x, y one second into `file`. */
+  async function pixel(file: string, x: number, y: number): Promise<number[]> {
+    const px = await ffmpeg(["-ss", "1", "-i", file, "-frames:v", "1", "-vf", `crop=2:2:${x}:${y},format=rgb24`, "-f", "rawvideo", "-"])
+    return [px.stdout[0], px.stdout[1], px.stdout[2]]
+  }
+
+  it("turns a clip 90 degrees: its visible shape swaps width and height, black around it", async () => {
+    const { blue } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Rotate"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true } },
+      // Half size (960 x 540) turned a quarter: x 690-1230, y 60-1020.
+      tracks: base([{ id: "1", asset: "v", in: 0, out: 2, transform: { ...IDENTITY, scale: 0.5, rotation: 90 } }]),
+    }
+    const r = await exportProject(p, { v: blue }, "rotate.mp4")
+    expect(r.info).toMatch(/Video: h264[^\n]*1920x1080/)
+    for (const [x, y] of [[960, 100], [960, 980], [720, 540], [1200, 540]]) expect((await pixel(r.out, x, y))[2]).toBeGreaterThan(150)
+    for (const [x, y] of [[600, 540], [1320, 540], [500, 300], [960, 30]]) expect(Math.max(...(await pixel(r.out, x, y)))).toBeLessThan(40)
+  }, 60_000)
+
+  it("mirrors a flipped clip: its left and right colours swap", async () => {
+    const split = path.join(dir, "split.mp4")
+    await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=320x360:r=25:d=3", "-f", "lavfi", "-i", "color=c=blue:s=320x360:r=25:d=3", "-filter_complex", "[0:v][1:v]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", split])
+    const p: Project = {
+      ...newProject("Flip"),
+      assets: { v: { file: "v", duration: 3, hasAudio: false } },
+      tracks: base([{ id: "1", asset: "v", in: 0, out: 2, transform: { ...IDENTITY, flipH: true } }]),
+    }
+    const r = await exportProject(p, { v: split }, "flip.mp4")
+    const left = await pixel(r.out, 300, 540)
+    const right = await pixel(r.out, 1600, 540)
+    expect(left[2]).toBeGreaterThan(150)
+    expect(left[0]).toBeLessThan(100)
+    expect(right[0]).toBeGreaterThan(150)
+    expect(right[2]).toBeLessThan(100)
+  }, 60_000)
+
+  it("shows the lower layer through the transparent corners of a 45 degree clip", async () => {
+    const { blue, red } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Rotate45"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true }, r: { file: "r", duration: 5, hasAudio: false, kind: "image" } },
+      tracks: [
+        // A red still under the whole canvas, black beside it where it's letterboxed (4:3).
+        { id: "t1", clips: [{ id: "1", asset: "r", in: 0, out: 2, start: 0 }] },
+        { id: "t2", clips: [{ id: "2", asset: "v", in: 0, out: 2, start: 0, transform: { ...IDENTITY, scale: 0.5, rotation: 45 } }] },
+      ],
+    }
+    const r = await exportProject(p, { v: blue, r: red }, "rotate45.mp4")
+    expect((await pixel(r.out, 960, 540))[2]).toBeGreaterThan(150)
+    // Inside the turned frame's bounding box but outside the picture: the red layer below.
+    for (const [x, y] of [[500, 80], [1420, 80], [500, 1000], [1420, 1000]]) {
+      const c = await pixel(r.out, x, y)
+      expect(c[0]).toBeGreaterThan(150)
+      expect(c[2]).toBeLessThan(100)
+    }
   }, 60_000)
 
   it("leaves black and silence in a gap between two base clips, with the full length", async () => {

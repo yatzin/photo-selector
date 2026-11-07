@@ -2,7 +2,7 @@ import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { allClips, assetKind, clipLength, isContiguousFromZero, totalLength, type Clip, type Project } from "./project"
-import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, type Transform } from "./transform"
+import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotationOf, type Transform } from "./transform"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -40,6 +40,8 @@ const signed = (n: number) => `${n < 0 ? "-" : "+"}${frac(Math.abs(n))}`
  * crop, w / keepW its width). With no left or right crop x is the plain form.
  */
 export function overlayPosition(t: Transform): { x: string; y: string } {
+  // Turned, the picture keeps its full scaled size (the crop is transparent) and its centre is the content centre.
+  if (rotationOf(t) !== 0) return { x: `(W-w)/2${signed(t.x)}*W`, y: `(H-h)/2${signed(t.y)}*H` }
   const keep = frac(1 - t.cropTop - t.cropBottom)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
@@ -63,6 +65,42 @@ function cropFilter(t: Transform): string | null {
 }
 
 /**
+ * A turned picture's crop: the cut sides made transparent in place (the frame
+ * keeps its full scaled size, so its centre stays the content centre that
+ * rotate turns about), on an RGBA frame.
+ */
+function cropBoxes(t: Transform): string[] {
+  const box = (x: string, y: string, w: string, h: string) => `drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=black@0:t=fill:replace=1`
+  const boxes: string[] = []
+  const cl = cropLeftOf(t)
+  const cr = cropRightOf(t)
+  if (t.cropTop > 0) boxes.push(box("0", "0", "iw", `round(ih*${frac(t.cropTop)})`))
+  if (t.cropBottom > 0) boxes.push(box("0", `ih-round(ih*${frac(t.cropBottom)})`, "iw", `round(ih*${frac(t.cropBottom)})`))
+  if (cl > 0) boxes.push(box("0", "0", `round(iw*${frac(cl)})`, "ih"))
+  if (cr > 0) boxes.push(box(`iw-round(iw*${frac(cr)})`, "0", `round(iw*${frac(cr)})`, "ih"))
+  return boxes
+}
+
+/**
+ * The filters after the fit and the scale for a transform, in the canonical
+ * order (lib/video/transform): flip, crop, rotate. With no rotation the crop
+ * cuts the frame down (overlayPosition puts the strip back in place); turned,
+ * the cut sides go transparent instead and rotate turns the frame about its
+ * centre, the content centre, into a frame big enough to hold it (transparent
+ * corners). The output keeps its alpha (yuva420p) when turned.
+ */
+function transformFilters(t: Transform): string[] {
+  const flips = [...(t.flipH ? ["hflip"] : []), ...(t.flipV ? ["vflip"] : [])]
+  const deg = rotationOf(t)
+  if (deg === 0) {
+    const crop = cropFilter(t)
+    return [...flips, ...(crop ? [crop] : []), "setsar=1"]
+  }
+  const rad = frac((deg * Math.PI) / 180)
+  return [...flips, "format=rgba", ...cropBoxes(t), `rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=black@0`, "setsar=1", "format=yuva420p"]
+}
+
+/**
  * The uniform graph, used when any clip is moved, scaled or cropped or the
  * base track has a gap: every clip, base track included, is overlaid on a
  * black canvas the timeline's length, track by track (lowest first) and
@@ -70,7 +108,8 @@ function cropFilter(t: Transform): string | null {
  * transformed clip is fit inside the canvas, scaled (to even sizes), cropped
  * and placed as clipRect says; an untransformed one fills the canvas
  * letterboxed in black as it always has, so it hides what's under it in both
- * graphs. Audio as in the layered graph: each heard clip's sound delayed to
+ * graphs. A flipped or turned clip follows the canonical order
+ * (transformFilters). Audio as in the layered graph: each heard clip's sound delayed to
  * its start, over silence.
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
@@ -87,20 +126,19 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const i = inputs.length
     const file = fileFor(c)
     const t = c.transform ?? IDENTITY
-    const crop = cropFilter(t)
     // The overlay position below puts a full-canvas frame at 0, 0.
     const place = isIdentity(c.transform)
       ? frame
       : [
           `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
           `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
-          ...(crop ? [crop] : []),
-          "setsar=1",
+          ...transformFilters(t),
         ].join(",")
     const shift = `setpts=PTS+${num(start)}/TB`
     if (isImage(c)) {
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=yuv420p,${shift}[v${i}]`)
+      // A turned still keeps its transparent corners.
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  addClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
   MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setTransform,
   splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
 } from "./project"
@@ -968,6 +968,26 @@ describe("clip transforms", () => {
     ({ ...p, tracks: p.tracks.map((tr) => ({ ...tr, clips: tr.clips.map((c) => (c.id === id ? { ...c, transform: t } : c)) })) })
   const clip = (p: Project, id: string) => allClips(p).find((c) => c.id === id)
 
+  it("carries a rotation and flips through setTransform, split, move and a save round trip; zero and false are left out", () => {
+    const turned: Transform = { ...half, rotation: -30, flipH: true }
+    const q = setTransform(layered(), "o1", { ...turned, flipV: false })
+    expect(clip(q, "o1")?.transform).toEqual(turned)
+    expect(setTransform(q, "o1", turned)).toBe(q)
+    expect(clip(setTransform(q, "o1", { ...turned, rotation: 0 }), "o1")?.transform).toEqual({ ...half, flipH: true })
+    expect(clip(setTransform(q, "o1", { ...IDENTITY, rotation: 0, flipH: false }), "o1")?.transform).toBeUndefined()
+    const s = splitClip(q, "o1", 2, "m")
+    expect(clip(s, "m")?.transform).toEqual(turned)
+    expect(clip(moveClip(q, "o1", 0, { start: 20 }), "o1")?.transform).toEqual(turned)
+    expect(parseProject(JSON.parse(JSON.stringify(q)))).toEqual(q)
+    const raw = JSON.parse(JSON.stringify(q))
+    raw.tracks[1].clips[0].transform = { ...turned, rotation: 0, flipH: false, flipV: false }
+    expect("rotation" in (clip(parseProject(raw)!, "o1")?.transform ?? {})).toBe(false)
+    for (const bad of [{ rotation: 200 }, { rotation: "5" }, { flipH: "yes" }]) {
+      raw.tracks[1].clips[0].transform = { ...half, ...bad }
+      expect(parseProject(raw)).toBeNull()
+    }
+  })
+
   it("setTransform sets one clip's transform and nothing else", () => {
     const p = layered()
     const q = setTransform(p, "o1", half)
@@ -1309,5 +1329,81 @@ describe("magnetic base track (Snap)", () => {
     const merged = mergeClientProject(client, gapped())!
     expect(merged.tracks[0].magnetic).toBe(true)
     expect(starts(merged)).toEqual([0, 2, 5])
+  })
+})
+
+describe("leftTrimDraft (a snapped base's left edge, packed on release)", () => {
+  /** Snapped base: m1 [0, 2) in 0-2, m2 [2, 5) in 4-7, an image m3 [5, 7); an overlay clip o1. */
+  function snapped(): Project {
+    return {
+      ...newProject("snap"),
+      assets: { a: { file: "a.mp4", duration: 10, hasAudio: true }, i: { file: "i.jpg", duration: DEFAULT_IMAGE, hasAudio: false, kind: "image" } },
+      tracks: [
+        {
+          id: "t1",
+          magnetic: true,
+          clips: [{ id: "m1", asset: "a", in: 0, out: 2, start: 0 }, { id: "m2", asset: "a", in: 4, out: 7, start: 2 }, { id: "m3", asset: "i", in: 0, out: 2, start: 5 }],
+        },
+        { id: "t2", clips: [{ id: "o1", asset: "a", in: 0, out: 2, start: 4 }] },
+      ],
+    }
+  }
+  const spans = (p: Project) => base(p).map((c) => [c.id, c.start, c.in, c.out])
+
+  it("crops from the left: the draft opens a gap with the right edge and the clips after it in place; the commit packs", () => {
+    const p = snapped()
+    const { draft, seconds } = leftTrimDraft(p, "m2", 5)
+    expect(spans(draft)).toEqual([["m1", 0, 0, 2], ["m2", 3, 5, 7], ["m3", 5, 0, 2]])
+    expect(draft.tracks[1]).toBe(p.tracks[1])
+    expect(seconds).toBe(5)
+    const done = trimClip(p, "m2", "in", seconds)
+    expect(spans(done)).toEqual([["m1", 0, 0, 2], ["m2", 2, 5, 7], ["m3", 4, 0, 2]])
+    // The same as committing the pointer's time straight away (today's result).
+    expect(done).toEqual(trimClip(p, "m2", "in", 5))
+  })
+
+  it("expands to the left over the previous clip in the draft; the commit ripples the rest", () => {
+    const p = snapped()
+    const { draft, seconds } = leftTrimDraft(p, "m2", 3)
+    expect(spans(draft)).toEqual([["m1", 0, 0, 2], ["m2", 1, 3, 7], ["m3", 5, 0, 2]])
+    expect(seconds).toBe(3)
+    expect(spans(trimClip(p, "m2", "in", seconds))).toEqual([["m1", 0, 0, 2], ["m2", 2, 3, 7], ["m3", 6, 0, 2]])
+    // Time 0 stops the draft (here before the source's start), and the commit stops with it.
+    const far = leftTrimDraft(p, "m2", -3)
+    expect(spans(far.draft)[1]).toEqual(["m2", 0, 2, 7])
+    expect(far.seconds).toBe(2)
+    expect(spans(trimClip(p, "m2", "in", far.seconds))).toEqual([["m1", 0, 0, 2], ["m2", 2, 2, 7], ["m3", 7, 0, 2]])
+    // The source's start stops it too.
+    const moved = { ...p, tracks: [{ ...p.tracks[0], clips: base(p).map((c) => (c.id === "m2" ? { ...c, in: 1, out: 4 } : c)) }, p.tracks[1]] }
+    expect(spans(leftTrimDraft(moved, "m2", -3).draft)[1]).toEqual(["m2", 1, 0, 4])
+  })
+
+  it("keeps the first clip at 0: it can crop but not reach before 0, and the commit matches the draft", () => {
+    const p = snapped()
+    const grow = { ...p, tracks: [{ ...p.tracks[0], clips: [{ ...base(p)[0], in: 1, out: 3 }, ...base(p).slice(1)] }, p.tracks[1]] }
+    const back = leftTrimDraft(grow, "m1", 0)
+    expect(back.draft).toEqual(grow)
+    expect(back.seconds).toBe(1)
+    expect(trimClip(grow, "m1", "in", back.seconds)).toEqual(grow)
+    const crop = leftTrimDraft(grow, "m1", 2)
+    expect(spans(crop.draft)[0]).toEqual(["m1", 1, 2, 3])
+    expect(spans(trimClip(grow, "m1", "in", crop.seconds))).toEqual([["m1", 0, 2, 3], ["m2", 1, 4, 7], ["m3", 4, 0, 2]])
+  })
+
+  it("leaves MIN_CLIP, and moves an image's left edge by its length", () => {
+    const p = snapped()
+    expect(spans(leftTrimDraft(p, "m2", 99).draft)[1]).toEqual(["m2", 5 - MIN_CLIP, 7 - MIN_CLIP, 7])
+    const img = leftTrimDraft(p, "m3", 1.5)
+    expect(spans(img.draft)[2]).toEqual(["m3", 6.5, 0, 0.5])
+    expect(spans(trimClip(p, "m3", "in", img.seconds))[2]).toEqual(["m3", 5, 0, 0.5])
+    const longer = leftTrimDraft(p, "m3", -1)
+    expect(spans(longer.draft)[2]).toEqual(["m3", 4, 0, 3])
+    expect(spans(trimClip(p, "m3", "in", longer.seconds))[2]).toEqual(["m3", 5, 0, 3])
+  })
+
+  it("is trimClip off a snapped base", () => {
+    const p = setBaseMagnetic(snapped(), false)
+    expect(leftTrimDraft(p, "m2", 5).draft).toEqual(trimClip(p, "m2", "in", 5))
+    expect(leftTrimDraft(snapped(), "o1", 1).draft).toEqual(trimClip(snapped(), "o1", "in", 1))
   })
 })

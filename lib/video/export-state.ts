@@ -24,12 +24,14 @@ function canonical(value: unknown): string {
  * SHA-256 (hex) of everything that changes the exported video: size, frame
  * rate, the tracks in order (clips with ids, assets, trims, starts and
  * transforms, an identity one counting as none and a zero left or right crop
- * as an absent one, and each clip's mute) and the file, kind, length and audio of each
+ * as an absent one, as are a zero rotation and a false flip, and each clip's mute) and the file, kind, length and audio of each
  * asset a clip uses. The project's name and unused assets don't count, so
  * deleting an asset no clip used keeps the kept export.
  */
 const transformKey = (t: Transform | undefined) =>
-  !t || isIdentity(t) ? undefined : { ...t, cropLeft: t.cropLeft || undefined, cropRight: t.cropRight || undefined }
+  !t || isIdentity(t)
+    ? undefined
+    : { ...t, cropLeft: t.cropLeft || undefined, cropRight: t.cropRight || undefined, rotation: t.rotation || undefined, flipH: t.flipH || undefined, flipV: t.flipV || undefined }
 
 export function exportFingerprint(p: Project): string {
   const used = new Set(p.tracks.flatMap((t) => t.clips.map((c) => c.asset)))
