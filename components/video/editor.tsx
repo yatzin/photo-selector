@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Check, Download, Loader2, Redo2, TriangleAlert, Undo2 } from "lucide-react"
+import { ArrowLeft, Check, Download, Loader2, Redo2, Scissors, Trash2, TriangleAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -196,6 +196,19 @@ export function Editor({
     }
   }
 
+  /** A finished export: the browser downloads the kept copy (the route serves it by project, so no name is needed). */
+  function finished(reused: boolean, output?: string) {
+    const a = document.createElement("a")
+    a.href = `/api/video-projects/${encodeURIComponent(folder)}/download`
+    a.download = ""
+    a.hidden = true
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    if (reused) toast.success("No changes since the last export. Downloading the existing copy.")
+    else toast.success(`Exported ${output}`)
+  }
+
   async function startExport() {
     if (exportProgress !== null) return
     setExportProgress(0)
@@ -217,6 +230,12 @@ export function Editor({
         stop()
         return
       }
+      // Nothing changed since the kept copy: the job is already done, so no polling.
+      if (started.reused) {
+        stop()
+        finished(true, started.output)
+        return
+      }
       let polling = false
       exportTimer.current = setInterval(async () => {
         if (polling) return
@@ -227,7 +246,7 @@ export function Editor({
             setExportProgress(s.progress)
           } else {
             stop()
-            if (s.state === "done") toast.success(`Exported ${s.output}`)
+            if (s.state === "done") finished(s.reused === true, s.output)
             else toast.error(s.error ?? "Export failed.")
           }
         } catch {
@@ -261,6 +280,29 @@ export function Editor({
     [pause]
   )
 
+  // What S and the Split button cut: the selected clip when it's under the playhead, else the topmost one there.
+  const playheadHits = clipsAt(project, playhead)
+  const splitTarget = playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? playheadHits.top?.clip.id ?? null
+
+  /** Splits at the playhead (S, or the toolbar); false when there's no clip under it. One undo step. */
+  function splitAtPlayhead(): boolean {
+    if (!splitTarget) return false
+    const id = splitTarget
+    const at = playhead
+    const splitId = newId()
+    edit((p) => splitClip(p, id, at, splitId))
+    return true
+  }
+
+  /** Removes the selected clip (Delete, or the toolbar); false with no selection. One undo step. */
+  function deleteSelected(): boolean {
+    if (!selectedId) return false
+    const id = selectedId
+    edit((p) => removeClip(p, id))
+    setSelectedId(null)
+    return true
+  }
+
   // Keyboard: Space plays, S splits the selected clip under the playhead (else the topmost one there),
   // Delete removes the selection, Esc clears it, Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z and Ctrl+Y redo.
   useEffect(() => {
@@ -284,23 +326,17 @@ export function Editor({
         e.preventDefault()
         toggle()
       } else if (e.key === "s" || e.key === "S") {
-        const hits = clipsAt(project, playhead)
-        const id = hits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? hits.top?.clip.id
-        if (!id) return
-        e.preventDefault()
-        const splitId = newId()
-        edit((p) => splitClip(p, id, playhead, splitId))
-      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
-        e.preventDefault()
-        edit((p) => removeClip(p, selectedId))
-        setSelectedId(null)
+        if (splitAtPlayhead()) e.preventDefault()
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (deleteSelected()) e.preventDefault()
       } else if (e.key === "Escape" && selectedId) {
         setSelectedId(null)
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [project, playhead, selectedId, toggle, edit, step])
+    // No dependency list: the handler shares splitAtPlayhead and deleteSelected with the toolbar, which see this render's state.
+  })
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
@@ -319,14 +355,6 @@ export function Editor({
           </span>
         </span>
         <div className="flex-1" />
-        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)">
-          <Undo2 className="h-4 w-4" />
-          <span className="sr-only">Undo</span>
-        </Button>
-        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)">
-          <Redo2 className="h-4 w-4" />
-          <span className="sr-only">Redo</span>
-        </Button>
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
@@ -363,9 +391,21 @@ export function Editor({
           />
           {/* The tracks scroll inside the timeline (vertically too, with several layers); the bar above stays put. */}
           <div className={cn("flex flex-col bg-card", previewHeight === null ? "max-h-[60%] shrink-0" : "min-h-[160px] flex-1")}>
-            <div className="flex h-9 shrink-0 items-center gap-3 border-b border-border/60 px-3 text-xs text-muted-foreground">
+            <div role="toolbar" aria-label="Timeline tools" className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 px-3 text-xs text-muted-foreground">
               <span className="tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
-              <span className="hidden sm:inline">Space play · S split · Delete remove · drag edges to trim · drag onto a row to layer</span>
+              <div aria-hidden className="mx-2 h-5 w-px bg-border" />
+              <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
+                <Undo2 className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
+                <Redo2 className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title="Split at playhead (S)" aria-label="Split at playhead">
+                <Scissors className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
+                <Trash2 className="h-4 w-4" />
+              </Button>
               <div className="flex-1" />
               <label className="flex items-center gap-2">
                 Zoom
