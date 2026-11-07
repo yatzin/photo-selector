@@ -20,7 +20,28 @@ export function trimDelta(edge: "in" | "out", clip: Clip, deltaPx: number, zoom:
   return clip[edge] + pxToTime(deltaPx, zoom)
 }
 
-/** The clip playing at `timelineTime`, or null past the end. */
+/**
+ * A clip's start (it is `length` long) pulled onto the nearest of `points`
+ * (seconds) when its start or its end lies within `thresholdPx` of one at
+ * `zoom` px/s; never below 0.
+ */
+export function snapStart(start: number, length: number, points: number[], thresholdPx: number, zoom: number): number {
+  const limit = thresholdPx / zoom
+  let best = start
+  let distance = Infinity
+  for (const p of points) {
+    for (const candidate of [p, p - length]) {
+      const d = Math.abs(candidate - start)
+      if (d <= limit && d < distance) {
+        best = candidate
+        distance = d
+      }
+    }
+  }
+  return Math.max(0, best)
+}
+
+/** The clip playing at `timelineTime` on the base track, or null past the end. */
 export function clipIdAt(clips: Clip[], timelineTime: number): string | null {
   const starts = clipStarts(clips)
   for (let i = 0; i < clips.length; i++) {

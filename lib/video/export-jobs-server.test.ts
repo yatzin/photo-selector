@@ -48,7 +48,7 @@ async function makeProject(withClips = true, withFile = true): Promise<string> {
   await writeProject("mike", r.folder, {
     ...p,
     assets: { a: { file: "a.mp4", duration: 5, hasAudio: true } },
-    clips: withClips ? [{ id: "c1", asset: "a", in: 0, out: 4 }] : [],
+    tracks: [{ id: "t1", clips: withClips ? [{ id: "c1", asset: "a", in: 0, out: 4 }] : [] }],
   })
   return r.folder
 }
@@ -66,6 +66,18 @@ describe("startExport", () => {
     const folder = await makeProject(false)
     expect(await startExport("mike", folder)).toEqual({ error: "Nothing to export" })
     expect(runExport).not.toHaveBeenCalled()
+  })
+
+  it("exports clips on overlay tracks too, for the length of the latest clip end", async () => {
+    const folder = await makeProject(false)
+    const p = (await readProject("mike", folder))!
+    await writeProject("mike", folder, { ...p, tracks: [{ id: "t1", clips: [] }, { id: "t2", clips: [{ id: "o", asset: "a", in: 0, out: 2, start: 3 }] }] })
+    const r = await startExport("mike", folder)
+    if ("error" in r) throw new Error(r.error)
+    expect(await waitDone("mike", r.jobId)).toMatchObject({ state: "done" })
+    const [args, , total] = runExport.mock.calls[0] as [string[], string, number]
+    expect(total).toBe(5)
+    expect(args.filter((a) => a === "-i")).toHaveLength(1)
   })
 
   it("reports a missing asset file before spawning", async () => {
@@ -220,7 +232,7 @@ describe("startExport with images", () => {
     await writeProject("mike", folder, {
       ...p,
       assets: { ...p.assets, i: { file: "photo.png", duration: 5, hasAudio: false, kind: "image" } },
-      clips: [...p.clips, { id: "p", asset: "i", in: 0, out: 2 }],
+      tracks: [{ id: "t1", clips: [...p.tracks[0].clips, { id: "p", asset: "i", in: 0, out: 2 }] }],
     })
     return folder
   }

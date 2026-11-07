@@ -1,7 +1,7 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { assetKind, clipLength, type Project } from "./project"
+import { allClips, assetKind, clipLength, totalLength, type Clip, type Project } from "./project"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -28,44 +28,107 @@ export function probeMedia(file: string): Promise<{ duration: number; hasAudio: 
 
 const num = (n: number) => String(Number(n.toFixed(3)))
 
-/** The filtergraph text for the whole timeline, plus each clip's input arguments in clip order. */
+/**
+ * The filtergraph text for the whole timeline, plus each clip's input
+ * arguments (base track first, then each overlay track, in clip order).
+ *
+ * The base track is trimmed, letterboxed and concatenated as it always was;
+ * with nothing on the overlay tracks that is the whole graph. With overlays,
+ * the base stream goes over a black canvas the timeline's length, and every
+ * overlay clip (shifted to its start) over that, lower tracks first, enabled
+ * for its own span. Audio is the base track's plus each unmuted overlay clip's
+ * (delayed to its start), mixed over silence the timeline's length.
+ */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
-  if (p.clips.length === 0) throw new Error("Nothing to export")
+  if (allClips(p).length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
   const inputs: string[][] = []
   const parts: string[] = []
-  const labels: string[] = []
-  p.clips.forEach((c, i) => {
+  const frame = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
+  const fileFor = (c: Clip) => {
     const file = files[c.asset]
     if (!file) throw new Error("Missing asset file")
+    return file
+  }
+  const isImage = (c: Clip) => {
     const asset = p.assets[c.asset]
+    return asset !== undefined && assetKind(asset) === "image"
+  }
+
+  // The base track: one concatenated stream, with silence where a clip has no sound (or the track is muted).
+  const [baseTrack, ...overlays] = p.tracks
+  const layered = overlays.some((t) => t.clips.length > 0)
+  const labels: string[] = []
+  baseTrack.clips.forEach((c) => {
+    const i = inputs.length
+    const file = fileFor(c)
     const silence = `anullsrc=r=48000:cl=stereo,atrim=0:${num(clipLength(c))},asetpts=PTS-STARTPTS[a${i}]`
-    if (asset && assetKind(asset) === "image") {
+    if (isImage(c)) {
       // A still image repeats for the clip's length; there's nothing to trim.
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p[v${i}]`)
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${frame},format=yuv420p[v${i}]`)
       parts.push(silence)
       labels.push(`[v${i}][a${i}]`)
       return
     }
     inputs.push(["-i", file])
+    parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${frame}[v${i}]`)
     parts.push(
-      `[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}[v${i}]`
-    )
-    parts.push(
-      asset?.hasAudio === false
+      p.assets[c.asset]?.hasAudio === false || baseTrack.muted
         ? silence
         : `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a${i}]`
     )
     labels.push(`[v${i}][a${i}]`)
   })
-  parts.push(`${labels.join("")}concat=n=${p.clips.length}:v=1:a=1[v][a]`)
+  if (!layered) {
+    parts.push(`${labels.join("")}concat=n=${baseTrack.clips.length}:v=1:a=1[v][a]`)
+    return { graph: parts.join(";"), inputs }
+  }
+
+  const total = num(totalLength(p))
+  parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
+  const mix = ["[asil]"]
+  let under = "[bg]"
+  if (baseTrack.clips.length > 0) {
+    parts.push(`${labels.join("")}concat=n=${baseTrack.clips.length}:v=1:a=1[bv][ba]`)
+    // The base ends before a later overlay: the canvas shows through (eof_action=pass).
+    parts.push(`[bg][bv]overlay=eof_action=pass[l0]`)
+    under = "[l0]"
+    mix.push("[ba]")
+  }
+  const overlayClips = overlays.flatMap((t) => t.clips.map((c) => ({ c, muted: Boolean(t.muted) })))
+  overlayClips.forEach(({ c, muted }, n) => {
+    const i = inputs.length
+    const file = fileFor(c)
+    const start = c.start ?? 0
+    const shift = `setpts=PTS+${num(start)}/TB`
+    if (isImage(c)) {
+      inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${frame},format=yuv420p,${shift}[v${i}]`)
+    } else {
+      inputs.push(["-i", file])
+      parts.push(`[${i}:v]trim=${num(c.in)}:${num(c.out)},setpts=PTS-STARTPTS,${frame},${shift}[v${i}]`)
+      if (!muted && p.assets[c.asset]?.hasAudio !== false) {
+        parts.push(
+          `[${i}:a]atrim=${num(c.in)}:${num(c.out)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=${Math.round(start * 48000)}S:all=1[a${i}]`
+        )
+        mix.push(`[a${i}]`)
+      }
+    }
+    const out = n === overlayClips.length - 1 ? "[v]" : `[l${n + 1}]`
+    parts.push(`${under}[v${i}]overlay=enable='between(t,${num(start)},${num(start + clipLength(c))})':eof_action=pass${out}`)
+    under = out
+  })
+  // Silence the timeline's length sets the mix's length (duration=first) and keeps it continuous.
+  parts.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[asil]`)
+  parts.push(`${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0[a]`)
   return { graph: parts.join(";"), inputs }
 }
 
 /**
  * ffmpeg arguments for the whole timeline: every clip is trimmed, scaled into
- * the project frame with a letterbox pad (never stretched), then concatenated.
+ * the project frame with a letterbox pad (never stretched), then the base
+ * track concatenated and any overlay tracks layered on top (buildExportGraph).
  * `files` maps asset id to absolute path (for an image, a still ffmpeg can
  * read); one input per clip keeps each filter label used once. A clip from a
  * silent asset or an image gets generated silence; an image input loops.

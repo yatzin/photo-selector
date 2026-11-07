@@ -4,24 +4,37 @@
  * path it was copied from ("<folder>/<name>"), so a second import reuses it.
  */
 export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video"; source?: string }
-export type Clip = { id: string; asset: string; in: number; out: number }
+/** `start` (seconds on the timeline) is set on overlay tracks only; the base track lays its clips end to end. */
+export type Clip = { id: string; asset: string; in: number; out: number; start?: number }
+/**
+ * A layer. Track 0 is the base: magnetic, clips end to end, an edit ripples.
+ * Higher tracks are overlays: clips sit at their own `start`, gaps allowed, no
+ * overlaps; a higher track draws over a lower one. `muted` silences a track.
+ */
+export type Track = { id: string; muted?: boolean; clips: Clip[] }
 export type Project = {
-  version: 1
+  version: 2
   name: string
   width: number
   height: number
   fps: number
   assets: Record<string, Asset>
-  clips: Clip[]
+  tracks: Track[]
 }
 
 /** The part of a project that undo/redo covers; assets, name and settings are server-owned and never undone. */
-export type Edit = { clips: Clip[] }
+export type Edit = { tracks: Track[] }
 
 export const MIN_CLIP = 0.2
 /** Default and longest length of an image clip, in seconds. */
 export const DEFAULT_IMAGE = 5
 export const MAX_IMAGE = 600
+/** The base track plus up to three overlay layers. */
+export const MAX_TRACKS = 4
+/** Most clips a project may hold, over all tracks. */
+export const MAX_CLIPS = 5000
+/** Overlay clips closer than this count as touching, not overlapping (float rounding). */
+const EPS = 1e-6
 
 export function assetKind(a: Asset): "image" | "video" {
   return a.kind === "image" ? "image" : "video"
@@ -34,13 +47,14 @@ export function findAssetsBySource(p: Project, source: string): { id: string; as
 }
 
 export function newProject(name: string): Project {
-  return { version: 1, name, width: 1920, height: 1080, fps: 30, assets: {}, clips: [] }
+  return { version: 2, name, width: 1920, height: 1080, fps: 30, assets: {}, tracks: [{ id: "t1", clips: [] }] }
 }
 
 export function clipLength(c: Clip): number {
   return c.out - c.in
 }
 
+/** Start times of clips laid end to end (the base track). */
 export function clipStarts(clips: Clip[]): number[] {
   const starts: number[] = []
   let t = 0
@@ -51,11 +65,28 @@ export function clipStarts(clips: Clip[]): number[] {
   return starts
 }
 
-export function totalLength(clips: Clip[]): number {
-  return clips.reduce((sum, c) => sum + clipLength(c), 0)
+/** Every clip on every track, base track first. */
+export function allClips(p: Project): Clip[] {
+  return p.tracks.flatMap((t) => t.clips)
 }
 
-/** The clip playing at `timelineTime` and the time inside its source file; null before 0 or at/after the end. */
+/** Each clip's start on the timeline: end to end on the base track, `start` on an overlay. */
+export function trackStarts(track: Track, isBase: boolean): number[] {
+  return isBase ? clipStarts(track.clips) : track.clips.map((c) => c.start ?? 0)
+}
+
+/** Where the track's last clip ends. */
+export function trackEnd(track: Track, isBase: boolean): number {
+  const starts = trackStarts(track, isBase)
+  return track.clips.reduce((end, c, i) => Math.max(end, starts[i] + clipLength(c)), 0)
+}
+
+/** The timeline's length: the latest clip end over all tracks. */
+export function totalLength(p: Project): number {
+  return p.tracks.reduce((end, t, i) => Math.max(end, trackEnd(t, i === 0)), 0)
+}
+
+/** The clip playing at `timelineTime` on the base track (clips end to end) and the time inside its source file; null before 0 or at/after the end. */
 export function clipAt(clips: Clip[], timelineTime: number): { index: number; sourceTime: number } | null {
   if (!(timelineTime >= 0)) return null
   const starts = clipStarts(clips)
@@ -65,24 +96,175 @@ export function clipAt(clips: Clip[], timelineTime: number): { index: number; so
   return null
 }
 
-export function addClip(p: Project, assetId: string, at: number, id: string): Project {
-  const asset = p.assets[assetId]
-  if (!asset || asset.duration < MIN_CLIP || p.clips.some((c) => c.id === id)) return p
-  const index = Math.max(0, Math.min(at, p.clips.length))
-  const clips = [...p.clips]
-  clips.splice(index, 0, { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration })
-  return { ...p, clips }
+/** The clip on `track` at `timelineTime`: its index, start and the time inside its source; null in a gap or past the end. */
+export function trackClipAt(track: Track, isBase: boolean, timelineTime: number): { index: number; start: number; sourceTime: number } | null {
+  if (!(timelineTime >= 0)) return null
+  const starts = trackStarts(track, isBase)
+  for (let i = 0; i < track.clips.length; i++) {
+    const c = track.clips[i]
+    if (timelineTime >= starts[i] && timelineTime < starts[i] + clipLength(c)) return { index: i, start: starts[i], sourceTime: c.in + (timelineTime - starts[i]) }
+  }
+  return null
 }
 
+export type ActiveClip = { track: number; index: number; start: number; sourceTime: number; clip: Clip }
+
+/** The clip playing on each track at `timelineTime` (null where nothing plays), and the topmost of them (the one you see). */
+export function clipsAt(p: Project, timelineTime: number): { tracks: (ActiveClip | null)[]; top: ActiveClip | null } {
+  const tracks = p.tracks.map((t, track) => {
+    const at = trackClipAt(t, track === 0, timelineTime)
+    return at && { track, ...at, clip: t.clips[at.index] }
+  })
+  let top: ActiveClip | null = null
+  for (const hit of tracks) if (hit) top = hit
+  return { tracks, top }
+}
+
+/**
+ * The first start at or after `desired` (and at least 0) where a clip of
+ * `length` fits between `clips` (an overlay track) without overlapping: it
+ * slides past the neighbour it would overlap, and on past the next one if
+ * there's no room. `ignore` is a clip id to leave out (the one being moved).
+ */
+export function resolveStart(clips: Clip[], length: number, desired: number, ignore?: string): number {
+  let t = Math.max(0, Number.isFinite(desired) ? desired : 0)
+  const others = clips.filter((c) => c.id !== ignore).sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+  for (const c of others) {
+    const s = c.start ?? 0
+    const e = s + clipLength(c)
+    if (s < t + length - EPS && t < e - EPS) t = e
+  }
+  return t
+}
+
+const sortByStart = (clips: Clip[]) => [...clips].sort((a, b) => (a.start ?? 0) - (b.start ?? 0))
+
+function find(p: Project, id: string): { track: number; index: number; clip: Clip } | null {
+  for (let track = 0; track < p.tracks.length; track++) {
+    const index = p.tracks[track].clips.findIndex((c) => c.id === id)
+    if (index >= 0) return { track, index, clip: p.tracks[track].clips[index] }
+  }
+  return null
+}
+
+const hasClip = (p: Project, id: string) => find(p, id) !== null
+
+function withTrack(p: Project, index: number, clips: Clip[]): Project {
+  return { ...p, tracks: p.tracks.map((t, i) => (i === index ? { ...t, clips } : t)) }
+}
+
+/** A new track id: the lowest "t<n>" not in use. */
+function freeTrackId(p: Project): string {
+  for (let n = 1; ; n++) if (!p.tracks.some((t) => t.id === `t${n}`)) return `t${n}`
+}
+
+/** An empty overlay layer on top; the same project at MAX_TRACKS. */
+export function addTrack(p: Project): Project {
+  if (p.tracks.length >= MAX_TRACKS) return p
+  return { ...p, tracks: [...p.tracks, { id: freeTrackId(p), clips: [] }] }
+}
+
+/** Removes an empty overlay track; never the base track or one with clips. */
+export function removeTrack(p: Project, id: string): Project {
+  const index = p.tracks.findIndex((t) => t.id === id)
+  if (index <= 0 || p.tracks[index].clips.length > 0) return p
+  return { ...p, tracks: p.tracks.filter((t) => t.id !== id) }
+}
+
+export function setTrackMuted(p: Project, id: string, muted: boolean): Project {
+  const index = p.tracks.findIndex((t) => t.id === id)
+  if (index < 0 || Boolean(p.tracks[index].muted) === muted) return p
+  return {
+    ...p,
+    tracks: p.tracks.map((t, i) => (i !== index ? t : muted ? { ...t, muted: true } : { id: t.id, clips: t.clips })),
+  }
+}
+
+/** Puts `clip` on track `trackIndex` (one past the top adds a layer): at `at.index` on the base, at `at.start` (slid clear of overlaps) on an overlay. */
+function place(p: Project, clip: Clip, trackIndex: number, at: { index?: number; start?: number }): Project {
+  if (!Number.isInteger(trackIndex) || trackIndex < 0 || trackIndex > p.tracks.length) return p
+  let q = p
+  if (trackIndex === p.tracks.length) {
+    q = addTrack(p)
+    if (q === p) return p
+  }
+  const bare: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out }
+  const clips = q.tracks[trackIndex].clips
+  if (trackIndex === 0) {
+    const next = [...clips]
+    next.splice(Math.max(0, Math.min(at.index ?? clips.length, clips.length)), 0, bare)
+    return withTrack(q, 0, next)
+  }
+  const start = resolveStart(clips, clipLength(clip), at.start ?? 0, clip.id)
+  return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), { ...bare, start }]))
+}
+
+/**
+ * A new clip of the whole asset (an image: DEFAULT_IMAGE long). On the base
+ * track it goes in at `at.index` and the rest ripple; on an overlay it goes at
+ * `at.start`, sliding past any clip it would overlap. A track index one past
+ * the top adds a layer for it (up to MAX_TRACKS).
+ */
+export function addClip(p: Project, assetId: string, trackIndex: number, at: { index?: number; start?: number }, id: string): Project {
+  const asset = p.assets[assetId]
+  if (!asset || asset.duration < MIN_CLIP || hasClip(p, id)) return p
+  return place(p, { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration }, trackIndex, at)
+}
+
+/** Moves a clip within its track or to another one (in and out stay); see addClip for where it lands. */
+export function moveClip(p: Project, id: string, toTrack: number, at: { index?: number; start?: number }): Project {
+  const from = find(p, id)
+  if (!from || !Number.isInteger(toTrack) || toTrack < 0 || toTrack > p.tracks.length) return p
+  const without = withTrack(p, from.track, p.tracks[from.track].clips.filter((c) => c.id !== id))
+  const moved = place(without, from.clip, toTrack, at)
+  return moved === without ? p : moved
+}
+
+/** The free room around an overlay clip: where the previous clip ends and the next one starts. */
+function room(clips: Clip[], index: number): { prevEnd: number; nextStart: number } {
+  const prev = clips[index - 1]
+  const next = clips[index + 1]
+  return { prevEnd: prev ? (prev.start ?? 0) + clipLength(prev) : 0, nextStart: next ? next.start ?? 0 : Infinity }
+}
+
+/**
+ * Drags an edge to source time `seconds` (for an image, the edge moves by
+ * `seconds - in`). On the base track the rest ripple. On an overlay the left
+ * edge moves `start` with `in` so the picture stays where it was, and neither
+ * edge passes a neighbour or 0.
+ */
 export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: number): Project {
-  const clip = p.clips.find((c) => c.id === id)
-  const asset = clip && p.assets[clip.asset]
-  if (!clip || !asset || Number.isNaN(seconds)) return p
-  if (assetKind(asset) === "image") {
+  const at = find(p, id)
+  const asset = at && p.assets[at.clip.asset]
+  if (!at || !asset || Number.isNaN(seconds)) return p
+  const { clip, track, index } = at
+  const clips = p.tracks[track].clips
+  const replace = (next: Clip) => withTrack(p, track, clips.map((c) => (c.id === id ? next : c)))
+  const image = assetKind(asset) === "image"
+
+  if (track > 0) {
+    const start = clip.start ?? 0
+    const { prevEnd, nextStart } = room(clips, index)
+    const maxLength = nextStart - start
+    if (edge === "in") {
+      // How far the left edge moves: at most to the previous clip (or 0), and leaving at least MIN_CLIP.
+      const lo = Math.max(prevEnd - start, image ? clipLength(clip) - MAX_IMAGE : -clip.in)
+      const hi = clipLength(clip) - MIN_CLIP
+      const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
+      if (image) return replace({ ...clip, in: 0, out: clipLength(clip) - delta, start: start + delta })
+      return replace({ ...clip, in: clip.in + delta, start: start + delta })
+    }
+    if (image) return replace({ ...clip, in: 0, out: Math.max(MIN_CLIP, Math.min(MAX_IMAGE, maxLength, seconds)) })
+    const out = Math.min(asset.duration, clip.in + maxLength, Math.max(seconds, clip.in + MIN_CLIP))
+    if (out - clip.in < MIN_CLIP - 1e-9) return p
+    return replace({ ...clip, out })
+  }
+
+  if (image) {
     // An image has no source to run out of: either edge just changes the length, and `in` stays 0.
     const length = edge === "out" ? seconds : clipLength(clip) - (seconds - clip.in)
     const out = Math.max(MIN_CLIP, Math.min(MAX_IMAGE, length))
-    return { ...p, clips: p.clips.map((c) => (c.id === id ? { ...clip, in: 0, out } : c)) }
+    return replace({ ...clip, in: 0, out })
   }
   const next = { ...clip }
   if (edge === "in") {
@@ -92,37 +274,35 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   }
   // Only possible when the asset itself is shorter than MIN_CLIP (the epsilon absorbs float rounding).
   if (clipLength(next) < MIN_CLIP - 1e-9) return p
-  return { ...p, clips: p.clips.map((c) => (c.id === id ? next : c)) }
+  return replace(next)
 }
 
+/** Cuts a clip in two at `timelineTime`; the second part gets `newId` (and, on an overlay, starts there). */
 export function splitClip(p: Project, id: string, timelineTime: number, newId: string): Project {
-  const index = p.clips.findIndex((c) => c.id === id)
-  if (index < 0 || !Number.isFinite(timelineTime) || p.clips.some((c) => c.id === newId)) return p
-  const clip = p.clips[index]
-  const local = timelineTime - clipStarts(p.clips)[index]
+  const at = find(p, id)
+  if (!at || !Number.isFinite(timelineTime) || hasClip(p, newId)) return p
+  const { clip, track, index } = at
+  const clips = p.tracks[track].clips
+  const start = track === 0 ? clipStarts(clips)[index] : clip.start ?? 0
+  const local = timelineTime - start
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
-  const clips = [...p.clips]
+  const next = [...clips]
   const asset = p.assets[clip.asset]
+  const second = track === 0 ? {} : { start: timelineTime }
   if (asset && assetKind(asset) === "image") {
-    clips.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local })
-    return { ...p, clips }
+    next.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
+  } else {
+    const cut = clip.in + local
+    next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
   }
-  const cut = clip.in + local
-  clips.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out })
-  return { ...p, clips }
+  return withTrack(p, track, next)
 }
 
-export function moveClip(p: Project, id: string, toIndex: number): Project {
-  const from = p.clips.findIndex((c) => c.id === id)
-  if (from < 0) return p
-  const clips = [...p.clips]
-  const [clip] = clips.splice(from, 1)
-  clips.splice(Math.max(0, Math.min(toIndex, clips.length)), 0, clip)
-  return { ...p, clips }
-}
-
+/** Takes a clip out: the base track closes the gap, an overlay keeps it. */
 export function removeClip(p: Project, id: string): Project {
-  return { ...p, clips: p.clips.filter((c) => c.id !== id) }
+  const at = find(p, id)
+  if (!at) return p
+  return withTrack(p, at.track, p.tracks[at.track].clips.filter((c) => c.id !== id))
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -137,17 +317,25 @@ const MAX_SIZE = 7680
 const MAX_FPS = 120
 const MAX_NAME = 200
 const MAX_SOURCE = 400
+const MAX_TRACK_ID = 64
 
 /** A whole number from 1 to `max`; these end up inside an ffmpeg filtergraph. */
 function isInt(v: unknown, max: number): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= max
 }
 
+/**
+ * A project from project.json (or a client), or null when it doesn't
+ * validate. Version 1 files (one flat `clips` list) come back as version 2
+ * with those clips on the base track.
+ */
 export function parseProject(json: unknown): Project | null {
-  if (!isRecord(json) || json.version !== 1) return null
-  const { name, width, height, fps, assets, clips } = json
+  if (!isRecord(json) || (json.version !== 1 && json.version !== 2)) return null
+  const { name, width, height, fps, assets } = json
   if (typeof name !== "string" || name.length > MAX_NAME || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
-  if (!isRecord(assets) || !Array.isArray(clips)) return null
+  if (!isRecord(assets)) return null
+  const rawTracks: unknown = json.version === 1 ? (Array.isArray(json.clips) ? [{ id: "t1", clips: json.clips }] : null) : json.tracks
+  if (!Array.isArray(rawTracks) || rawTracks.length < 1 || rawTracks.length > MAX_TRACKS) return null
 
   const parsedAssets: Record<string, Asset> = {}
   for (const [key, a] of Object.entries(assets)) {
@@ -160,34 +348,58 @@ export function parseProject(json: unknown): Project | null {
     if (a.source !== undefined) parsedAssets[key].source = a.source
   }
 
-  const parsedClips: Clip[] = []
   const ids = new Set<string>()
-  for (const c of clips) {
-    if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
-    if (!Object.hasOwn(parsedAssets, c.asset)) return null
-    if (ids.has(c.id)) return null
-    const asset = parsedAssets[c.asset]
-    if (assetKind(asset) === "image") {
-      // The epsilon absorbs float rounding from a split.
-      if (c.in !== 0 || c.out < MIN_CLIP - 1e-9 || c.out > MAX_IMAGE) return null
-    } else if (c.in < 0 || c.out <= c.in || c.out > asset.duration) return null
-    ids.add(c.id)
-    parsedClips.push({ id: c.id, asset: c.asset, in: c.in, out: c.out })
+  const trackIds = new Set<string>()
+  const tracks: Track[] = []
+  for (const [t, raw] of rawTracks.entries()) {
+    if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length < 1 || raw.id.length > MAX_TRACK_ID || trackIds.has(raw.id)) return null
+    if (raw.muted !== undefined && typeof raw.muted !== "boolean") return null
+    if (!Array.isArray(raw.clips)) return null
+    trackIds.add(raw.id)
+    const isBase = t === 0
+    let clips: Clip[] = []
+    for (const c of raw.clips) {
+      if (!isRecord(c) || typeof c.id !== "string" || typeof c.asset !== "string" || !isNum(c.in) || !isNum(c.out)) return null
+      if (!Object.hasOwn(parsedAssets, c.asset)) return null
+      if (ids.has(c.id)) return null
+      const asset = parsedAssets[c.asset]
+      if (assetKind(asset) === "image") {
+        // The epsilon absorbs float rounding from a split.
+        if (c.in !== 0 || c.out < MIN_CLIP - 1e-9 || c.out > MAX_IMAGE) return null
+      } else if (c.in < 0 || c.out <= c.in || c.out > asset.duration) return null
+      ids.add(c.id)
+      const clip: Clip = { id: c.id, asset: c.asset, in: c.in, out: c.out }
+      if (!isBase) {
+        if (!isNum(c.start) || c.start < 0) return null
+        clip.start = c.start
+      }
+      clips.push(clip)
+    }
+    if (!isBase) {
+      clips = sortByStart(clips)
+      for (let i = 1; i < clips.length; i++) {
+        const prev = clips[i - 1]
+        if ((prev.start ?? 0) + clipLength(prev) > (clips[i].start ?? 0) + EPS) return null
+      }
+    }
+    tracks.push(raw.muted ? { id: raw.id, muted: true, clips } : { id: raw.id, clips })
   }
 
-  return { version: 1, name, width, height, fps, assets: parsedAssets, clips: parsedClips }
+  return { version: 2, name, width, height, fps, assets: parsedAssets, tracks }
 }
 
 /**
  * A client-sent project laid over the stored one: assets, name and settings
  * are server-owned (a stale tab can't revert a rename), so only the client's
- * clips are taken. Null when it doesn't validate or a clip points at an asset
- * the stored project doesn't have.
+ * tracks are taken. Null when it doesn't validate, holds more than MAX_CLIPS
+ * clips, or a clip points at an asset the stored project doesn't have.
  */
 export function mergeClientProject(client: unknown, stored: Project): Project | null {
   const parsed = parseProject(client)
   if (!parsed) return null
-  if (!parsed.clips.every((c) => Object.hasOwn(stored.assets, c.asset))) return null
+  const clips = allClips(parsed)
+  if (clips.length > MAX_CLIPS) return null
+  if (!clips.every((c) => Object.hasOwn(stored.assets, c.asset))) return null
   const { name, width, height, fps, assets } = stored
   return parseProject({ ...parsed, name, width, height, fps, assets })
 }

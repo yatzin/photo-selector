@@ -9,7 +9,7 @@ import { prisma } from "@/lib/prisma"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } from "@/lib/media"
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
-import { mergeClientProject, type Asset } from "@/lib/video/project"
+import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteProject, importAsset, readProject, renameProject, reusableAsset, writeProject } from "@/lib/video/projects-server"
 
@@ -17,7 +17,6 @@ import { createProject, deleteProject, importAsset, readProject, renameProject, 
 // session, never from the client; failures come back as { error }.
 
 const plainName = z.string().refine(isPlainName)
-const MAX_CLIPS = 5000
 const MAX_PROJECT_JSON = 2_000_000
 const projectName = z.string().trim().min(1).max(200)
 const EXPORT_RUNNING = "This project is exporting. Try again when the export has finished."
@@ -71,13 +70,25 @@ export async function deleteProjectAction(folder: string): Promise<{ ok: true } 
   }
 }
 
+/** Clips in a client-sent project, over every track (a version 1 project has a flat `clips` list), before it's parsed. */
+function clipCount(project: unknown): number {
+  if (typeof project !== "object" || project === null) return 0
+  const { clips, tracks } = project as { clips?: unknown; tracks?: unknown }
+  let n = Array.isArray(clips) ? clips.length : 0
+  if (Array.isArray(tracks)) {
+    for (const t of tracks.slice(0, MAX_TRACKS + 1)) {
+      const trackClips = typeof t === "object" && t !== null ? (t as { clips?: unknown }).clips : undefined
+      if (Array.isArray(trackClips)) n += trackClips.length
+    }
+  }
+  return n
+}
+
 export async function saveProjectAction(folder: string, project: unknown): Promise<{ ok: true } | { error: string }> {
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   if (!f.success) return { error: "Invalid request." }
-  const tooLarge =
-    typeof project === "object" && project !== null && Array.isArray((project as { clips?: unknown }).clips) && (project as { clips: unknown[] }).clips.length > MAX_CLIPS
-  if (tooLarge || JSON.stringify(project ?? null).length > MAX_PROJECT_JSON) return { error: "Project is too large." }
+  if (clipCount(project) > MAX_CLIPS || JSON.stringify(project ?? null).length > MAX_PROJECT_JSON) return { error: "Project is too large." }
   try {
     return await withLock(`${userFolder}/${f.data}`, async () => {
       // Saving must not resurrect a deleted project; assets are server-owned.

@@ -6,7 +6,7 @@ import path from "path"
 import { numberedName, projectFolderName } from "@/lib/media"
 import { ensureVariant } from "@/lib/thumbs-server"
 import { buildExportArgs, buildExportGraph, runExport } from "./ffmpeg-server"
-import { assetKind, totalLength } from "./project"
+import { allClips, assetKind, totalLength } from "./project"
 import { assetPath, outputDir, readProject } from "./projects-server"
 
 // Exports run in this server process (the table is in-process, so a second
@@ -73,11 +73,12 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
   try {
     const project = await readProject(user, folder)
     if (!project) throw new Error("Project not found.")
-    if (project.clips.length === 0) throw new Error("Nothing to export")
+    const clips = allClips(project)
+    if (clips.length === 0) throw new Error("Nothing to export")
     const dir = outputDir(user, folder)
     if (!dir) throw new Error("Invalid project.")
     const files: Record<string, string> = {}
-    for (const clip of project.clips) {
+    for (const clip of clips) {
       if (files[clip.asset]) continue
       const asset = project.assets[clip.asset]
       const file = asset && assetPath(user, folder, asset.file)
@@ -98,7 +99,7 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
     const script = path.join(os.tmpdir(), `ps-export-${randomBytes(8).toString("hex")}.txt`)
     const args = buildExportArgs(project, files, tmp, script)
     await fs.writeFile(script, buildExportGraph(project, files).graph)
-    prepared = { args, tmp, script, final: (n) => numberedName(base, n), total: totalLength(project.clips), dir }
+    prepared = { args, tmp, script, final: (n) => numberedName(base, n), total: totalLength(project), dir }
   } catch (error) {
     jobs.delete(jobId)
     return { error: safeMessage(error) }

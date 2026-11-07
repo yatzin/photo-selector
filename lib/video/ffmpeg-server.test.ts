@@ -5,7 +5,7 @@ import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, parseProbe, parseProgressLine, probeMedia, runExport } from "./ffmpeg-server"
-import { newProject, type Project } from "./project"
+import { newProject, totalLength, type Clip, type Project } from "./project"
 
 describe("parseProbe", () => {
   it("reads duration and audio", () => {
@@ -22,14 +22,17 @@ describe("parseProbe", () => {
   })
 })
 
+/** One base track holding `clips`. */
+const base = (clips: Clip[]) => [{ id: "t1", clips }]
+
 function twoClips(): Project {
   return {
     ...newProject("P"),
     assets: { a: { file: "a.mp4", duration: 5, hasAudio: true }, s: { file: "s.mp4", duration: 4, hasAudio: false } },
-    clips: [
+    tracks: base([
       { id: "c1", asset: "a", in: 1, out: 3 },
       { id: "c2", asset: "s", in: 0, out: 1.5 },
-    ],
+    ]),
   }
 }
 const files = { a: "/x/a.mp4", s: "/x/s.mp4" }
@@ -61,7 +64,7 @@ describe("buildExportArgs", () => {
 
   it("reads the graph from a script file, so 150 clips don't make a long command line", () => {
     const clips = Array.from({ length: 150 }, (_, i) => ({ id: `c${i}`, asset: i % 2 ? "s" : "a", in: 0, out: 1 }))
-    const p = { ...twoClips(), clips }
+    const p = { ...twoClips(), tracks: base(clips) }
     const args = buildExportArgs(p, files, "/out/x.mp4.tmp", "/tmp/graph.txt")
     expect(args).toContain("-/filter_complex")
     expect(args).not.toContain("-filter_complex")
@@ -76,7 +79,7 @@ describe("buildExportArgs", () => {
     const p: Project = {
       ...twoClips(),
       assets: { ...twoClips().assets, i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" } },
-      clips: [{ id: "c1", asset: "a", in: 1, out: 3 }, { id: "p", asset: "i", in: 0, out: 2.5 }, { id: "c2", asset: "s", in: 0, out: 1.5 }],
+      tracks: base([{ id: "c1", asset: "a", in: 1, out: 3 }, { id: "p", asset: "i", in: 0, out: 2.5 }, { id: "c2", asset: "s", in: 0, out: 1.5 }]),
     }
     const args = buildExportArgs(p, { ...files, i: "/cache/i.webp" }, "o")
     const g = graph(args)
@@ -93,7 +96,81 @@ describe("buildExportArgs", () => {
   })
 
   it("throws when there is nothing to export", () => {
-    expect(() => buildExportArgs({ ...twoClips(), clips: [] }, files, "o")).toThrow("Nothing to export")
+    expect(() => buildExportArgs({ ...twoClips(), tracks: base([]) }, files, "o")).toThrow("Nothing to export")
+    expect(() => buildExportArgs({ ...twoClips(), tracks: [...base([]), { id: "t2", clips: [] }] }, files, "o")).toThrow("Nothing to export")
+  })
+
+  it("uses silence for every clip of a muted single track", () => {
+    const g = graph(buildExportArgs({ ...twoClips(), tracks: [{ ...base([])[0], muted: true, clips: twoClips().tracks[0].clips }] }, files, "o"))
+    expect(g).not.toContain(":a]")
+    expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:2,asetpts=PTS-STARTPTS[a0]")
+    expect(g).toContain("concat=n=2:v=1:a=1[v][a]")
+  })
+})
+
+describe("buildExportArgs with layers", () => {
+  function layered(): Project {
+    return {
+      ...newProject("L"),
+      assets: {
+        a: { file: "a.mp4", duration: 5, hasAudio: true },
+        i: { file: "i.jpg", duration: 5, hasAudio: false, kind: "image" },
+        b: { file: "b.mp4", duration: 5, hasAudio: true },
+      },
+      tracks: [
+        { id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 4 }] },
+        { id: "t2", clips: [{ id: "p", asset: "i", in: 0, out: 2, start: 1 }] },
+        { id: "t3", muted: true, clips: [{ id: "m", asset: "b", in: 1, out: 2, start: 2.5 }] },
+      ],
+    }
+  }
+  const layerFiles = { a: "/x/a.mp4", i: "/x/i.webp", b: "/x/b.mp4" }
+  const scale = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30"
+
+  it("overlays each track's clips, lower tracks first, over a black canvas the length of the timeline", () => {
+    const args = buildExportArgs(layered(), layerFiles, "o")
+    const g = graph(args)
+    expect(args.filter((a) => a === "-i")).toHaveLength(3)
+    expect(args.slice(args.indexOf("/x/i.webp") - 7, args.indexOf("/x/i.webp") + 1)).toEqual(["-loop", "1", "-framerate", "30", "-t", "2", "-i", "/x/i.webp"])
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=4,format=yuv420p[bg]")
+    expect(g).toContain(`[0:v]trim=0:4,setpts=PTS-STARTPTS,${scale}[v0]`)
+    expect(g).toContain("[v0][a0]concat=n=1:v=1:a=1[bv][ba]")
+    expect(g).toContain("[bg][bv]overlay=eof_action=pass[l0]")
+    expect(g).toContain(`[1:v]setpts=PTS-STARTPTS,${scale},format=yuv420p,setpts=PTS+1/TB[v1]`)
+    expect(g).toContain("[l0][v1]overlay=enable='between(t,1,3)':eof_action=pass[l1]")
+    expect(g).toContain(`[2:v]trim=1:2,setpts=PTS-STARTPTS,${scale},setpts=PTS+2.5/TB[v2]`)
+    expect(g).toContain("[l1][v2]overlay=enable='between(t,2.5,3.5)':eof_action=pass[v]")
+  })
+
+  it("mixes the base audio with silence for the whole length, leaving out images and muted tracks", () => {
+    const g = graph(buildExportArgs(layered(), layerFiles, "o"))
+    expect(g).toContain("[0:a]atrim=0:4")
+    expect(g).not.toContain("[1:a]")
+    expect(g).not.toContain("[2:a]")
+    expect(g).toContain("anullsrc=r=48000:cl=stereo,atrim=0:4[asil]")
+    expect(g).toContain("[asil][ba]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("delays an unmuted overlay's audio to its start", () => {
+    const p = layered()
+    p.tracks[2] = { id: "t3", clips: p.tracks[2].clips }
+    const g = graph(buildExportArgs(p, layerFiles, "o"))
+    expect(g).toContain("[2:a]atrim=1:2,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=120000S:all=1[a2]")
+    expect(g).toContain("[asil][ba][a2]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("starts from the black canvas when the base track is empty, and runs to the last overlay end", () => {
+    const p = layered()
+    p.tracks[0] = { id: "t1", clips: [] }
+    p.tracks[2].clips[0].start = 6
+    const args = buildExportArgs(p, { i: "/x/i.webp", b: "/x/b.mp4" }, "o")
+    const g = graph(args)
+    expect(args.filter((a) => a === "-i")).toHaveLength(2)
+    expect(g).toContain("color=c=black:s=1920x1080:r=30:d=7,format=yuv420p[bg]")
+    expect(g).toContain("[bg][v0]overlay=enable='between(t,1,3)':eof_action=pass[l1]")
+    expect(g).toContain("[l1][v1]overlay=enable='between(t,6,7)':eof_action=pass[v]")
+    expect(g).not.toContain("concat")
+    expect(g).toContain("[asil]amix=inputs=1:duration=first:dropout_transition=0:normalize=0[a]")
   })
 })
 
@@ -140,7 +217,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
   async function exportProject(p: Project, files: Record<string, string>, name: string) {
     const out = path.join(dir, name)
     const progress: number[] = []
-    const total = p.clips.reduce((t, c) => t + c.out - c.in, 0)
+    const total = totalLength(p)
     // The filtergraph goes through a script file, as the app does.
     const script = path.join(dir, `${name}.graph.txt`)
     fs.writeFileSync(script, buildExportGraph(p, files).graph)
@@ -153,7 +230,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     const p: Project = {
       ...newProject("E2E"),
       assets: { a: { file: "a", duration: 3, hasAudio: true }, b: { file: "b", duration: 3, hasAudio: true } },
-      clips: [{ id: "1", asset: "a", in: 1, out: 2.5 }, { id: "2", asset: "b", in: 0, out: 1.5 }],
+      tracks: base([{ id: "1", asset: "a", in: 1, out: 2.5 }, { id: "2", asset: "b", in: 0, out: 1.5 }]),
     }
     const r = await exportProject(p, { a: sample(1), b: sample(2) }, "two.mp4")
     expect(Math.abs(r.duration - r.total)).toBeLessThan(0.3)
@@ -168,7 +245,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     const p: Project = {
       ...newProject("Mixed"),
       assets: { a: { file: "a", duration: 3, hasAudio: true }, s: { file: "s", duration: 2, hasAudio: false } },
-      clips: [{ id: "1", asset: "a", in: 0, out: 1 }, { id: "2", asset: "s", in: 0, out: 1.5 }, { id: "3", asset: "a", in: 1, out: 2 }],
+      tracks: base([{ id: "1", asset: "a", in: 0, out: 1 }, { id: "2", asset: "s", in: 0, out: 1.5 }, { id: "3", asset: "a", in: 1, out: 2 }]),
     }
     const r = await exportProject(p, { a: sample(1), s: silent }, "mixed.mp4")
     expect(Math.abs(r.duration - 3.5)).toBeLessThan(0.3)
@@ -185,7 +262,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     const p: Project = {
       ...newProject("Portrait"),
       assets: { v: { file: "v", duration: 2, hasAudio: true } },
-      clips: [{ id: "1", asset: "v", in: 0, out: 1.5 }],
+      tracks: base([{ id: "1", asset: "v", in: 0, out: 1.5 }]),
     }
     const r = await exportProject(p, { v: portrait }, "portrait-out.mp4")
     expect(r.info).toMatch(/Video: h264[^\n]*1920x1080/)
@@ -200,7 +277,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     const p: Project = {
       ...newProject("Image"),
       assets: { a: { file: "a", duration: 3, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
-      clips: [{ id: "1", asset: "a", in: 0, out: 1 }, { id: "2", asset: "i", in: 0, out: 2 }, { id: "3", asset: "a", in: 1, out: 2 }],
+      tracks: base([{ id: "1", asset: "a", in: 0, out: 1 }, { id: "2", asset: "i", in: 0, out: 2 }, { id: "3", asset: "a", in: 1, out: 2 }]),
     }
     const r = await exportProject(p, { a: sample(1), i: image }, "image.mp4")
     expect(Math.abs(r.duration - 4)).toBeLessThan(0.4)
@@ -217,11 +294,68 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     expect(px.stdout[1]).toBeLessThan(100)
   }, 60_000)
 
+  /** RGB of a 2x2 patch in the middle of the frame at `t` seconds. */
+  async function centre(file: string, t: number): Promise<number[]> {
+    const px = await ffmpeg(["-ss", String(t), "-i", file, "-frames:v", "1", "-vf", "crop=2:2:960:540,format=rgb24", "-f", "rawvideo", "-"])
+    return [px.stdout[0], px.stdout[1], px.stdout[2]]
+  }
+
+  async function blueAndRed() {
+    const blue = path.join(dir, "blue.mp4")
+    const red = path.join(dir, "red.webp")
+    if (!fs.existsSync(blue)) {
+      await ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=640x360:r=25:d=5", "-f", "lavfi", "-i", "sine=duration=5", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", blue])
+      await sharp({ create: { width: 800, height: 600, channels: 3, background: "#c33" } }).webp().toFile(red)
+    }
+    return { blue, red }
+  }
+
+  it("draws an overlay image over the base video and keeps the base audio", async () => {
+    const { blue, red } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Layers"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
+      tracks: [
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 4 }] },
+        { id: "t2", clips: [{ id: "2", asset: "i", in: 0, out: 2, start: 1 }] },
+      ],
+    }
+    const r = await exportProject(p, { v: blue, i: red }, "layers.mp4")
+    expect(Math.abs(r.duration - 4)).toBeLessThan(0.3)
+    expect(r.info).toMatch(/Stream #[^\n]*Audio:/)
+    expect(r.info).toMatch(/Video: h264[^\n]*1920x1080/)
+    const [r0, , b0] = await centre(r.out, 0.5)
+    expect(b0).toBeGreaterThan(150)
+    expect(r0).toBeLessThan(100)
+    const [r2, , b2] = await centre(r.out, 2)
+    expect(r2).toBeGreaterThan(150)
+    expect(b2).toBeLessThan(100)
+    // Back to the base after the overlay ends.
+    expect((await centre(r.out, 3.5))[2]).toBeGreaterThan(150)
+  }, 60_000)
+
+  it("runs past the base track's end to the last overlay, over black", async () => {
+    const { blue, red } = await blueAndRed()
+    const p: Project = {
+      ...newProject("Past"),
+      assets: { v: { file: "v", duration: 5, hasAudio: true }, i: { file: "i", duration: 5, hasAudio: false, kind: "image" } },
+      tracks: [
+        { id: "t1", clips: [{ id: "1", asset: "v", in: 0, out: 2 }] },
+        { id: "t2", clips: [{ id: "2", asset: "i", in: 0, out: 1, start: 3 }] },
+      ],
+    }
+    const r = await exportProject(p, { v: blue, i: red }, "past.mp4")
+    expect(Math.abs(r.duration - 4)).toBeLessThan(0.3)
+    expect(Math.max(...(await centre(r.out, 2.5)))).toBeLessThan(40)
+    expect((await centre(r.out, 3.5))[0]).toBeGreaterThan(150)
+    expect(r.info).toMatch(/Stream #[^\n]*Audio:/)
+  }, 60_000)
+
   it("removes a partial output and rejects with ffmpeg's last line when ffmpeg fails", async () => {
     const p: Project = {
       ...newProject("Bad"),
       assets: { a: { file: "a", duration: 3, hasAudio: true } },
-      clips: [{ id: "1", asset: "a", in: 0, out: 1 }],
+      tracks: base([{ id: "1", asset: "a", in: 0, out: 1 }]),
     }
     const out = path.join(dir, "bad.mp4.tmp")
     fs.writeFileSync(out, "partial") // would survive if runExport didn't clean up

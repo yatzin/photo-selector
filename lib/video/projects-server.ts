@@ -6,7 +6,7 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
-import { DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
+import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -56,7 +56,7 @@ export async function listProjects(userFolder: string): Promise<{ folder: string
     if (!p) continue
     try {
       const st = await fs.stat(path.join(dir, e.name, "project.json"))
-      out.push({ folder: e.name, name: p.name, clips: p.clips.length, modified: st.mtimeMs })
+      out.push({ folder: e.name, name: p.name, clips: allClips(p).length, modified: st.mtimeMs })
     } catch {
       continue
     }

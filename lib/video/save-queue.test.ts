@@ -76,13 +76,13 @@ describe("createSaveQueue", () => {
 
   it("compares with `same`, so an equal copy of the saved state doesn't save", async () => {
     const save = vi.fn(async () => true)
-    const queue = createSaveQueue(save, v0, () => {}, undefined, undefined, (a, b) => a.clips === b.clips)
+    const queue = createSaveQueue(save, v0, () => {}, undefined, undefined, (a, b) => a.tracks === b.tracks)
     queue.update({ ...v0 })
     await vi.advanceTimersByTimeAsync(10000)
     expect(save).not.toHaveBeenCalled()
     expect(queue.isDirty()).toBe(false)
     expect(await queue.flush()).toBe(true)
-    queue.update({ ...v0, clips: [] })
+    queue.update({ ...v0, tracks: [] })
     expect(queue.isDirty()).toBe(true)
   })
 

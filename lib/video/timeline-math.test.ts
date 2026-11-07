@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Clip } from "./project"
-import { clipIdAt, dropIndex, pxToTime, timeToPx, trimDelta } from "./timeline-math"
+import { clipIdAt, dropIndex, pxToTime, snapStart, timeToPx, trimDelta } from "./timeline-math"
 
 const clip = (id: string, a: number, b: number): Clip => ({ id, asset: "a", in: a, out: b })
 
@@ -51,5 +51,25 @@ describe("clipIdAt", () => {
   it("is null past the end or for an empty timeline", () => {
     expect(clipIdAt(clips, 6)).toBeNull()
     expect(clipIdAt([], 0)).toBeNull()
+  })
+})
+
+describe("snapStart", () => {
+  // 8 px at 40 px/s is 0.2 s.
+  const snap = (start: number, length: number, points: number[]) => snapStart(start, length, points, 8, 40)
+  it("snaps the start to a point within the threshold", () => {
+    expect(snap(2.15, 1, [2])).toBe(2)
+    expect(snap(1.85, 1, [2])).toBe(2)
+  })
+  it("snaps the end to a point when the start has none near", () => {
+    expect(snap(0.9, 1, [2])).toBe(1)
+  })
+  it("takes the nearest of several points", () => {
+    expect(snap(2.1, 1, [2, 2.15])).toBe(2.15)
+    expect(snap(2.1, 1, [2, 3.05])).toBe(2.05)
+  })
+  it("leaves the start alone when nothing is near, and never goes below 0", () => {
+    expect(snap(2.5, 1, [2, 4])).toBe(2.5)
+    expect(snap(-0.5, 1, [])).toBe(0)
   })
 })
