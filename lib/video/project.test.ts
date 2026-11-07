@@ -1510,4 +1510,24 @@ describe("text clips", () => {
     const merged = mergeClientProject({ ...stored, tracks: [{ id: "t1", clips: [textClip()] }] }, stored)
     expect(merged?.tracks[0].clips).toEqual([textClip()])
   })
+
+  it("keeps a text's font, drops Mono (the default) and refuses an unknown font, parsing or merging", () => {
+    const withFont = (font: unknown) => ({ ...withText([]), tracks: [{ id: "t1", clips: [{ ...textClip(), text: { ...text, font } }] }] })
+    expect(parseProject(withFont("creepster"))?.tracks[0].clips[0].text).toEqual({ ...text, font: "creepster" })
+    expect(parseProject(withFont("mono"))?.tracks[0].clips[0].text).toEqual(text)
+    expect(parseProject(withFont("Comic Sans"))).toBeNull()
+    expect(parseProject(withFont(3))).toBeNull()
+    const stored = withText([])
+    expect(mergeClientProject(withFont("pacifico"), stored)?.tracks[0].clips[0].text).toEqual({ ...text, font: "pacifico" })
+    expect(mergeClientProject(withFont("nope"), stored)).toBeNull()
+  })
+
+  it("sets the font with the rest of the text in one edit", () => {
+    const p = withText([textClip()])
+    const next = setClipText(p, "x", { ...text, content: "Boo", color: "#ff0000", font: "nosifer" })
+    expect(next.tracks[0].clips[0].text).toEqual({ content: "Boo", color: "#ff0000", orientation: "horizontal", font: "nosifer" })
+    expect(setClipText(next, "x", { ...text, content: "Boo", color: "#ff0000", font: "nosifer" })).toBe(next)
+    expect(setClipText(p, "x", { ...text, font: "mono" })).toBe(p)
+    expect(setClipText(p, "x", { ...text, font: "nope" })).toBe(p)
+  })
 })

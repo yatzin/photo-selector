@@ -4,10 +4,70 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* The video editor's text clips: the same font file the export draws them with (lib/video/text). */
+/* The video editor's text clips: the same font files the export draws them with (lib/video/fonts). */
 @font-face {
   font-family: "PS Video Text";
   src: url("/fonts/GeistMono-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Anton";
+  src: url("/fonts/Anton-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Fredoka";
+  src: url("/fonts/Fredoka-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Pacifico";
+  src: url("/fonts/Pacifico-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Bangers";
+  src: url("/fonts/Bangers-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Permanent Marker";
+  src: url("/fonts/PermanentMarker-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Press Start 2P";
+  src: url("/fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rubik Glitch";
+  src: url("/fonts/RubikGlitch-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Playfair Display";
+  src: url("/fonts/PlayfairDisplay-Black.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Special Elite";
+  src: url("/fonts/SpecialElite-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Creepster";
+  src: url("/fonts/Creepster-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Nosifer";
+  src: url("/fonts/Nosifer-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Reenie Beanie";
+  src: url("/fonts/ReenieBeanie-Regular.ttf") format("truetype");
   font-display: block;
 }
 

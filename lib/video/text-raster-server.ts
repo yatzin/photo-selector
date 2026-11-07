@@ -2,18 +2,19 @@ import "server-only"
 import { execFile } from "child_process"
 import fs from "fs/promises"
 import path from "path"
-import { TEXT_FONT_FILE, textLayout, type ClipText } from "./text"
+import { fontById } from "./fonts"
+import { textLayout, type ClipText } from "./text"
 
 // A text clip's picture for the export: its text drawn by ffmpeg's drawtext
-// (FreeType, with the bundled font file, so no system font is involved) into a
+// (HarfBuzz and FreeType, with the text's bundled font file, so no system font is involved) into a
 // transparent PNG exactly its content box at `fontPx` (lib/video/text), each
 // line centred across the box on the baseline textLayout gives, as the preview
 // draws it. The export then treats the PNG like an image clip's still.
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
-/** The bundled font file, under public/ in the app's folder (the server's working directory, in development, tests and the container). */
-export const textFontPath = () => path.join(process.cwd(), "public", TEXT_FONT_FILE)
+/** A font's file (lib/video/fonts; Mono for none), under public/fonts in the app's folder (the server's working directory, in development, tests and the container). */
+export const textFontPath = (font?: string) => path.join(process.cwd(), "public", "fonts", fontById(font).file)
 
 /**
  * Draws `text` at `fontPx` into a transparent PNG at `outFile`, its content
@@ -28,7 +29,7 @@ export async function rasteriseText(text: ClipText, fontPx: number, outFile: str
   const h = Math.max(2, Math.ceil(layout.h - 1e-6))
   const dir = await fs.mkdtemp(path.join(workDir, "text-"))
   try {
-    await fs.copyFile(textFontPath(), path.join(dir, "font.ttf"))
+    await fs.copyFile(textFontPath(text.font), path.join(dir, "font.ttf"))
     const filters = [`color=c=black@0:s=${w}x${h}:r=1:d=1`, "format=rgba"]
     let n = 0
     for (const line of layout.lines) {

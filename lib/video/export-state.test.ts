@@ -105,5 +105,10 @@ describe("exportFingerprint", () => {
     expect(base).not.toBe(exportFingerprint(project()))
     expect(exportFingerprint(withText())).toBe(base)
     for (const t of [{ ...text, content: "Ho" }, { ...text, color: "#ff0000" }, { ...text, orientation: "vertical" as const }]) expect(exportFingerprint(withText(t))).not.toBe(base)
+    // The font counts; a text with none (Mono) keeps the fingerprint it had before fonts.
+    const anton = exportFingerprint(withText({ ...text, font: "anton" }))
+    expect(anton).not.toBe(base)
+    expect(exportFingerprint(withText({ ...text, font: "pacifico" }))).not.toBe(anton)
+    expect(exportFingerprint(withText({ ...text, font: undefined }))).toBe(base)
   })
 })

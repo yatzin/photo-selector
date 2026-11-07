@@ -6,7 +6,7 @@ import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport, textRaster } from "./ffmpeg-server"
 import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
-import type { ClipText } from "./text"
+import { textSize, type ClipText } from "./text"
 import { rasteriseText } from "./text-raster-server"
 import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
 
@@ -443,6 +443,17 @@ describe("buildExportArgs with text clips", () => {
     expect(g).toContain("scale=118:476,setsar=1,fps=30,format=rgba,setsar=1,format=yuva420p")
   })
 
+  it("sizes each font's frame from its own box; Mono, named or not, builds the graph it always did", () => {
+    const frame = (font?: string) => textRaster(project({}), { ...project({}).tracks[1].clips[0], text: text({ content: "Boo!", font }) })
+    const sizes = ["anton", "pacifico", "press-start"].map((f) => frame(f))
+    expect(new Set(sizes.map((s) => `${s.w}x${s.h}`)).size).toBe(3)
+    for (const s of sizes) expect(s.fontPx).toBe(120)
+    const g = (font?: string) => graph(buildExportArgs(project({ text: text({ font }) }), tFiles, "o"))
+    expect(g("anton")).not.toBe(g("pacifico"))
+    expect(g(undefined)).toBe(graph(buildExportArgs(project({}), tFiles, "o")))
+    expect(g(undefined)).toContain("scale=184:194,")
+  })
+
   it("refuses a text clip with no PNG", () => {
     expect(() => buildExportArgs(project({}), { a: "/x/a.mp4" }, "o")).toThrow("Missing text picture")
   })
@@ -801,6 +812,33 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     // The top padding (a quarter font size, 54 px) shows the blue base; so does the rest of the canvas.
     expect(await brightest(r.out, Math.round(v.x), Math.round(v.y + 4), Math.round(v.w), 40)).toBeLessThan(100)
     expect(await brightest(r.out, 1100, 100, 700, 800)).toBeLessThan(100)
+  }, 60_000)
+
+  it("draws a proportional font (Pacifico) in its own box, centred where the preview puts it", async () => {
+    const text: ClipText = { content: "Boo!", color: "#ffffff", orientation: "horizontal", font: "pacifico" }
+    const t: Transform = { ...IDENTITY, x: 0.2, y: -0.1, scale: 2 }
+    const r = await textExport(text, t, "text-p")
+    const v = clipRect(textSize(text, 1080), 1920, 1080, t).visible
+    // The white ink's bounds in the frame one second in.
+    const px = await ffmpeg(["-ss", "1", "-i", r.out, "-frames:v", "1", "-vf", "format=gray", "-f", "rawvideo", "-"])
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity
+    for (let i = 0; i < px.stdout.length; i++) {
+      if (px.stdout[i] < 200) continue
+      const x = i % 1920
+      const y = Math.floor(i / 1920)
+      left = Math.min(left, x)
+      right = Math.max(right, x + 1)
+      top = Math.min(top, y)
+      bottom = Math.max(bottom, y + 1)
+    }
+    // Inside the box, inside its padding (half a font size at scale 2 is 54 px, so ink stays a few px in), centred across it.
+    expect(left).toBeGreaterThan(v.x)
+    expect(right).toBeLessThan(v.x + v.w)
+    expect(top).toBeGreaterThan(v.y)
+    expect(bottom).toBeLessThan(v.y + v.h)
+    expect(Math.abs((left + right) / 2 - (v.x + v.w / 2))).toBeLessThan(6)
+    // A script font's box is not Mono's: four Pacifico letters are narrower than four Mono ones.
+    expect(v.w).toBeLessThan(clipRect(textSize({ ...text, font: undefined }, 1080), 1920, 1080, t).visible.w)
   }, 60_000)
 
   it("draws vertical text turned 90 degrees across the canvas", async () => {
