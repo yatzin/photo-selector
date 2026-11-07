@@ -16,7 +16,8 @@ function read(key: string): string | null {
   }
 }
 
-export function useStoredState<T extends string>(key: string, fallback: T, allowed: readonly T[]): [T, (value: T) => void] {
+/** The raw stored string (null on the server, on first paint and when unset) and a setter. */
+export function useStoredValue(key: string): [string | null, (value: string) => void] {
   const subscribe = useCallback((onChange: () => void) => {
     const handler = (e: Event) => {
       if (!(e instanceof CustomEvent) || e.detail === key) onChange()
@@ -30,9 +31,8 @@ export function useStoredState<T extends string>(key: string, fallback: T, allow
   }, [key])
 
   const raw = useSyncExternalStore(subscribe, () => read(key), () => null)
-  const value = raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback
 
-  const set = useCallback((next: T) => {
+  const set = useCallback((next: string) => {
     try {
       window.localStorage.setItem(key, next)
     } catch {
@@ -41,5 +41,11 @@ export function useStoredState<T extends string>(key: string, fallback: T, allow
     window.dispatchEvent(new CustomEvent(EVENT, { detail: key }))
   }, [key])
 
+  return [raw, set]
+}
+
+export function useStoredState<T extends string>(key: string, fallback: T, allowed: readonly T[]): [T, (value: T) => void] {
+  const [raw, set] = useStoredValue(key)
+  const value = raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback
   return [value, set]
 }

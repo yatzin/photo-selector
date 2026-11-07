@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { Clapperboard, FolderInput, FolderOutput, FolderKanban, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
+import { ChevronsLeft, ChevronsRight, Clapperboard, FolderInput, FolderOutput, FolderKanban, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
+import { useStoredState } from "@/lib/hooks/use-stored-state"
 import type { RootCounts } from "@/lib/library-server"
 
 type NavItem = { href: string; label: string; icon: React.ElementType; badge?: number; subtitle?: string }
@@ -26,15 +27,20 @@ const itemCount = (n: number) => `${n.toLocaleString()} item${n === 1 ? "" : "s"
 
 const bottomItems: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings }]
 
-function NavLink({ href, label, icon: Icon, badge, subtitle, onClick }: NavItem & { onClick?: () => void }) {
+function NavLink({ href, label, icon: Icon, badge, subtitle, onClick, collapsed }: NavItem & { onClick?: () => void; collapsed?: boolean }) {
   const pathname = usePathname()
   const active = pathname === href || pathname.startsWith(href + "/")
+  // Icons only: the label, count and pending number move into the name and tooltip.
+  const name = [label, subtitle, badge ? `${badge} pending` : ""].filter(Boolean).join(", ")
   return (
     <Link
       href={href}
       onClick={onClick}
+      title={collapsed ? name : undefined}
+      aria-label={collapsed ? name : undefined}
       className={cn(
-        "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150",
+        "relative flex items-center gap-3 whitespace-nowrap rounded-lg py-2.5 text-sm font-medium transition-colors duration-150",
+        collapsed ? "justify-center px-0" : "px-3",
         active
           ? "bg-sidebar-primary/10 text-sidebar-primary"
           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -48,7 +54,9 @@ function NavLink({ href, label, icon: Icon, badge, subtitle, onClick }: NavItem 
         )}
       />
       <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />
-      {subtitle === undefined ? (
+      {collapsed ? (
+        badge ? <span aria-hidden="true" className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-primary" /> : null
+      ) : subtitle === undefined ? (
         label
       ) : (
         <span className="flex min-w-0 flex-col leading-tight">
@@ -56,42 +64,83 @@ function NavLink({ href, label, icon: Icon, badge, subtitle, onClick }: NavItem 
           <span className="text-[11px] font-normal text-muted-foreground tabular-nums">{subtitle}</span>
         </span>
       )}
-      {badge ? <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground">{badge}</span> : null}
+      {badge && !collapsed ? <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground">{badge}</span> : null}
     </Link>
   )
 }
 
-function SidebarContent({ onNavClick, aiPending, counts }: { onNavClick?: () => void; aiPending: number; counts: RootCounts }) {
+const heading = "px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70"
+
+/** A section heading, or (icons only) a thin rule between sections. */
+function Section({ label, collapsed, first }: { label: string; collapsed: boolean; first?: boolean }) {
+  if (collapsed) return first ? null : <div aria-hidden="true" className="mx-1 my-2 border-t" />
+  return <p className={cn(heading, !first && "mt-3")}>{label}</p>
+}
+
+function SidebarContent({
+  onNavClick, aiPending, counts, collapsed = false, onToggle,
+}: {
+  onNavClick?: () => void
+  aiPending: number
+  counts: RootCounts
+  collapsed?: boolean
+  /** Shows the collapse/expand button (desktop only). */
+  onToggle?: () => void
+}) {
   return (
-    <div className="flex flex-col h-full px-3 py-4">
-      <div className="mb-6 flex items-center gap-2 px-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+    <div className={cn("flex h-full flex-col py-4", collapsed ? "px-2" : "px-3")}>
+      <div className={cn("mb-6 flex items-center gap-2", collapsed ? "justify-center" : "px-3")}>
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground" title={collapsed ? "Photo Selector" : undefined}>
           <Images className="h-4 w-4" />
         </div>
-        <span className="font-heading font-semibold tracking-tight">Photo Selector</span>
+        {!collapsed && <span className="whitespace-nowrap font-heading font-semibold tracking-tight">Photo Selector</span>}
       </div>
       <nav className="flex flex-1 flex-col gap-1">
-        <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Library</p>
-        {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
-        <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Review</p>
-        <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} />
-        <p className="mt-3 px-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Tools</p>
-        <NavLink href="/tools/video-editing" label="Video Editing" icon={Clapperboard} onClick={onNavClick} />
-        <div className="ml-4 flex flex-col gap-1 border-l pl-2">
-          {toolItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} />)}
+        <Section label="Library" collapsed={collapsed} first />
+        {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} collapsed={collapsed} />)}
+        <Section label="Review" collapsed={collapsed} />
+        <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} collapsed={collapsed} />
+        <Section label="Tools" collapsed={collapsed} />
+        <NavLink href="/tools/video-editing" label="Video Editing" icon={Clapperboard} onClick={onNavClick} collapsed={collapsed} />
+        <div className={cn("flex flex-col gap-1", !collapsed && "ml-4 border-l pl-2")}>
+          {toolItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} collapsed={collapsed} />)}
         </div>
       </nav>
       <nav className="flex flex-col gap-1 border-t pt-3 mt-3">
-        {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} />)}
+        {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} collapsed={collapsed} />)}
+        {onToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+            title={collapsed ? "Expand navigation" : "Collapse navigation"}
+            className={cn(
+              "flex items-center gap-3 whitespace-nowrap rounded-lg py-2 text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              collapsed ? "justify-center px-0" : "px-3"
+            )}
+          >
+            {collapsed ? <ChevronsRight className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} /> : <ChevronsLeft className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />}
+            {!collapsed && "Collapse"}
+          </button>
+        )}
       </nav>
     </div>
   )
 }
 
 export function Sidebar({ aiPending, counts }: { aiPending: number; counts: RootCounts }) {
+  // The server and first paint are expanded; a stored "collapsed" takes over on hydration.
+  const [mode, setMode] = useStoredState("ps.sidebar", "expanded", ["expanded", "collapsed"] as const)
+  const collapsed = mode === "collapsed"
   return (
-    <aside className="hidden md:flex w-56 shrink-0 flex-col border-r bg-card">
-      <SidebarContent aiPending={aiPending} counts={counts} />
+    <aside
+      className={cn(
+        "hidden md:flex shrink-0 flex-col overflow-hidden border-r bg-card transition-[width] duration-200 ease-out motion-reduce:transition-none",
+        collapsed ? "w-14" : "w-56"
+      )}
+    >
+      <SidebarContent aiPending={aiPending} counts={counts} collapsed={collapsed} onToggle={() => setMode(collapsed ? "expanded" : "collapsed")} />
     </aside>
   )
 }
