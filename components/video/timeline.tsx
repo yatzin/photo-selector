@@ -440,7 +440,9 @@ export function Timeline({
         let s = trimDelta(edge, clip, cdx + scrolledSince(scroll0).x, z)
         const off = altHeld.current
         let guide: number | null = null
-        if (!off) {
+        // The left edge of a snapped V1 clip is only a stand-in until release (the magnet then packs the layer), so it doesn't snap.
+        const deferredLeft = edge === "in" && track === 0 && isMagnetic(p)
+        if (!off && !deferredLeft) {
           // Either edge sits at start + (seconds - in) on the timeline, an image's too (its in is 0).
           const hit = snapEdges([clip.start + s - clip.in], snapPoints(p, t, clip.id, track === 0 && isMagnetic(p) ? 0 : undefined), SNAP_PX, z)
           if (hit) {
@@ -452,7 +454,7 @@ export function Timeline({
         }
         seconds = s
         setTrim({ id: clip.id, edge, seconds: s })
-        setSnap({ off, at: guide })
+        setSnap(deferredLeft ? null : { off, at: guide })
       },
       () => {
         setTrim(null)

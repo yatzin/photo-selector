@@ -241,7 +241,8 @@ Not while the project is exporting, or while that file is being imported.
   where; no snapping or Alt hint there), trimming ripples the clips after it, and deleting or moving a clip
   away closes its gap. Dragging a clip's left edge shows the plain trim while
   you drag (the edge follows the pointer and nothing else moves, even over the
-  clip before it); when you let go the layer closes up again. The right edge
+  clip before it; it doesn't snap to other layers and shows no Alt hint); when
+  you let go the layer closes up again. The right edge
   ripples the clips after it as you drag. Unticking it frees layer 1 again;
   clips stay where they are. Layers above it are always free.
 - **Move, resize and crop on screen.** Click a clip in the preview to select
@@ -266,8 +267,9 @@ Not while the project is exporting, or while that file is being imported.
   its top right: drag it round to turn the clip about its centre (it snaps to
   every 15 degrees unless you hold **Alt**, and shows the angle while you
   drag). Double-click it to straighten the clip; focused, the left and right
-  arrows turn it by 1 degree (**Shift**: 15). The two buttons at the top left
-  flip the picture left to right or top to bottom, where it is. The frame and
+  arrows turn it by 1 degree (**Shift**: 15). Of the two buttons at the top
+  left, the left one flips the picture top to bottom and the right one left to
+  right, where it is. The frame and
   its handles turn with the clip, and moving, resizing and cropping work along
   the clip's own sides. A turned clip's move snaps its outline's box; its
   resize and crop don't snap. Each turn or flip is one undo step.

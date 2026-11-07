@@ -415,8 +415,9 @@ export function TransformOverlay({
       {selected && flipHAt && flipVAt && (
         <>
           {([
-            { axis: "h", at: flipHAt, label: "Flip horizontally", title: "Flip horizontally (mirror left and right)", on: Boolean(selected.transform.flipH), Icon: FlipHorizontal2 },
-            { axis: "v", at: flipVAt, label: "Flip vertically", title: "Flip vertically (mirror top and bottom)", on: Boolean(selected.transform.flipV), Icon: FlipVertical2 },
+            // The icons and their places stay; what each one does is swapped (the left one mirrors top and bottom, the right one left and right).
+            { axis: "v", at: flipHAt, label: "Flip vertically", title: "Flip vertically (mirror top and bottom)", on: Boolean(selected.transform.flipV), Icon: FlipHorizontal2 },
+            { axis: "h", at: flipVAt, label: "Flip horizontally", title: "Flip horizontally (mirror left and right)", on: Boolean(selected.transform.flipH), Icon: FlipVertical2 },
           ] as const).map((f) => (
             <button
               key={f.axis}
