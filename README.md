@@ -226,17 +226,24 @@ Not while the project is exporting, or while that file is being imported.
 - **Free placement.** On every track, the base (layer 1) included, clips stay where
   you put them and gaps are fine: removing, trimming or moving a clip leaves
   the rest where they are. A gap shows black and is silent, in the preview
-  and the export. Dragging a clip sideways moves it freely; it snaps to the
-  playhead, the start and other clips' edges. Clips on one track never
+  and the export. Dragging a clip sideways moves it freely. Clips on one track never
   overlap: a clip dropped on another slides to the free space after it.
   Trimming a clip's left edge keeps the picture where it was.
+- **Snapping on the timeline.** A clip you drag, the edge you trim and the
+  ghost of a file you drop snap to the playhead, the start and the edges of
+  the clips on every layer, within 8 px. A thin pink line shows the point it
+  snapped to. While you drag, a hint at the top of the timeline says to hold
+  **Alt** to stop snapping, and changes to "Snapping off" while you do.
 - **Snap (layer 1).** The magnet box beside layer 1's number, off by
   default, snaps the base layer's clips together: ticking it closes every gap
   on layer 1 (one undo step), and while it's on layer 1 stays end to end. A
   clip dropped or dragged onto layer 1 goes in between two clips (a line shows
-  where), trimming ripples the clips after it, and deleting or moving a clip
-  away closes its gap. Unticking it frees layer 1 again; clips stay where they
-  are. Layers above it are always free.
+  where; no snapping or Alt hint there), trimming ripples the clips after it, and deleting or moving a clip
+  away closes its gap. Dragging a clip's left edge shows the plain trim while
+  you drag (the edge follows the pointer and nothing else moves, even over the
+  clip before it); when you let go the layer closes up again. The right edge
+  ripples the clips after it as you drag. Unticking it frees layer 1 again;
+  clips stay where they are. Layers above it are always free.
 - **Move, resize and crop on screen.** Click a clip in the preview to select
   it (the topmost one under the pointer; empty canvas deselects). The
   timeline highlights the same clip. Drag it to move it. Drag a corner to
@@ -253,8 +260,17 @@ Not while the project is exporting, or while that file is being imported.
   and black where nothing covers (the base layer too). With a clip selected
   in the preview, the arrow keys nudge it by 1% (**Shift**: 5%); a focused
   handle takes the arrow keys to resize or crop. **Reset** in the toolbar
-  puts the selected clip back to fill the frame. Images and videos work the
-  same, and the export matches the preview.
+  puts the selected clip back to fill the frame, unturned and unflipped.
+  Images and videos work the same, and the export matches the preview.
+- **Rotate and flip.** A selected clip's frame has a white round button at
+  its top right: drag it round to turn the clip about its centre (it snaps to
+  every 15 degrees unless you hold **Alt**, and shows the angle while you
+  drag). Double-click it to straighten the clip; focused, the left and right
+  arrows turn it by 1 degree (**Shift**: 15). The two buttons at the top left
+  flip the picture left to right or top to bottom, where it is. The frame and
+  its handles turn with the clip, and moving, resizing and cropping work along
+  the clip's own sides. A turned clip's move snaps its outline's box; its
+  resize and crop don't snap. Each turn or flip is one undo step.
 - **Mute a clip.** A video clip with sound has a small speaker button at its
   top right (it shows on hover and on the selected clip, and stays while the
   clip is muted). It mutes that clip alone in the preview and the export; a
@@ -268,9 +284,11 @@ Not while the project is exporting, or while that file is being imported.
   first request, and keeps the result next to it in `assets/` as
   `.<file>.peaks`; deleting the media item deletes it too.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut), the waveform button,
-  Reset when the selected clip is moved, scaled or cropped, and the zoom
-  slider at the right.
+  Delete (each button's tooltip names its shortcut) and Reset when the
+  selected clip is moved, scaled, cropped, turned or flipped; Play/Pause in
+  the middle; the waveform button and the zoom slider at the right.
+- In the dark theme the editor's accent (playhead, selection, trim handles,
+  the Snap box, drop markers) is a light sky blue so it stands out.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
   there), **Delete** removes the selected clip, **M** mutes or unmutes it,
   **Esc** deselects, **Space** plays.
