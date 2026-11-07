@@ -1,8 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, clipLength, clipsAt, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
+import { transitionLook, type LayerStyle } from "@/lib/video/transition-preview"
+import { laneClipAt, transitionAt } from "@/lib/video/transitions"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
@@ -91,6 +93,13 @@ function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
 }
 
 const pct = (n: number) => `${n * 100}%`
+
+/** A transition's look for one picture (lib/video/transition-preview) as the style of its canvas-sized layer. */
+const fxStyle = (s: LayerStyle | undefined): CSSProperties =>
+  s ? { opacity: s.opacity, transform: s.transform, clipPath: s.clipPath, maskImage: s.maskImage, WebkitMaskImage: s.maskImage, filter: s.filter } : {}
+
+/** z-index of a lane's picture: the clip on show, and under it a transition's outgoing clip. */
+const laneZ = (lane: number, outgoing = false) => 2 * lane + (outgoing ? 1 : 2)
 
 /**
  * A sweep's or a typewriter's cut as a clip-path in the text box's own,
@@ -228,7 +237,13 @@ export function Preview({
   const hasClips = total > 0
   // At the end the last frame stays up.
   const look = player.time >= total ? Math.max(0, total - 0.001) : player.time
-  const { tracks: hits, top } = clipsAt(project, look)
+  // The clip each track shows (through a transition, the incoming one), the topmost of them, and each track's running transition.
+  const hits: (ActiveClip | null)[] = project.tracks.map((t, track) => {
+    const at = laneClipAt(t, look)
+    return at && { track, ...at, clip: t.clips[at.index] }
+  })
+  const top = hits.reduce<ActiveClip | null>((above, h) => h ?? above, null)
+  const windows = project.tracks.map((t) => transitionAt(t, look))
   const currentAsset = top?.clip.asset
   const cantPlay = currentAsset !== undefined && player.failed.has(currentAsset)
   const missing = currentAsset !== undefined && player.missing.has(currentAsset)
@@ -245,6 +260,48 @@ export function Preview({
     if (!assetId || !(w > 0 && h > 0)) return
     const ratio = w / h
     setAspects((a) => (a[assetId] === ratio ? a : { ...a, [assetId]: ratio }))
+  }
+  /** A still (an image's picture or a text) in a canvas-sized layer at `zIndex`, styled by a transition's look; null for a video. */
+  const stillLayer = (clip: Clip, zIndex: number, fx: LayerStyle | undefined) => {
+    let inner: ReactNode
+    if (isTextClip(clip)) {
+      const ready = loadedFonts.has(fontFamily(fontById(clip.text.font)))
+      inner = isAnimated(clip.text) ? (
+        <AnimatedText player={player} clip={clip} transform={transformOf(clip)} W={W} H={H} total={total} zIndex={0}>
+          {(clipPath) => (
+            <div className="absolute" style={placement(contentOf(clip), W, H, transformOf(clip))}>
+              <div className="absolute inset-0" style={{ clipPath }}>
+                <TextPicture text={clip.text} ready={ready} />
+              </div>
+            </div>
+          )}
+        </AnimatedText>
+      ) : (
+        <div className="absolute" style={placement(contentOf(clip), W, H, transformOf(clip))}>
+          <TextPicture text={clip.text} ready={ready} />
+        </div>
+      )
+    } else {
+      const still = isImage(clip) ? imageUrl(clip.asset) : ""
+      if (!still) return null
+      inner = (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={still}
+          alt=""
+          draggable={false}
+          className="absolute object-contain"
+          style={placement(aspectOf(clip.asset), W, H, transformOf(clip))}
+          onLoad={(e) => learnAspect(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
+          onError={() => setBrokenImage(still)}
+        />
+      )
+    }
+    return (
+      <div key={clip.id} className="absolute inset-0" style={{ zIndex, ...fxStyle(fx) }}>
+        {inner}
+      </div>
+    )
   }
   const lanes = project.tracks.slice(0, MAX_TRACKS)
   // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
@@ -349,65 +406,47 @@ export function Preview({
         >
           {/* isolate: the layers' z-index stays inside the canvas, under the overlay. */}
           <div className="absolute inset-0 isolate overflow-hidden rounded-md bg-black">
-            {lanes.map((track, lane) =>
-              [0, 1].map((slot) => {
-                const clip = hits[lane]?.clip
-                const shown = clip !== undefined && !isStill(project, clip) && player.active[lane] === slot
+            {/* Each video sits in a canvas-sized layer that a transition styles (lib/video/transition-preview). */}
+            {lanes.map((track, lane) => {
+              const clip = hits[lane]?.clip
+              const w = windows[lane]
+              const from = w ? track.clips[w.from] : undefined
+              const fx = w ? transitionLook(w.type, w.progress) : null
+              // Where the player plays a transition's outgoing video: the other slot, or the active one under a still.
+              const tailSlot = from && !isStill(project, from) ? (clip && !isStill(project, clip) ? 1 - player.active[lane] : player.active[lane]) : -1
+              return [0, 1].map((slot) => {
+                const incoming = clip !== undefined && !isStill(project, clip) && player.active[lane] === slot
+                const outgoing = !incoming && slot === tailSlot
+                const shown = incoming ? clip : outgoing ? from : undefined
                 return (
-                  <video
-                    key={`${lane}-${slot}`}
-                    ref={(v) => player.attach(lane, slot, v)}
-                    playsInline
-                    preload="auto"
-                    aria-hidden={!shown}
-                    onError={() => player.onVideoError(lane, slot)}
-                    onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                    onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                    className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
-                    style={shown ? { ...placement(aspectOf(clip.asset), W, H, transformOf(clip)), zIndex: lane + 1 } : { zIndex: 0 }}
-                  />
+                  <div key={`${lane}-${slot}`} className="absolute inset-0" style={shown ? { zIndex: laneZ(lane, outgoing), ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
+                    <video
+                      ref={(v) => player.attach(lane, slot, v)}
+                      playsInline
+                      preload="auto"
+                      aria-hidden={!shown}
+                      onError={() => player.onVideoError(lane, slot)}
+                      onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+                      onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+                      className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
+                      style={shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined}
+                    />
+                  </div>
                 )
               })
-            )}
+            })}
             {/* Stills after the videos in the DOM, so a still coming and going never moves (and so pauses) a video. */}
             {lanes.map((track, lane) => {
               const clip = hits[lane]?.clip
-              if (clip && isTextClip(clip)) {
-                const ready = loadedFonts.has(fontFamily(fontById(clip.text.font)))
-                if (isAnimated(clip.text)) {
-                  return (
-                    <AnimatedText key={`text-${lane}`} player={player} clip={clip} transform={transformOf(clip)} W={W} H={H} total={total} zIndex={lane + 1}>
-                      {(clipPath) => (
-                        <div className="absolute" style={placement(contentOf(clip), W, H, transformOf(clip))}>
-                          <div className="absolute inset-0" style={{ clipPath }}>
-                            <TextPicture text={clip.text} ready={ready} />
-                          </div>
-                        </div>
-                      )}
-                    </AnimatedText>
-                  )
-                }
-                return (
-                  <div key={`text-${lane}`} className="absolute" style={{ ...placement(contentOf(clip), W, H, transformOf(clip)), zIndex: lane + 1 }}>
-                    <TextPicture text={clip.text} ready={ready} />
-                  </div>
-                )
-              }
-              if (!clip || !isImage(clip)) return null
-              const still = imageUrl(clip.asset)
-              if (!still) return null
+              const w = windows[lane]
+              const from = w ? track.clips[w.from] : undefined
+              const fx = w ? transitionLook(w.type, w.progress) : null
               return (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={`still-${lane}`}
-                  src={still}
-                  alt=""
-                  draggable={false}
-                  className="absolute object-contain"
-                  style={{ ...placement(aspectOf(clip.asset), W, H, transformOf(clip)), zIndex: lane + 1 }}
-                  onLoad={(e) => learnAspect(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
-                  onError={() => setBrokenImage(still)}
-                />
+                <Fragment key={`stills-${lane}`}>
+                  {from && stillLayer(from, laneZ(lane, true), fx?.from)}
+                  {clip && stillLayer(clip, laneZ(lane), fx?.to)}
+                  {fx?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: laneZ(lane), background: fx.tint.color, opacity: fx.tint.opacity }} />}
+                </Fragment>
               )
             })}
             {topImage && brokenImage === topImage && (

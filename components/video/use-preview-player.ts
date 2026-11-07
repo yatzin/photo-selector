@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
-import { clipLength, isStill, MAX_TRACKS, totalLength, trackClipAt, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { entrySourceTime, laneClipAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
 // has a lane of two <video> elements that take turns: one shows the track's
@@ -14,17 +15,29 @@ import { clipLength, isStill, MAX_TRACKS, totalLength, trackClipAt, trackStarts,
 // its time on the timeline, and so does an image clip: the preview shows it
 // as an <img>, no video element loads it, and the waiting slot holds the next
 // video.
+//
+// A transition (lib/video/transitions) is centred on its cut: from the
+// window's start the incoming clip is the lane's clip (laneClipAt, playing
+// from before its in point), and the outgoing one, a video, plays on as the
+// lane's tail in the other slot (in the active one when the incoming clip is
+// a still) until the window ends; the preview draws the two blended. Their
+// sound crossfades with equal-power gains.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
 
-/** One track's playback state: the asset loaded in each slot, the slot on show and the clip playing (-1: none). */
-type Lane = { loaded: (string | null)[]; active: number; index: number; primed: boolean[] }
+/**
+ * One track's playback state: the asset loaded in each slot, the slot on show, the clip playing (-1: none)
+ * and the slot playing a transition's outgoing video (-1: none).
+ */
+type Lane = { loaded: (string | null)[]; active: number; index: number; primed: boolean[]; tail: number }
 
-const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false] })
+const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false], tail: -1 })
 
 /** The same clip for playback: what plays and when (a transform only changes where it shows, a mute only what's heard). */
-const samePlayback = (a: Clip, b: Clip) => a === b || (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start)
+const samePlayback = (a: Clip, b: Clip) =>
+  a === b ||
+  (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start && a.transition?.type === b.transition?.type && a.transition?.duration === b.transition?.duration)
 
 /** Whether two lists of track clips play the same lane by lane (an empty lane matches a missing one). */
 function sameClips(a: Clip[][], b: Clip[][]): boolean {
@@ -116,6 +129,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     const v = el(lane, slot)
     if (!v) return
     v.muted = Boolean(clip.muted)
+    v.volume = 1
     if (lanes.current[lane].loaded[slot] !== clip.asset) {
       lanes.current[lane].loaded[slot] = clip.asset
       v.src = urlRef.current(clip.asset)
@@ -136,17 +150,38 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     (lane: number, t: number) => {
       const L = lanes.current[lane]
       const track = projectRef.current.tracks[lane]
-      const at = track ? trackClipAt(track, t) : null
+      const at = track ? laneClipAt(track, t) : null
       L.index = at ? at.index : -1
       const clip = at && track ? track.clips[at.index] : undefined
-      if (clip && at && !isImage(clip)) load(lane, L.active, clip, at.sourceTime)
-      else el(lane, L.active)?.pause()
+      // Inside a transition the outgoing video plays on as the tail: in the other slot, or in this one under a still.
+      const w = track ? transitionAt(track, t) : null
+      const from = w && track ? track.clips[w.from] : undefined
+      const incomingVideo = clip !== undefined && at !== null && !isImage(clip)
+      L.tail = from && !isImage(from) ? (incomingVideo ? 1 - L.active : L.active) : -1
+      if (incomingVideo && clip && at) load(lane, L.active, clip, at.sourceTime)
+      else if (L.tail !== L.active) el(lane, L.active)?.pause()
+      if (L.tail >= 0 && from && w && track) load(lane, L.tail, from, tailSourceTime(track, w, t))
+      if (L.tail === 1 - L.active) return
       const next = nextVideo(lane, upcoming(lane, L.index, t))
-      if (next) load(lane, 1 - L.active, next, next.in)
+      if (next && track) load(lane, 1 - L.active, next, entrySourceTime(track, next))
       else el(lane, 1 - L.active)?.pause()
     },
     [load, isImage, nextVideo, upcoming]
   )
+
+  /** Through a transition, the outgoing video's sound fades out as the incoming one's fades in (equal power); else full volume. */
+  const mixVolumes = useCallback((lane: number, t: number) => {
+    const L = lanes.current[lane]
+    const track = projectRef.current.tracks[lane]
+    const w = track ? transitionAt(track, t) : null
+    const g = w ? (w.progress * Math.PI) / 2 : 0
+    const active = el(lane, L.active)
+    if (L.tail >= 0) {
+      const tail = el(lane, L.tail)
+      if (tail) tail.volume = Math.cos(g)
+    }
+    if (active && L.tail !== L.active) active.volume = w ? Math.sin(g) : 1
+  }, [])
 
   /** Moves the frame-rate playhead and tells its followers. */
   const setFrame = useCallback((t: number) => {
@@ -239,11 +274,20 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       // Every lane is seeked (and played) afresh: none is held for a stall now.
       heldRef.current = false
       stallRef.current = { v: null, time: 0, at: 0 }
-      for (let lane = 0; lane < MAX_TRACKS; lane++) showLane(lane, look)
+      for (let lane = 0; lane < MAX_TRACKS; lane++) {
+        showLane(lane, look)
+        mixVolumes(lane, look)
+      }
       setTimeline(clamped)
-      if (playingRef.current) for (let lane = 0; lane < p.tracks.length; lane++) if (playableClip(lane)) playSlot(lane, lanes.current[lane].active)
+      if (playingRef.current) {
+        for (let lane = 0; lane < p.tracks.length; lane++) {
+          const L = lanes.current[lane]
+          if (playableClip(lane)) playSlot(lane, L.active)
+          if (L.tail >= 0) playSlot(lane, L.tail)
+        }
+      }
     },
-    [setTimeline, showLane, playSlot, playableClip]
+    [setTimeline, showLane, mixVolumes, playSlot, playableClip]
   )
 
   const tick = useCallback(
@@ -309,10 +353,18 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         const L = lanes.current[lane]
         const starts = trackStarts(track)
         const current = track.clips[L.index]
+        // A transition's window is over: its outgoing video stops, and its slot waits on the next video.
+        if (L.tail >= 0 && transitionAt(track, t)?.to !== L.index) {
+          const slot = L.tail
+          L.tail = -1
+          el(lane, slot)?.pause()
+          const after = slot === L.active ? undefined : nextVideo(lane, upcoming(lane, L.index, t))
+          if (after) load(lane, slot, after, entrySourceTime(track, after))
+        }
         // Move on just before the current clip's out point, as if at its end.
         const end = current ? starts[L.index] + clipLength(current) : Infinity
         const look = t >= end - END_MARGIN ? Math.max(t, end) : t
-        const at = trackClipAt(track, look)
+        const at = laneClipAt(track, look)
         const index = at ? at.index : -1
         if (index === L.index) {
           // Keep a following lane's video with the clock (not while it's held for a stall).
@@ -336,14 +388,18 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         cut = true
         const old = L.active
         const v = el(lane, old)
+        // A transition from the video on show starts: that video plays on as the tail.
+        const w = transitionAt(track, look)
+        const entering = w !== null && w.to === index && w.from === L.index && current !== undefined && !isImage(current)
         L.index = index
         const next = at ? track.clips[index] : undefined
         if (!next || !at || isImage(next)) {
-          // An image, a gap or the track's end: no slot to swap to. The video stops,
-          // and the waiting slot keeps (or gets) the track's next video clip.
-          v?.pause()
+          // An image, a gap or the track's end: no slot to swap to. The video stops (or plays on as the tail
+          // under a still), and the waiting slot keeps (or gets) the track's next video clip.
+          if (entering) L.tail = old
+          else v?.pause()
           const after = nextVideo(lane, upcoming(lane, index, look))
-          if (after) load(lane, 1 - old, after, after.in)
+          if (after) load(lane, 1 - old, after, entrySourceTime(track, after))
         } else {
           // Swap to the waiting slot.
           L.active = 1 - old
@@ -351,17 +407,23 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           load(lane, L.active, next, at.sourceTime)
           // A lane held for a stalled clock starts when the hold ends.
           if (!failedRef.current.has(next.asset) && !(heldRef.current && lane !== master)) playSlot(lane, L.active)
-          v?.pause()
-          const after = nextVideo(lane, index + 1)
-          if (after) load(lane, old, after, after.in)
+          if (entering) {
+            // The old slot gets the next video once the transition is over.
+            L.tail = old
+          } else {
+            v?.pause()
+            const after = nextVideo(lane, index + 1)
+            if (after) load(lane, old, after, entrySourceTime(track, after))
+          }
         }
       }
+      for (let lane = 0; lane < p.tracks.length; lane++) mixVolumes(lane, t)
       if (swapped) setActive(lanes.current.map((l) => l.active))
       if (cut || Math.abs(t - timeRef.current) >= TIME_STEP) setTimeline(t)
       else setFrame(t)
       raf.current = requestAnimationFrame((n) => tickRef.current(n))
     },
-    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip]
+    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip, mixVolumes]
   )
 
   const play = useCallback(() => {
@@ -380,6 +442,11 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       if (showingVideo) {
         playSlot(lane, L.active)
         L.primed[L.active] = true
+      }
+      // A transition's outgoing video plays too (seek above already loaded it).
+      if (L.tail >= 0) {
+        playSlot(lane, L.tail)
+        L.primed[L.tail] = true
       }
       // Safari lets a later play() from the frame loop (at a cut) through only on an
       // element that was played inside a user gesture, so prime the waiting one now
@@ -422,10 +489,14 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       const L = lanes.current[lane]
       const playingClip = t.clips[L.index]
       const waiting = nextVideo(lane, upcoming(lane, L.index, timeRef.current))
+      // A transition's outgoing clip (the one before the clip playing) sits in the tail slot.
+      const tailClip = L.tail >= 0 ? t.clips[L.index - 1] : undefined
       const a = el(lane, L.active)
       const b = el(lane, 1 - L.active)
-      if (a && playingClip) a.muted = Boolean(playingClip.muted)
-      if (b && waiting) b.muted = Boolean(waiting.muted)
+      const inA = L.tail === L.active ? tailClip : playingClip
+      const inB = L.tail === 1 - L.active ? tailClip : waiting
+      if (a && inA) a.muted = Boolean(inA.muted)
+      if (b && inB) b.muted = Boolean(inB.muted)
     })
   }, [project.tracks, nextVideo, upcoming])
 
