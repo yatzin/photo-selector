@@ -82,6 +82,8 @@ export function Timeline({
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
   // A clip being dragged: how far it has moved (content px, scrolling included), where it would land and where its end is.
   const [drag, setDrag] = useState<{ id: string; length: number; dx: number; dy: number; target: DropTarget | null; end: number } | null>(null)
+  // The clip last dropped by a drag: it lands where its ghost was, without sliding there from where it started (until the next press).
+  const [landed, setLanded] = useState<string | null>(null)
   // A file from the left panel being dragged (anywhere): its clip length, when known, for the ghost.
   const [outside, setOutside] = useState<{ length: number } | null>(null)
   const [drop, setDrop] = useState<DropTarget | null>(null)
@@ -331,6 +333,7 @@ export function Timeline({
     const length = clipLength(clip)
     let moved = false
     let to: DropTarget | null = null
+    setLanded(null)
     follow(
       (ev) => {
         const cdx = ev.clientX - startX
@@ -348,6 +351,7 @@ export function Timeline({
       () => {
         setDrag(null)
         if (!moved) return onSelect(clip.id)
+        setLanded(clip.id)
         const t = to
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
@@ -582,7 +586,7 @@ export function Timeline({
                           "group absolute touch-none select-none overflow-hidden rounded-lg border outline-none",
                           inset,
                           isBase ? "bg-muted" : "bg-sky-500/15",
-                          !moving && !trim && "transition-[left] duration-150 motion-reduce:transition-none",
+                          !moving && !trim && landed !== clip.id && "transition-[left] duration-150 motion-reduce:transition-none",
                           selectedId === clip.id
                             ? "z-10 border-primary ring-2 ring-primary"
                             : isBase
