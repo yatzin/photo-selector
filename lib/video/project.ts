@@ -1,4 +1,4 @@
-import { normalizeText, sameText, type ClipText } from "./text"
+import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 
 /**
@@ -62,6 +62,13 @@ export function assetKind(a: Asset): "image" | "video" {
 
 /** True for a text clip (no media). */
 export const isTextClip = (c: Clip): c is Clip & { text: ClipText } => c.text !== undefined
+
+/** A text clip with its animations fitted to its length (lib/video/text fitAnims); the same clip when they fit, or it has no text. */
+function fitted(c: Clip): Clip {
+  if (!c.text) return c
+  const text = fitAnims(c.text, clipLength(c))
+  return text === c.text ? c : { ...c, text }
+}
 
 /** True for a clip that shows one still picture for its length: a text clip, or an image's (its in is 0 and it stretches freely). */
 export function isStill(p: Project, c: Clip): boolean {
@@ -318,15 +325,20 @@ export function addClip(p: Project, assetId: string, trackIndex: number, at: { s
 export function addTextClip(p: Project, text: ClipText, trackIndex: number, at: { start?: number }, id: string): Project {
   const t = normalizeText(text)
   if (!t || hasClip(p, id)) return p
-  const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: t }
+  const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: fitAnims(t, DEFAULT_IMAGE) }
   if (trackIndex === 0 && isMagnetic(p)) return insertBase(p, clip, at.start ?? 0)
   return place(p, clip, trackIndex, at.start ?? 0)
 }
 
-/** Sets a text clip's text (content, colour, orientation); the same project when it isn't a text clip, the text isn't valid or nothing changes. */
+/**
+ * Sets a text clip's text (content, colour, orientation, font, animations,
+ * the animations fitted to the clip's length); the same project when it isn't
+ * a text clip, the text isn't valid or nothing changes.
+ */
 export function setClipText(p: Project, clipId: string, text: ClipText): Project {
   const at = find(p, clipId)
-  const t = normalizeText(text)
+  const n = normalizeText(text)
+  const t = n && at && fitAnims(n, clipLength(at.clip))
   if (!at || !t || !isTextClip(at.clip) || sameText(at.clip.text, t)) return p
   return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? { ...c, text: t } : c)))
 }
@@ -366,7 +378,8 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   if (!at || (!asset && !isTextClip(at.clip)) || Number.isNaN(seconds)) return p
   const { clip, track, index } = at
   const clips = p.tracks[track].clips
-  const replace = (next: Clip) => settle(p, withTrack(p, track, clips.map((c) => (c.id === id ? next : c))))
+  // A text's animations shrink with it (fitAnims).
+  const replace = (next: Clip) => settle(p, withTrack(p, track, clips.map((c) => (c.id === id ? fitted(next) : c))))
   // A text clip trims like an image.
   const image = !asset || assetKind(asset) === "image"
   const start = clip.start
@@ -421,7 +434,7 @@ export function leftTrimDraft(p: Project, id: string, seconds: number): { draft:
   if (hi < -1e-9) return { draft: p, seconds: clip.in }
   const delta = Math.max(lo, Math.min(seconds - clip.in, hi))
   const next: Clip = still ? { ...clip, out: length - delta, start: clip.start + delta } : { ...clip, in: clip.in + delta, start: clip.start + delta }
-  return { draft: withTrack(p, 0, p.tracks[0].clips.map((c) => (c.id === id ? next : c))), seconds: clip.in + delta }
+  return { draft: withTrack(p, 0, p.tracks[0].clips.map((c) => (c.id === id ? fitted(next) : c))), seconds: clip.in + delta }
 }
 
 /** Cuts a clip in two at `timelineTime`; the second part gets `newId` and starts there. */
@@ -433,12 +446,13 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   const local = timelineTime - clip.start
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
-  // Both halves keep the picture where it was, the mute and the text.
+  // Both halves keep the picture where it was, the mute and the text; the first half keeps a text's in animation, the second its out one.
+  const texts = clip.text ? splitAnims(clip.text, local, clipLength(clip) - local) : null
   const second = {
-    start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}), ...(clip.text ? { text: clip.text } : {}),
+    start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}), ...(texts ? { text: texts[1] } : {}),
   }
   if (isStill(p, clip)) {
-    next.splice(index, 1, { ...clip, in: 0, out: local }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
+    next.splice(index, 1, { ...clip, in: 0, out: local, ...(texts ? { text: texts[0] } : {}) }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
   } else {
     const cut = clip.in + local
     next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
@@ -592,7 +606,8 @@ export function parseProject(json: unknown): Project | null {
           }
         }
       }
-      if (text) clip.text = text
+      // Animations longer than the clip are fitted to it.
+      if (text) clip.text = fitAnims(text, clip.out - clip.in)
       // A text clip has no sound to mute.
       else if (c.muted === true || raw.muted === true) clip.muted = true
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).

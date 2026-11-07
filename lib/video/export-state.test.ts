@@ -110,5 +110,16 @@ describe("exportFingerprint", () => {
     expect(anton).not.toBe(base)
     expect(exportFingerprint(withText({ ...text, font: "pacifico" }))).not.toBe(anton)
     expect(exportFingerprint(withText({ ...text, font: undefined }))).toBe(base)
+    // Each animation, its type and its length count; a text with none keeps the fingerprint it had before animations.
+    const fadeIn = exportFingerprint(withText({ ...text, animIn: { type: "fade", duration: 1 } }))
+    const prints = [
+      fadeIn,
+      exportFingerprint(withText({ ...text, animIn: { type: "fade", duration: 1.5 } })),
+      exportFingerprint(withText({ ...text, animIn: { type: "pop", duration: 1 } })),
+      exportFingerprint(withText({ ...text, animOut: { type: "fade", duration: 1 } })),
+      exportFingerprint(withText({ ...text, animIn: { type: "fade", duration: 1 }, animOut: { type: "fade", duration: 1 } })),
+    ]
+    expect(new Set([base, ...prints]).size).toBe(6)
+    expect(exportFingerprint(withText({ ...text, animIn: undefined, animOut: undefined }))).toBe(base)
   })
 })

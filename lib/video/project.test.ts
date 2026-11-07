@@ -1530,4 +1530,56 @@ describe("text clips", () => {
     expect(setClipText(p, "x", { ...text, font: "mono" })).toBe(p)
     expect(setClipText(p, "x", { ...text, font: "nope" })).toBe(p)
   })
+
+  describe("animations", () => {
+    const animIn = { type: "sweep-left" as const, duration: 2 }
+    const animOut = { type: "fade" as const, duration: 1 }
+    const animated = { ...text, animIn, animOut }
+
+    it("sets in and out with the rest of the text in one edit, fitted to the clip", () => {
+      const p = withText([textClip()])
+      const next = setClipText(p, "x", animated)
+      expect(next.tracks[0].clips[0].text).toEqual(animated)
+      expect(setClipText(next, "x", animated)).toBe(next)
+      // 4 + 4 on a 5 s clip: both shrink in proportion.
+      const long = setClipText(p, "x", { ...text, animIn: { ...animIn, duration: 4 }, animOut: { ...animOut, duration: 4 } })
+      expect(long.tracks[0].clips[0].text).toEqual({ ...text, animIn: { ...animIn, duration: 2.5 }, animOut: { ...animOut, duration: 2.5 } })
+      expect(setClipText(p, "x", { ...text, animIn: { type: "wobble" as never, duration: 1 } })).toBe(p)
+      // Taking them off.
+      expect(setClipText(next, "x", text).tracks[0].clips[0].text).toEqual(text)
+    })
+
+    it("shrinks them with the clip when it's trimmed shorter", () => {
+      const p = withText([textClip({ text: animated })])
+      expect(trimClip(p, "x", "out", 1.5).tracks[0].clips[0].text).toEqual({ ...text, animIn: { ...animIn, duration: 1 }, animOut: { ...animOut, duration: 0.5 } })
+      expect(trimClip(p, "x", "out", 4).tracks[0].clips[0].text).toEqual(animated)
+      expect(trimClip(p, "x", "in", 4.8).tracks[0].clips[0].text).toEqual({ ...text, animIn: { ...animIn, duration: 0.1 }, animOut: { ...animOut, duration: 0.1 } })
+      const snapped = withText([textClip({ text: animated })], true)
+      expect(leftTrimDraft(snapped, "x", 3).draft.tracks[0].clips[0].text?.animIn?.duration).toBeCloseTo(4 / 3, 2)
+    })
+
+    it("splits the in animation onto the first piece and the out onto the second", () => {
+      const p = withText([textClip({ text: animated })])
+      const [a, b] = splitClip(p, "x", 1.5, "y").tracks[0].clips
+      expect(a.text).toEqual({ ...text, animIn: { ...animIn, duration: 1.5 } })
+      expect(b.text).toEqual({ ...text, animOut })
+    })
+
+    it("parses and merges them, fitting them to the clip and refusing a bad one", () => {
+      const withAnims = (t: Record<string, unknown>, out = 5) => ({ ...withText([]), tracks: [{ id: "t1", clips: [{ ...textClip(), out, text: { ...text, ...t } }] }] })
+      expect(parseProject(withAnims({ animIn, animOut }))?.tracks[0].clips[0].text).toEqual(animated)
+      expect(parseProject(withAnims({ animIn, animOut }, 2))?.tracks[0].clips[0].text).toEqual({ ...text, animIn: { ...animIn, duration: 1.333 }, animOut: { ...animOut, duration: 0.666 } })
+      for (const bad of [{ type: "nope", duration: 1 }, { type: "fade", duration: 0.05 }, { type: "fade", duration: 601 }, { type: "fade" }, { type: "fade", duration: Infinity }, "fade"]) {
+        expect(parseProject(withAnims({ animIn: bad }))).toBeNull()
+        expect(parseProject(withAnims({ animOut: bad }))).toBeNull()
+      }
+      expect(parseProject(withAnims({ animIn: { ...animIn, extra: 1 } }))?.tracks[0].clips[0].text).toEqual({ ...text, animIn })
+      expect(mergeClientProject(withAnims({ animIn, animOut }), withText([]))?.tracks[0].clips[0].text).toEqual(animated)
+    })
+
+    it("adds a text with its animations fitted to DEFAULT_IMAGE", () => {
+      const added = addTextClip(withText([]), { ...text, animIn: { ...animIn, duration: 9 } }, 0, {}, "x")
+      expect(added.tracks[0].clips[0].text?.animIn?.duration).toBe(DEFAULT_IMAGE)
+    })
+  })
 })

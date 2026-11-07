@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { fontById, lineWidth } from "./fonts"
-import { DEFAULT_TEXT, isValidText, MAX_TEXT, normalizeText, sameText, textLayout, textLines, textSize } from "./text"
+import { DEFAULT_TEXT, fitAnims, isValidAnim, isValidText, MAX_TEXT, MIN_ANIM, normalizeText, sameText, splitAnims, textLayout, textLines, textSize } from "./text"
 
 describe("isValidText and normalizeText", () => {
   it("accepts 1 to MAX_TEXT characters, a #rrggbb colour and an orientation", () => {
@@ -134,5 +134,44 @@ describe("textLayout with a proportional font", () => {
     const playfair = fontById("playfair")
     expect(l.w).toBeCloseTo((Math.ceil(lineWidth(playfair, "M") * 20) / 20 + 2 * playfair.pad) * 100, 9)
     expect(l.h).toBeCloseTo((2 * playfair.line + 2 * playfair.pad) * 100, 9)
+  })
+})
+
+describe("text animations", () => {
+  const fade = (duration: number) => ({ type: "fade" as const, duration })
+
+  it("accepts a known type with a duration from MIN_ANIM to 600 s", () => {
+    expect(isValidAnim(fade(MIN_ANIM))).toBe(true)
+    expect(isValidAnim({ type: "typewriter", duration: 600 })).toBe(true)
+    for (const bad of [null, "fade", [], { type: "none", duration: 1 }, fade(0.09), fade(601), fade(NaN), { type: "fade", duration: "1" }]) expect(isValidAnim(bad)).toBe(false)
+    expect(isValidText({ ...DEFAULT_TEXT, animIn: fade(1), animOut: { type: "slide-left", duration: 2 } })).toBe(true)
+    expect(isValidText({ ...DEFAULT_TEXT, animOut: fade(0) })).toBe(false)
+  })
+
+  it("keeps only an animation's own fields and compares them", () => {
+    expect(normalizeText({ ...DEFAULT_TEXT, animIn: { ...fade(1), extra: 2 } })).toEqual({ ...DEFAULT_TEXT, animIn: fade(1) })
+    expect(sameText({ ...DEFAULT_TEXT, animIn: fade(1) }, { ...DEFAULT_TEXT, animIn: fade(1) })).toBe(true)
+    expect(sameText({ ...DEFAULT_TEXT, animIn: fade(1) }, { ...DEFAULT_TEXT, animIn: fade(2) })).toBe(false)
+    expect(sameText({ ...DEFAULT_TEXT, animIn: fade(1) }, { ...DEFAULT_TEXT, animOut: fade(1) })).toBe(false)
+    expect(sameText(DEFAULT_TEXT, { ...DEFAULT_TEXT, animIn: { type: "pop", duration: 1 } })).toBe(false)
+  })
+
+  it("fits in and out into the clip: unchanged when they fit, else both shrink in proportion, never below MIN_ANIM", () => {
+    const t = { ...DEFAULT_TEXT, animIn: fade(2), animOut: fade(1) }
+    expect(fitAnims(t, 3)).toBe(t)
+    expect(fitAnims(t, 1.5)).toEqual({ ...DEFAULT_TEXT, animIn: fade(1), animOut: fade(0.5) })
+    expect(fitAnims({ ...DEFAULT_TEXT, animIn: fade(5), animOut: fade(0.2) }, 0.3)).toEqual({ ...DEFAULT_TEXT, animIn: fade(0.2), animOut: fade(0.1) })
+    expect(fitAnims(t, 0.2)).toEqual({ ...DEFAULT_TEXT, animIn: fade(0.1), animOut: fade(0.1) })
+    expect(fitAnims({ ...DEFAULT_TEXT, animOut: fade(4) }, 2.5)).toEqual({ ...DEFAULT_TEXT, animOut: fade(2.5) })
+    expect(fitAnims(DEFAULT_TEXT, 0.2)).toBe(DEFAULT_TEXT)
+    // Rounded down to milliseconds, so they add up to no more than the clip.
+    const odd = fitAnims(t, 1)
+    expect(odd.animIn!.duration + odd.animOut!.duration).toBeLessThanOrEqual(1)
+    expect(odd.animIn!.duration).toBe(0.666)
+  })
+
+  it("splits: the first piece keeps the in animation, the second the out one", () => {
+    const t = { ...DEFAULT_TEXT, animIn: fade(2), animOut: fade(1) }
+    expect(splitAnims(t, 1, 4)).toEqual([{ ...DEFAULT_TEXT, animIn: fade(1) }, { ...DEFAULT_TEXT, animOut: fade(1) }])
   })
 })

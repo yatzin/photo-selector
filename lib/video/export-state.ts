@@ -24,7 +24,7 @@ function canonical(value: unknown): string {
  * SHA-256 (hex) of everything that changes the exported video: size, frame
  * rate, the tracks in order (clips with ids, assets, trims, starts and
  * transforms, an identity one counting as none and a zero left or right crop
- * as an absent one, as are a zero rotation and a false flip, each clip's mute and a text clip's text) and the file, kind, length and audio of each
+ * as an absent one, as are a zero rotation and a false flip, each clip's mute and a text clip's text, its animations too) and the file, kind, length and audio of each
  * asset a clip uses. The project's name and unused assets don't count, so
  * deleting an asset no clip used keeps the kept export.
  */
