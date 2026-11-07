@@ -200,13 +200,13 @@ export function Preview({
   const hint = hasClips && gesture ? (gesture.snapping ? "Hold Alt to turn snapping off" : "Snapping off") : null
   const hintOutside = box !== null && box.below >= HINT_ROOM
   const hintPill = (className: string) => (
-    <div aria-hidden className={cn("pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow", className)}>
+    <div aria-hidden className={cn("pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow dark:bg-neutral-100/90 dark:text-neutral-900", className)}>
       {hint}
     </div>
   )
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-neutral-200 p-4 dark:bg-neutral-300">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-neutral-200 p-4 dark:bg-neutral-700">
       <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
         <div
           className={cn("relative", !box && "max-h-full max-w-full")}
