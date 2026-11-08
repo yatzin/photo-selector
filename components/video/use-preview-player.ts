@@ -6,7 +6,7 @@ import { audioCutState, audioEdgeState, combineFx, PLAIN, pictureEdgeGain } from
 import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { isAudioTransitionType, isTransitionType } from "@/lib/video/transition-types"
 import { cutGains, edgeAt, entrySourceTime, laneClipAt, laneElementAt, overlapAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
-import { applyFx, offSpeed } from "./audio-graph"
+import { applyFx, offSpeed, setLevels, setVolume } from "./audio-graph"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
 // has a lane of two <video> elements that take turns: one shows the track's
@@ -47,6 +47,12 @@ import { applyFx, offSpeed } from "./audio-graph"
 // own element the same way; a picture clip's edge transition fades its
 // video's sound with the picture (equal power). An element running at a
 // tape's speed is left off the clock until it's back to normal speed.
+//
+// A clip's audio levels (Clip.audio) play through its element's Web Audio
+// chain (components/video/audio-graph setLevels), set when the element takes
+// the clip and again after an edit; the fades and crossfades above multiply
+// with them (setVolume puts those on the chain's gain). A video or audio
+// element that never holds a clip with levels keeps the plain element path.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
@@ -151,6 +157,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     const A = audioLane.current
     a.muted = Boolean(clip.muted)
     a.volume = 1
+    setLevels(a, clip.audio)
     A.clipIds[slot] = clip.id
     if (A.loaded[slot] !== clip.asset) {
       A.loaded[slot] = clip.asset
@@ -246,6 +253,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     if (!v) return
     v.muted = Boolean(clip.muted)
     v.volume = 1
+    setLevels(v, clip.audio)
     if (lanes.current[lane].loaded[slot] !== clip.asset) {
       lanes.current[lane].loaded[slot] = clip.asset
       v.src = urlRef.current(clip.asset)
@@ -301,9 +309,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     const active = el(lane, L.active)
     if (L.tail >= 0) {
       const tail = el(lane, L.tail)
-      if (tail) tail.volume = g.out
+      if (tail) setVolume(tail, g.out)
     }
-    if (active && L.tail !== L.active) active.volume = g.in * edge
+    if (active && L.tail !== L.active) setVolume(active, g.in * edge)
   }, [])
 
   /** Moves the frame-rate playhead and tells its followers. */
@@ -686,7 +694,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   const hasClips = project.tracks.some((t) => t.clips.length > 0) || (project.audioTrack?.clips.length ?? 0) > 0
 
-  // An edit changed the tracks: each slot takes the mute of the clip it holds, the one playing and the
+  // An edit changed the tracks: each slot takes the mute and audio levels of the clip it holds, the one playing and the
   // one waiting (without a re-seek, which would be heard).
   useEffect(() => {
     project.tracks.forEach((t, lane) => {
@@ -699,13 +707,22 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       const b = el(lane, 1 - L.active)
       const inA = L.tail === L.active ? tailClip : playingClip
       const inB = L.tail === 1 - L.active ? tailClip : waiting
-      if (a && inA) a.muted = Boolean(inA.muted)
-      if (b && inB) b.muted = Boolean(inB.muted)
+      if (a && inA) {
+        a.muted = Boolean(inA.muted)
+        setLevels(a, inA.audio)
+      }
+      if (b && inB) {
+        b.muted = Boolean(inB.muted)
+        setLevels(b, inB.audio)
+      }
     })
     // The audio layer's elements take their clips' mute.
     audioEls.current.forEach((a, slot) => {
       const clip = project.audioTrack?.clips.find((c) => c.id === audioLane.current.clipIds[slot])
-      if (a && clip) a.muted = Boolean(clip.muted)
+      if (a && clip) {
+        a.muted = Boolean(clip.muted)
+        setLevels(a, clip.audio)
+      }
     })
   }, [project.tracks, project.audioTrack, nextVideo, upcoming])
 
