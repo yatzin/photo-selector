@@ -565,9 +565,8 @@ Not while the project is exporting, or while that file is being imported.
   stays while you point at it.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute and Edit Audio Levels... (a
-  clip with sound) and, for
-  an image or text, Edit length... (text also has Edit text..., Animation...
-  and Horizontal / Vertical). The arrow keys, Home and End move through it,
+  clip with sound), Edit length... and, for a text, Edit text..., Animation...
+  and Horizontal / Vertical. The arrow keys, Home and End move through it,
   Enter runs an item and Esc closes it. The menu shows each item's shortcut.
 - **Edit length** opens a box with Start, End and Length in seconds.
   Changing Length keeps Start and moves End; changing End changes Length;
@@ -578,6 +577,18 @@ Not while the project is exporting, or while that file is being imported.
   sits inside, removes one it covers whole). Other layers never change. On a
   snapped layer 1 the start is fixed and the clips after it follow the new
   length. Apply is one undo step.
+- For a clip with sound (an audio clip, or a video whose file has sound) the
+  box also has **Source**: the whole file's waveform with the part the clip
+  plays framed and the rest dimmed. Drag the left or right handle to crop the
+  start or end, or drag the framed part to slide it along the file (same
+  length). Edges snap to the tick marks and the file's ends; hold Alt to turn
+  that off. The handles and the frame also take the arrow keys (0.01 s, 0.1 s
+  with Shift), Home and End; double-click the strip for the whole file.
+  Cropping changes Length and End but not Start (the clip stays where it is on
+  the timeline), sliding changes only which part plays, and typing a Length
+  moves the right handle. Apply sets the source and the timing together in one
+  undo step. Without peaks the strip says "Waveform unavailable" and the rest
+  still works; it shows even with the timeline's waveforms off.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
   there), **Delete** removes the selected clip, **M** mutes or unmutes it,
   **Esc** deselects, **Space** plays.
