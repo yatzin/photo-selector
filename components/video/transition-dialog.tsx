@@ -56,7 +56,7 @@ const fmt = (n: number) => String(Math.floor(n * 10 + 1e-9) / 10)
 /** The two columns: the loop and its tips, then the controls. */
 const COLUMNS = "grid gap-x-6 gap-y-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]"
 /** The chooser scrolls inside this height on a wide window. */
-const GRID_HEIGHT = "min(19rem, 42dvh)"
+const GRID_HEIGHT = "min(21rem, 46dvh)"
 
 /** Each type's copies, overlays and order (the same all through its sample). */
 const PARTS = Object.fromEntries(TRANSITION_TYPES.map((t) => [t, lookParts(t)])) as Record<TransitionType, ReturnType<typeof lookParts>>
@@ -293,7 +293,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
                 disabled={noFootage || choice === "none"}
                 disabledReason={noFootage ? "These clips are too short for a transition: each needs half of it, and 0.2 s of its own." : "A hard cut has no duration."}
                 error={choice !== "none" && !noFootage ? durationError : null}
-                hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays on each side of the cut; a clip without that much footage is trimmed to make it.`}
+                hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
               />
               <div className="grid content-start gap-1.5">
                 <span className="field-label flex min-h-5 items-center">Audio overlap</span>
@@ -519,7 +519,7 @@ function AudioCutDialog({ project, clip, audioUrl, onApply, onClose }: {
               disabled={noFootage || choice === "none"}
               disabledReason={noFootage ? "These clips are too short for a transition: each needs half of it, and 0.2 s of its own." : "A hard cut has no duration."}
               error={error}
-              hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays on each side of the cut; a clip without that much sound is trimmed to make it.`}
+              hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
               className="sm:max-w-[calc(50%-0.5rem)]"
             />
           </DialogSection>

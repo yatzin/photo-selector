@@ -134,6 +134,8 @@ export function EditorDialog({ state, icon: Icon, title, subtitle, size = "md", 
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={(e) => {
               e.preventDefault()
+              // A field with an error takes the focus, so its message is read and fixed first.
+              e.currentTarget.querySelector<HTMLElement>("[aria-invalid=true]")?.focus()
               onSubmit?.()
             }}
           >
@@ -164,7 +166,7 @@ export function DialogFooter({ start, summary, children }: { start?: ReactNode; 
 /** The footer's Cancel: closes without changing anything (the first focus of a confirmation, with `initialFocus`). */
 export function CancelButton({ state, label = "Cancel", disabled, initialFocus }: { state: EditorDialogState; label?: string; disabled?: boolean; initialFocus?: boolean }) {
   return (
-    <Button type="button" variant="outline" size="lg" disabled={disabled} className="px-3.5 pointer-coarse:h-11" onClick={() => state.close()} data-initial-focus={initialFocus || undefined}>
+    <Button type="button" variant="outline" size="lg" disabled={disabled} className="bg-card px-3.5 pointer-coarse:h-11" onClick={() => state.close()} data-initial-focus={initialFocus || undefined}>
       {label}
     </Button>
   )

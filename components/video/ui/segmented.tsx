@@ -61,16 +61,16 @@ export function Segmented<T extends string>({ label, options, value, onChange, t
               refs.current[to]?.focus()
             }}
             className={cn(
-              "relative inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap outline-none motion-safe:transition-[background-color,color,box-shadow] motion-safe:duration-150",
+              "relative inline-flex flex-1 basis-auto items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap outline-none motion-safe:transition-[background-color,color,box-shadow] motion-safe:duration-150",
               size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]",
               "focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:h-11",
-              on ? "bg-background text-foreground shadow-sm ring-1 ring-black/5 dark:bg-white/14 dark:ring-white/10" : "text-muted-foreground hover:text-foreground",
+              on ? "bg-card text-foreground shadow-sm ring-1 ring-black/5 dark:bg-white/14 dark:ring-white/10" : "text-muted-foreground hover:text-foreground",
               disabled && "cursor-not-allowed opacity-45 hover:text-muted-foreground",
               "forced-colors:aria-checked:outline-2 forced-colors:aria-selected:outline-2"
             )}
           >
             {o.icon}
-            <span className="truncate">{o.label}</span>
+            <span>{o.label}</span>
             {o.marker && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-editor-accent" />}
           </button>
         )

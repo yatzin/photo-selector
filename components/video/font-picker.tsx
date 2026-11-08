@@ -54,7 +54,15 @@ export function FontPicker({ font, onChange }: { font: string; onChange: (font: 
       observer.current.observe(el)
     }
   })
-  useEffect(() => () => observer.current?.disconnect(), [])
+  useEffect(
+    () => () => {
+      // Gone (or remounted in development): the next mount watches every tile afresh.
+      observer.current?.disconnect()
+      observer.current = null
+      watched.current = new WeakSet()
+    },
+    []
+  )
 
   // The chosen font in view on open (the list scrolled, not the page).
   useEffect(() => {

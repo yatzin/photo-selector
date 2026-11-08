@@ -517,7 +517,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
                   {fx.map((f, i) => {
                     const fi = audioFxInfo(f.type)
                     return (
-                      <li key={f.type} data-fx={f.type} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-xl border border-border bg-background px-2.5 py-1.5 dark:bg-white/[0.03]">
+                      <li key={f.type} data-fx={f.type} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-xl border border-border bg-card px-2.5 py-1.5 dark:bg-white/[0.03]">
                         <span className="text-xs text-muted-foreground tabular-nums">{i + 1}</span>
                         <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium">
                           <span className="truncate">{fi.name}</span>

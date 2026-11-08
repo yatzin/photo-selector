@@ -236,7 +236,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
             </DialogSection>
             <DialogSection title="Colour" id="edit-text-colour">
               <div className="flex flex-wrap items-center gap-3">
-                <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-background pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
+                <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
                   <span aria-hidden className="size-7 rounded-md ring-1 ring-black/15 ring-inset dark:ring-white/20" style={{ backgroundColor: color }} />
                   <span className="text-sm font-medium tabular-nums uppercase">{color}</span>
                   <input id="edit-text-color" type="color" aria-label="Text colour" value={color} onChange={(e) => setColor(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />

@@ -150,7 +150,7 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
       </div>
       <div
         className={cn(
-          "flex h-9 min-w-0 items-stretch overflow-hidden rounded-lg border border-input bg-background transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11",
+          "flex h-9 min-w-0 items-stretch overflow-hidden rounded-lg border border-input bg-card transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11",
           error && !disabled && "border-destructive focus-within:border-destructive focus-within:ring-destructive/25",
           disabled && "opacity-55"
         )}
@@ -161,6 +161,7 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
           <input
             ref={inputRef}
             id={id}
+            name={id}
             type="text"
             inputMode="decimal"
             autoComplete="off"

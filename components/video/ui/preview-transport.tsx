@@ -37,7 +37,7 @@ export function PreviewMonitor({ children, stageClassName, stageStyle, label, fo
   )
 }
 
-const iconButton = "flex size-8 shrink-0 items-center justify-center rounded-lg text-white/75 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-editor-accent aria-pressed:text-editor-accent pointer-coarse:size-11"
+const iconButton = "flex size-8 shrink-0 touch-manipulation items-center justify-center rounded-lg text-white/75 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-editor-accent aria-pressed:text-editor-accent pointer-coarse:size-11"
 
 export function PreviewTransport({ playing, onToggle, progress, bands = [], marks = [], onSeek, seek, time, muted, onMute, loop, onLoop, volume, onVolume, playLabel = "preview", children }: {
   playing: boolean

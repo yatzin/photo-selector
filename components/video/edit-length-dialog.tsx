@@ -93,7 +93,7 @@ function SourceTimeField({ side, value, onTry, onPlayhead }: {
       </div>
       <div
         className={cn(
-          "flex h-9 min-w-0 items-stretch overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11",
+          "flex h-9 min-w-0 items-stretch overflow-hidden rounded-lg border border-input bg-card focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11",
           message && "border-destructive focus-within:border-destructive focus-within:ring-destructive/25"
         )}
       >

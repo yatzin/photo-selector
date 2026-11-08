@@ -137,7 +137,7 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
           <Input
             id="project-name"
             data-initial-focus
-            placeholder="Summer trip"
+            placeholder="Summer trip…"
             value={name}
             maxLength={200}
             onChange={(e) => setName(e.target.value)}

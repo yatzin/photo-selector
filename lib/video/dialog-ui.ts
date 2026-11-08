@@ -96,8 +96,8 @@ export function scrubValue(start: number, dx: number, opts: { step: number; min?
   return Number(kept.toFixed(decimals))
 }
 
-/** Seconds for a summary: "0.4 s", "1.25 s" (at most two decimals, no trailing zeros). */
-export const secondsText = (s: number) => `${Math.round(s * 100) / 100} s`
+/** Seconds for a summary: "0.4 s", "1.25 s" (at most two decimals, no trailing zeros; a no-break space before the unit). */
+export const secondsText = (s: number) => `${Math.round(s * 100) / 100}\u00a0s`
 
 /**
  * What applying a cut will trim: "Trims 0.4 s from the end of Beach.mp4 and
@@ -125,8 +125,8 @@ export function lengthSummary(before: { start: number; length: number }, after: 
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-/** A gain in dB as the dialogs write it: "+3 dB", "−6.5 dB", "0 dB". */
-export const dbText = (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db)} dB`
+/** A gain in dB as the dialogs write it: "+3 dB", "−6.5 dB", "0 dB" (a no-break space before the unit). */
+export const dbText = (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db)}\u00a0dB`
 
 /** What Audio levels' Apply sets: "−3 dB, 2 effects", "As recorded" with nothing changed. */
 export function levelsSummary(gainDb: number, effects: number): string {

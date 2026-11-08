@@ -83,7 +83,8 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
     .filter((g) => g.items.length > 0)
   const withNone = none !== null && query.trim() === ""
   const flat: (T | "none")[] = [...(withNone ? (["none"] as const) : []), ...shown.flatMap((g) => g.items)]
-  const sizes = [...(withNone ? [1] : []), ...shown.map((g) => g.items.length)]
+  // None sits first in the first group's row.
+  const sizes = shown.map((g, i) => g.items.length + (withNone && i === 0 ? 1 : 0))
   const on = (item: T | "none") => (multi ? item !== "none" && props.isOn(item) : props.value === item)
   const tabStop = flat.find((i) => on(i)) ?? flat[0]
 
@@ -147,8 +148,8 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
         onMouseEnter={() => item !== "none" && onFocusItem?.(item)}
         onKeyDown={(e) => onKey(e, index)}
         className={cn(
-          "tile group/tile relative flex min-w-0 flex-col gap-1.5 rounded-xl p-1.5 text-left ring-1 ring-border outline-none",
-          "bg-background hover:bg-muted/60 hover:ring-foreground/25 dark:bg-white/[0.03] dark:hover:bg-white/[0.07]",
+          "tile group/tile relative flex min-w-0 scroll-mt-9 flex-col gap-1.5 rounded-xl p-1.5 text-left ring-1 ring-border outline-none touch-manipulation",
+          "bg-card hover:bg-muted/60 hover:ring-foreground/25 dark:bg-white/[0.03] dark:hover:bg-white/[0.07]",
           "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
           "data-on:bg-editor-accent/10 data-on:ring-2 data-on:ring-editor-accent dark:data-on:bg-editor-accent/12",
           "forced-colors:data-on:outline-3 forced-colors:data-on:outline-[Highlight]",
@@ -164,7 +165,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
                 glyph(item)
               )}
             </span>
-            <span className="truncate px-0.5 text-[12px] leading-4 font-medium">{name}</span>
+            <span className="line-clamp-2 min-h-8 px-0.5 text-[12px] leading-4 font-medium">{name}</span>
           </>
         ) : item === "none" ? (
           <span className="text-sm font-medium">{name}</span>
@@ -199,6 +200,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
               <input
                 type="text"
                 role="searchbox"
+                name="search"
                 aria-label={searchLabel ?? `Search ${label.toLowerCase()}`}
                 aria-controls={`${uid}-grid`}
                 placeholder={searchLabel ? `${searchLabel}…` : "Search…"}
@@ -225,7 +227,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
                     }
                   }
                 }}
-                className="h-9 w-full rounded-lg border border-input bg-background pr-8 pl-8 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11"
+                className="h-9 w-full rounded-lg border border-input bg-card pr-8 pl-8 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11"
               />
               {query && (
                 <button type="button" aria-label="Clear search" onClick={() => setQuery("")} className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
@@ -260,12 +262,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
         style={maxHeight ? { maxHeight } : undefined}
         data-transition-grid
       >
-        {withNone && (
-          <div data-tile-row className="grid gap-2 pt-1.5 pr-1.5" style={gridStyle}>
-            {tile("none", 0)}
-          </div>
-        )}
-        {shown.map((g) => (
+        {shown.map((g, gi) => (
           <div key={g.name} role="group" aria-label={g.name} className="grid gap-1.5">
             {groups.length > 1 && (
               <div data-tile-group={g.name} className="sticky top-0 z-[2] -mx-1 bg-popover/92 px-1 pt-1 pb-1 section-label backdrop-blur-sm">
@@ -273,6 +270,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
               </div>
             )}
             <div data-tile-row className="grid gap-2 pt-1.5 pr-1.5" style={gridStyle}>
+              {withNone && gi === 0 && tile("none", 0)}
               {g.items.map((item) => tile(item, index++))}
             </div>
           </div>

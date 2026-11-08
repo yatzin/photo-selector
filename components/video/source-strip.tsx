@@ -99,7 +99,7 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
       ctx.clearRect(0, 0, c.width, c.height)
       ctx.fillStyle = getComputedStyle(c).color
       // One bar per peak once a peak is wider than two pixels.
-      const step = Math.min(12, Math.max(2, Math.floor(width / (view.span * peaks.rate))))
+      const step = Math.min(12, Math.max(3, Math.floor(width / (view.span * peaks.rate))))
       const bars = waveformBars(peaks.peaks, peaks.rate, view.start, view.start + view.span, width, step)
       const mid = c.height / 2
       const barW = Math.max(1, Math.round(step * dpr) - (step > 3 ? Math.round(dpr) : 1))
@@ -313,7 +313,7 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
           role="group"
           aria-label="Waveform zoom"
           data-zoom-controls
-          className="absolute top-1.5 z-[4] flex items-center gap-0.5 rounded-lg bg-background/85 p-0.5 shadow-sm ring-1 ring-border backdrop-blur-sm"
+          className="absolute top-1.5 z-[4] flex items-center gap-0.5 rounded-lg bg-card/90 p-0.5 shadow-sm ring-1 ring-border backdrop-blur-sm"
           style={{ right: HANDLE + 6 }}
         >
           <button type="button" className={zoomButton} aria-label="Zoom out on waveform" title="Zoom out (−)" disabled={!zoomed} onClick={() => zoomBy(-1)} data-zoom-out>

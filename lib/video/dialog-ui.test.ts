@@ -87,31 +87,31 @@ describe("scrubValue", () => {
 
 describe("summaries", () => {
   it("writes seconds and dB", () => {
-    expect(secondsText(0.4)).toBe("0.4 s")
-    expect(secondsText(1.256)).toBe("1.26 s")
-    expect(dbText(3)).toBe("+3 dB")
-    expect(dbText(-6.5)).toBe("−6.5 dB")
-    expect(dbText(0)).toBe("0 dB")
+    expect(secondsText(0.4)).toBe("0.4\u00a0s")
+    expect(secondsText(1.256)).toBe("1.26\u00a0s")
+    expect(dbText(3)).toBe("+3\u00a0dB")
+    expect(dbText(-6.5)).toBe("−6.5\u00a0dB")
+    expect(dbText(0)).toBe("0\u00a0dB")
   })
 
   it("says what a cut trims and how far later clips move", () => {
     const names = { outgoing: "Beach.mp4", incoming: "Sunset.mp4" }
-    expect(trimSummary({ outgoing: 0.4, incoming: 0, ripple: 0.4 }, names, true)).toBe("Trims 0.4 s from the end of Beach.mp4; later clips move 0.4 s earlier")
-    expect(trimSummary({ outgoing: 0.3, incoming: 0.2, ripple: 0.5 }, names, false)).toBe("Trims 0.3 s from the end of Beach.mp4 and 0.2 s from the start of Sunset.mp4")
+    expect(trimSummary({ outgoing: 0.4, incoming: 0, ripple: 0.4 }, names, true)).toBe("Trims 0.4\u00a0s from the end of Beach.mp4; later clips move 0.4\u00a0s earlier")
+    expect(trimSummary({ outgoing: 0.3, incoming: 0.2, ripple: 0.5 }, names, false)).toBe("Trims 0.3\u00a0s from the end of Beach.mp4 and 0.2\u00a0s from the start of Sunset.mp4")
     expect(trimSummary({ outgoing: 0, incoming: 0, ripple: 0 }, names, true)).toBeNull()
   })
 
   it("says what a new length does", () => {
-    expect(lengthSummary({ start: 1, length: 2.4 }, { start: 1, length: 3.2 })).toBe("3.2 s long (+0.8 s)")
-    expect(lengthSummary({ start: 1, length: 2 }, { start: 1.5, length: 1.5 })).toBe("1.5 s long (−0.5 s), starts at 1.5 s")
-    expect(lengthSummary({ start: 1, length: 2 }, { start: 2, length: 2 })).toBe("Starts at 2 s")
+    expect(lengthSummary({ start: 1, length: 2.4 }, { start: 1, length: 3.2 })).toBe("3.2\u00a0s long (+0.8\u00a0s)")
+    expect(lengthSummary({ start: 1, length: 2 }, { start: 1.5, length: 1.5 })).toBe("1.5\u00a0s long (−0.5\u00a0s), starts at 1.5\u00a0s")
+    expect(lengthSummary({ start: 1, length: 2 }, { start: 2, length: 2 })).toBe("Starts at 2\u00a0s")
     expect(lengthSummary({ start: 1, length: 2 }, { start: 1.001, length: 2.002 })).toBeNull()
   })
 
   it("says what audio levels set", () => {
     expect(levelsSummary(0, 0)).toBe("As recorded")
-    expect(levelsSummary(-3, 2)).toBe("−3 dB, 2 effects")
+    expect(levelsSummary(-3, 2)).toBe("−3\u00a0dB, 2 effects")
     expect(levelsSummary(0, 1)).toBe("1 effect")
-    expect(levelsSummary(4.5, 0)).toBe("+4.5 dB")
+    expect(levelsSummary(4.5, 0)).toBe("+4.5\u00a0dB")
   })
 })
