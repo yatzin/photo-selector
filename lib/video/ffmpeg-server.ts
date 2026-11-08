@@ -5,6 +5,7 @@ import { adjoins, allClips, clipLength, isContiguousFromZero, isStill, isTextCli
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
+import { CUT_AUDIO_FADE } from "./transition-types"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -165,6 +166,46 @@ export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"
 }
 
 /**
+ * A clip's sound in the uniform graph: `pre` seconds of it before its start
+ * and `post` past its end, fading in over `fadeIn` from its first sample and
+ * out over `fadeOut` to its last (0: no fade), on ffmpeg's afade curves.
+ */
+type SoundSpan = { pre: number; post: number; fadeIn: number; fadeOut: number; inCurve: string; outCurve: string }
+
+/**
+ * Where the sound of `clips[k]` (one track's) runs. A transition at a cut
+ * overlaps the two sounds by half its length each way, crossfading them
+ * (equal power, qsin, over the whole transition). An audio overlap at the cut
+ * replaces that: a J-cut starts the incoming sound its length before the cut
+ * and an L-cut runs the outgoing one on that long past it, with a linear fade
+ * (tri) of CUT_AUDIO_FADE (at most the overlap) at the new edge; the other
+ * sound cuts at the cut. Never before the timeline's 0 or the source's start,
+ * nor past the source's end.
+ */
+function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
+  const c = clips[k]
+  const next = clips[k + 1]
+  const span: SoundSpan = { pre: 0, post: 0, fadeIn: 0, fadeOut: 0, inCurve: "qsin", outCurve: "qsin" }
+  if (k > 0 && adjoins(clips[k - 1], c)) {
+    const a = c.cutAudio
+    if (a?.mode === "j") Object.assign(span, { pre: a.duration, fadeIn: Math.min(CUT_AUDIO_FADE, a.duration), inCurve: "tri" })
+    else if (!a && c.transition) Object.assign(span, { pre: c.transition.duration / 2, fadeIn: c.transition.duration })
+  }
+  if (adjoins(c, next)) {
+    const a = next!.cutAudio
+    if (a?.mode === "l") Object.assign(span, { post: a.duration, fadeOut: Math.min(CUT_AUDIO_FADE, a.duration), outCurve: "tri" })
+    else if (!a && next!.transition) Object.assign(span, { post: next!.transition.duration / 2, fadeOut: next!.transition.duration })
+  }
+  // A forged or stale project can ask for more than there is: no negative delay, no sound from before the source or past its end.
+  const pre = Math.max(0, Math.min(span.pre, c.in, c.start))
+  if (pre < span.pre) Object.assign(span, { pre, fadeIn: Math.min(span.fadeIn, pre) })
+  const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
+  const post = Math.max(0, Math.min(span.post, asset ? asset.duration - c.out : 0))
+  if (post < span.post) Object.assign(span, { post, fadeOut: Math.min(span.fadeOut, post) })
+  return span
+}
+
+/**
  * The uniform graph, used when any clip is moved, scaled or cropped or the
  * base track has a gap: every clip, base track included, is overlaid on a
  * black canvas the timeline's length, track by track (lowest first) and
@@ -187,6 +228,10 @@ export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"
  * the run is overlaid like one clip. The sounds overlap by the same spans,
  * fading out and in (equal power). A clip in no run is placed as before, so a
  * project without transitions builds the same graph.
+ *
+ * Audio overlaps (J- and L-cuts) move only the sound (soundSpan): the
+ * incoming clip's starts early or the outgoing clip's runs on, mixed with
+ * the other clip's as it is (no ducking); the pictures are unchanged.
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
   const { width: W, height: H, fps } = p
@@ -195,13 +240,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const total = num(totalLength(p))
   parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
   const mix = ["[asil]"]
+  const sounds = new Map<string, SoundSpan>()
+  for (const track of p.tracks) track.clips.forEach((c, k) => sounds.set(c.id, soundSpan(p, track.clips, k)))
   /**
    * A clip's picture as stream [v<i>] on the timeline's time, and its sound
-   * into the mix; the overlay's x, y options for it. `pre` and `post` extend it
-   * (s) before its start and past its end for a transition: a video plays the
-   * footage beyond its in and out points, a still holds its first and last
-   * frame (tpad), and the sound fades in over 2 x pre and out over 2 x post
-   * (equal power, qsin).
+   * into the mix; the overlay's x, y options for it. `pre` and `post` extend the
+   * picture (s) before its start and past its end for a transition: a video
+   * plays the footage beyond its in and out points, a still holds its first
+   * and last frame (tpad). The sound runs as soundSpan says.
    */
   const source = (c: Clip, pre = 0, post = 0) => {
     const i = inputs.length
@@ -233,12 +279,13 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
       if (!c.muted && p.assets[c.asset]?.hasAudio !== false) {
+        const a = sounds.get(c.id)!
         const fades = [
-          ...(pre > 0 ? [`afade=t=in:st=0:d=${num(2 * pre)}:curve=qsin`] : []),
-          ...(post > 0 ? [`afade=t=out:st=${num(clipLength(c) + pre - post)}:d=${num(2 * post)}:curve=qsin`] : []),
+          ...(a.fadeIn > 0 ? [`afade=t=in:st=0:d=${num(a.fadeIn)}:curve=${a.inCurve}`] : []),
+          ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(clipLength(c) + a.pre + a.post - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
         ].map((f) => `${f},`).join("")
         parts.push(
-          `[${i}:a]atrim=${num(c.in - pre)}:${num(c.out + post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - pre) * 48000)}S:all=1[a${i}]`
+          `[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
         )
         mix.push(`[a${i}]`)
       }
@@ -309,7 +356,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
  * the graph is the same as it always was. A text clip (its PNG in `files`
- * under textFileKey) or a transition always takes the uniform graph.
+ * under textFileKey), a transition or an audio overlap always takes the uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -324,7 +371,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   }
   // A still: an image's clip or a text clip's PNG.
   const isImage = (c: Clip) => isStill(p, c)
-  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
+  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or is muted).
   const [baseTrack, ...overlays] = p.tracks

@@ -583,6 +583,76 @@ describe("buildExportArgs with transitions", () => {
   })
 })
 
+describe("buildExportArgs with audio overlaps (J- and L-cuts)", () => {
+  const assets: Project["assets"] = {
+    v: { file: "v.mp4", duration: 10, hasAudio: true },
+    w: { file: "w.mp4", duration: 10, hasAudio: true },
+    n: { file: "n.mp4", duration: 10, hasAudio: false },
+  }
+  const xFiles = { v: "/x/v.mp4", w: "/x/w.mp4", n: "/x/n.mp4" }
+  const project = (clips: Clip[]): Project => ({ ...newProject("X"), assets, tracks: [{ id: "t1", clips }] })
+  const a: Clip = { id: "a", asset: "v", in: 1, out: 4, start: 0 }
+  const b: Clip = { id: "b", asset: "w", in: 2, out: 5, start: 3 }
+  const sound = (i: number, rest: string) => `[${i}:a]${rest}`
+
+  it("J-cut: the incoming sound starts early with a short linear fade; the pictures don't move", () => {
+    const g = graph(buildExportArgs(project([a, { ...b, cutAudio: { mode: "j", duration: 1 } }]), xFiles, "o"))
+    expect(g).toContain(sound(0, "atrim=1:4,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=0S:all=1[a0]"))
+    expect(g).toContain(sound(1, "atrim=1:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=0.15:curve=tri,adelay=delays=96000S:all=1[a1]"))
+    expect(g).toContain("[0:v]trim=1:4,setpts=PTS-STARTPTS,")
+    expect(g).toContain("[1:v]trim=2:5,setpts=PTS-STARTPTS,")
+    expect(g).not.toContain("xfade")
+    expect(g).toContain("[asil][a0][a1]amix=inputs=3")
+  })
+
+  it("L-cut: the outgoing sound runs on past the cut and fades out at its new end", () => {
+    const g = graph(buildExportArgs(project([a, { ...b, cutAudio: { mode: "l", duration: 1 } }]), xFiles, "o"))
+    expect(g).toContain(sound(0, "atrim=1:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=out:st=3.85:d=0.15:curve=tri,adelay=delays=0S:all=1[a0]"))
+    expect(g).toContain(sound(1, "atrim=2:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=144000S:all=1[a1]"))
+    expect(g).toContain("[0:v]trim=1:4,setpts=PTS-STARTPTS,")
+  })
+
+  it("J with a transition: the pictures blend, the sound follows the J instead of the crossfade", () => {
+    const g = graph(buildExportArgs(project([a, { ...b, transition: { type: "fade", duration: 2 }, cutAudio: { mode: "j", duration: 0.5 } }]), xFiles, "o"))
+    expect(g).toContain("[0:v]trim=1:5,")
+    expect(g).toContain("[1:v]trim=1:5,")
+    expect(g).toContain("[ts0][ts1]xfade=transition=fade:duration=2:offset=2[tx1]")
+    expect(g).toContain(sound(0, "atrim=1:4,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=0S:all=1[a0]"))
+    expect(g).toContain(sound(1, "atrim=1.5:5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=0.15:curve=tri,adelay=delays=120000S:all=1[a1]"))
+    expect(g).not.toContain("qsin")
+  })
+
+  it("chains a J and an L on one clip's two cuts", () => {
+    const c: Clip = { id: "c", asset: "v", in: 6, out: 8, start: 6, cutAudio: { mode: "l", duration: 0.5 } }
+    const g = graph(buildExportArgs(project([a, { ...b, cutAudio: { mode: "j", duration: 1 } }, c]), xFiles, "o"))
+    expect(g).toContain(
+      sound(1, "atrim=1:5.5,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=0.15:curve=tri,afade=t=out:st=4.35:d=0.15:curve=tri,adelay=delays=96000S:all=1[a1]")
+    )
+    expect(g).toContain(sound(2, "atrim=6:8,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=288000S:all=1[a2]"))
+    expect(g).toContain("amix=inputs=4")
+  })
+
+  it("a muted clip or one with no sound stays silent; its neighbour's overlap still plays", () => {
+    const muted = graph(buildExportArgs(project([a, { ...b, muted: true, cutAudio: { mode: "j", duration: 1 } }]), xFiles, "o"))
+    expect(muted).not.toContain("[1:a]")
+    expect(muted).toContain(sound(0, "atrim=1:4,"))
+    const silent = graph(buildExportArgs(project([{ ...a, asset: "n" }, { ...b, cutAudio: { mode: "j", duration: 1 } }]), { ...xFiles }, "o"))
+    expect(silent).not.toContain("[0:a]")
+    expect(silent).toContain(sound(1, "atrim=1:5,"))
+  })
+
+  it("never delays by a negative time or reads before the source's start", () => {
+    // Forged: a 3 s J into a clip that starts at 0.5 s.
+    const g = graph(buildExportArgs(project([{ ...a, in: 0, out: 0.5 }, { ...b, in: 5, out: 8, start: 0.5, cutAudio: { mode: "j", duration: 3 } }]), xFiles, "o"))
+    expect(g).toContain(sound(1, "atrim=4.5:8,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,afade=t=in:st=0:d=0.15:curve=tri,adelay=delays=0S:all=1[a1]"))
+    expect(g).not.toMatch(/delays=-/)
+  })
+
+  it("builds the old graph once the overlap is gone", () => {
+    expect(graph(buildExportArgs(project([a, b]), xFiles, "o"))).toMatch(/concat=n=2:v=1:a=1\[v\]\[a\]$/)
+  })
+})
+
 describe("parseProgressLine", () => {
   it("reads out_time_ms and out_time_us (both microseconds) as a fraction", () => {
     expect(parseProgressLine("out_time_ms=2500000", 10)).toBe(0.25)
@@ -1176,6 +1246,64 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
     const g = await pixel(out, 3)
     expect(g[1]).toBeGreaterThan(150)
     expect(isBlue(await pixel(out, 0.5, 40, 40))).toBe(true)
+  }, 60_000)
+
+  /** Red's 440 Hz and blue's 660 Hz tone amplitude (Goertzel; ffmpeg's sine source is 1/8 of full scale) in the export's sound from `from` to `to` s. */
+  async function tones(file: string, from: number, to: number): Promise<{ red: number; blue: number }> {
+    const pcm = (await ffmpeg(["-ss", String(from), "-t", String(to - from), "-i", file, "-map", "0:a", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])).stdout
+    const n = Math.floor(pcm.length / 2)
+    const power = (hz: number) => {
+      const w = (2 * Math.PI * hz) / 48000
+      let s1 = 0
+      let s2 = 0
+      for (let k = 0; k < n; k++) {
+        const s0 = pcm.readInt16LE(2 * k) / 32768 + 2 * Math.cos(w) * s1 - s2
+        s2 = s1
+        s1 = s0
+      }
+      return Math.sqrt(s1 * s1 + s2 * s2 - 2 * Math.cos(w) * s1 * s2) / (n / 2)
+    }
+    return { red: power(440), blue: power(660) }
+  }
+  async function renderOverlap(name: string, cutAudio?: Clip["cutAudio"]) {
+    const p: Project = {
+      ...newProject("X"),
+      assets: { r: { file: "r", duration: 6, hasAudio: true }, b: { file: "b", duration: 6, hasAudio: true } },
+      tracks: [{ id: "t1", clips: [{ id: "1", asset: "r", in: 1, out: 4, start: 0 }, { id: "2", asset: "b", in: 2, out: 5, start: 3, ...(cutAudio ? { cutAudio } : {}) }] }],
+    }
+    const out = path.join(dir, `${name}.mp4`)
+    await runExport(buildExportArgs(p, { r: red, b: blue }, out), out, totalLength(p), () => {})
+    return out
+  }
+
+  it("J-cut: blue's tone is heard before the cut over red's picture; the picture cut and the length stay", async () => {
+    const plain = await tones(await renderOverlap("plain"), 2.3, 2.9)
+    const out = await renderOverlap("jcut", { mode: "j", duration: 1 })
+    const before = await tones(out, 2.3, 2.9)
+    expect(plain.blue).toBeLessThan(0.02)
+    expect(before.blue).toBeGreaterThan(0.05)
+    // Red's own sound plays on under it, mixed (no ducking).
+    expect(before.red).toBeGreaterThan(0.05)
+    // After the cut only blue's.
+    const after = await tones(out, 3.2, 3.8)
+    expect(after.red).toBeLessThan(0.02)
+    expect(isRed(await pixel(out, 2.8))).toBe(true)
+    expect(isBlue(await pixel(out, 3.2))).toBe(true)
+    expect(Math.abs((await probeMedia(out)).duration - 6)).toBeLessThan(0.15)
+  }, 60_000)
+
+  it("L-cut: red's tone carries on after the cut over blue's picture", async () => {
+    const plain = await tones(await renderOverlap("plain-l"), 3.2, 3.8)
+    const out = await renderOverlap("lcut", { mode: "l", duration: 1 })
+    const after = await tones(out, 3.2, 3.8)
+    expect(plain.red).toBeLessThan(0.02)
+    expect(after.red).toBeGreaterThan(0.05)
+    expect(after.blue).toBeGreaterThan(0.05)
+    // Past the L, red is gone.
+    expect((await tones(out, 4.3, 4.9)).red).toBeLessThan(0.02)
+    expect(isRed(await pixel(out, 2.8))).toBe(true)
+    expect(isBlue(await pixel(out, 3.2))).toBe(true)
+    expect(Math.abs((await probeMedia(out)).duration - 6)).toBeLessThan(0.15)
   }, 60_000)
 
   it("slides left: red pushed out on the left, blue in on the right", async () => {
