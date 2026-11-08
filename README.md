@@ -156,7 +156,7 @@ Database changes apply themselves on start.
 
 ## Video Editing
 
-Tools → Video Editing cuts video clips and still images together and exports an MP4.
+Tools → Video Editing cuts video clips, still images and sound files together and exports an MP4.
 
 **Getting clips in.** Right-click files in the library, use the toolbar's
 **Video Editing** button, or the button in the viewer, then choose
@@ -181,6 +181,30 @@ Dragging the same Inbox file again reuses the copy already in the project
 instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
 under the same name reuses the existing copy (delete that copy from Project
 media to import the new one).
+
+**Importing from your computer.** **Import** at the left of the editor's top
+bar (beside the project name; Export stays at the right) opens the file
+picker: choose any number of videos, images and sound files. You can also drop
+files from your computer onto Project media. They upload straight into the
+project's `assets/` (not through the Inbox), two at a time, each listed under
+the Import button with its progress and a cancel button; each one appears in
+Project media as soon as it's in. A file that fails says why, with Retry and
+Dismiss, and the others carry on. The name is kept (cleaned of path parts and
+characters the disk can't take; a taken name gets " (1)", as Inbox copies do).
+- Formats: images and videos as the Inbox takes them (jpg, png, gif, bmp,
+  webp, heic, tif, dng; mp4, mov, m4v, avi, wmv, mkv, flv, 3gp, webm) and
+  sound files (mp3, wav, m4a, aac, ogg, opus, flac, wma). What a file is comes
+  from ffmpeg reading it, not its name: a renamed text file is refused, and a
+  video file with only sound counts as a sound file.
+- Up to 4 GB a file; empty files are refused. The browser sends a file in
+  32 MB pieces, one request each, onto a hidden part file in the project
+  folder (`.import-<id>.<ext>`, removed when the upload is cancelled or fails,
+  and any left over a day later), then it's renamed into `assets/`. Nothing
+  needs configuring: the upload route is left out of `proxy.ts` (which would
+  otherwise buffer request bodies in memory) and no request runs near Node's
+  5 minute request timeout, in `npm run dev` and in the Docker image alike.
+- WMA and some other formats may not play in the browser preview; they still
+  export.
 
 **Deleting media.** Right-click an item in Project media and choose Delete
 (or focus it and press **Delete**). The warning says how many timeline clips
@@ -279,6 +303,22 @@ Not while the project is exporting, or while that file is being imported.
   split keeps the mute on both halves. **M** mutes or unmutes the selected
   clip. Layers have no mute of their own: a project saved with a muted layer
   opens with each of that layer's clips muted.
+- **Sound files and the audio layer.** Sound files sit in Project media with
+  a music note and their length. Their clips live on the audio layer, row
+  **0** below layer 1 (it shows once it has a clip, and while a sound file is
+  dragged in), and only there: a sound file dropped anywhere on the timeline
+  (or on the preview, at the playhead) lands on it at that time, an audio
+  clip dragged towards another layer stays on it and only moves in time, and
+  a video, image or text clip dropped or dragged onto it is refused (a red
+  ghost, "Only sound files go on the audio layer."). It isn't one of the four
+  layers and has no Snap box. Clips there don't overlap (one slides clear, as
+  on the other layers) and snap to every layer's clip edges. Each is teal with
+  its name, length, waveform (the waveform button applies) and mute button;
+  the menu has Split, Delete, Mute and Edit length (up to the rest of the
+  file). Audio clips have no transitions, audio overlaps, picture or Reset.
+  They play in the preview with the picture and mix into the export like a
+  video clip's sound (a muted one is silent); where only audio plays the
+  picture is black.
 - **Waveforms.** Each video clip with sound shows its sound as a waveform
   over its thumbnail, for the part of the file the clip plays, so it follows
   zoom and trims. The waveform button in the toolbar hides or shows them
@@ -486,7 +526,8 @@ previous clip's is read on past its out point, each with a short fade at the
 new edge, and mixed with the rest.
 
 **Limits in this version**
-- No audio import yet. Text has no size box (use the corner handles) and no
+- No volume control or fades on audio clips yet. Text has no size box
+ (use the corner handles) and no
   outline or shadow.
 - Transitions and audio overlaps only between clips that touch on one
   layer; a clip short of footage is trimmed for them (no "hold the last
