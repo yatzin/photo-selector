@@ -3,6 +3,7 @@ import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
+import { audioLevelFilters } from "./audio-levels"
 import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
@@ -357,6 +358,11 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
  * muted); with no picture clip at all the canvas stays black. Their audio
  * transitions shape the two sounds at a cut (soundSpan); nothing else moves.
  *
+ * Audio levels (Clip.audio, lib/video/audio-levels): a clip's sound goes
+ * through its gain and its effects in order right after it's cut from the
+ * source (atrim, asetpts) and before its fades, delay and the mix, and is cut
+ * back to its own length after them. A muted clip has no sound to process.
+ *
  * Edge transitions: a clip with an in or out edge transition takes the run
  * path (a run of its own), and its run's joined picture is xfaded with a copy
  * of itself whose alpha is 0 (edgeOf), so the effect uncovers or covers the
@@ -386,8 +392,11 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(a.outAt ?? (a.head || a.tail ? total : clipLength(c) + a.pre + a.post) - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
     ].map((f) => `${f},`).join("")
     const delay = `adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
+    // The clip's audio levels (gain, then its effects in order) before the fades, cut back to the stretch's length (an echo's or a reverb's tail would run on).
+    const levelFilters = audioLevelFilters(c.audio)
+    const levels = (length: number) => (levelFilters.length > 0 ? `${levelFilters.join(",")},atrim=end=${num(length)},` : "")
     if (!a.head && !a.tail) {
-      parts.push(`[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}${delay}`)
+      parts.push(`[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${levels(clipLength(c) + a.pre + a.post)}${fades}${delay}`)
       mix.push(`[a${i}]`)
       return
     }
@@ -410,7 +419,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       parts.push(`${own.join("")}${own.length > 1 ? `concat=n=${own.length}:v=0:a=1` : "anull"}${after}[s${i}p${j}]`)
       return `[s${i}p${j}]`
     })
-    parts.push(`${joined.join("")}concat=n=${joined.length}:v=0:a=1,${fades}${delay}`)
+    parts.push(`${joined.join("")}concat=n=${joined.length}:v=0:a=1,${levels(total)}${fades}${delay}`)
     mix.push(`[a${i}]`)
   }
   /**
@@ -565,8 +574,9 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
  * the graph is the same as it always was. A text clip (its PNG in `files`
- * under textFileKey), a transition, an audio overlap, an edge transition or
- * a clip on the audio layer always takes the uniform graph.
+ * under textFileKey), a transition, an audio overlap, an edge transition,
+ * audio levels (Clip.audio) or a clip on the audio layer always takes the
+ * uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -583,7 +593,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 
