@@ -524,7 +524,18 @@ Not while the project is exporting, or while that file is being imported.
   Chipmunk, Deep voice, Alien, Vinyl crackle). **Preview** plays the clip's
   sound through them, about 6 s from its start (or from the playhead when
   it's inside the clip), looping and following the controls as you move
-  them; the editor's player is paused while the box is open. Apply is one
+  them; the editor's player is paused while the box is open. When the list
+  holds an effect the live preview can't play (Noise gate, Noise reduction,
+  Normalize, Chipmunk, Deep voice), an amber block above the effect's
+  description names them ("Heard in export only: the preview can't play it
+  faithfully.") and offers **Generate preview**: the server renders the first
+  12 s of the clip through the export's own filters (Rendering… with the
+  elapsed time and a Cancel button; Retry after an error), then a small
+  player there plays the result and the block turns green ("Preview ready —
+  includes all effects"). While it matches the controls, Preview plays that
+  file too, Chipmunk and all; after a change the block says "Settings changed
+  since this preview" with Re-render, and Preview goes back to the live
+  chain. Apply is one
   undo step, Cancel or Esc discards, Remove all takes the levels off. The
   editor's preview plays clips with levels the same way, with their fades
   and transitions on top; a muted clip stays silent. On the timeline such a
@@ -589,6 +600,28 @@ Not while the project is exporting, or while that file is being imported.
   moves the right handle. Apply sets the source and the timing together in one
   undo step. Without peaks the strip says "Waveform unavailable" and the rest
   still works; it shows even with the timeline's waveforms off.
+  Under the strip, **In** and **Out** take source times as seconds (2.25) or
+  m:ss.mmm (1:02.350), shown with three decimals; the - and + buttons step
+  0.01 s (0.1 s with Shift), and Up and Down in a field step 0.01 s (Shift
+  0.1 s, Alt 0.001 s). A value too close to the other edge (0.2 s apart at
+  least) or outside the file shows why and is clamped when you leave the
+  field. **Set In to playhead** and **Set Out to playhead** take the
+  preview's position, so you can play, stop where you hear the cut and
+  fine-tune from there. An In or Out you changed goes in on whole
+  milliseconds.
+  Such a clip's box also has a **Preview** column (beside the fields from 720
+  px wide, under them on narrower screens): the video's own picture in a
+  black letterboxed box (no project transforms), or for a sound file the
+  selection's waveform drawn large, then Play/Pause (also **Space** in the
+  column or on the strip), a seek bar over the selection with its time
+  ("0:02.40 / 0:05.00"), Loop (on by default; off stops at the end), mute
+  and volume. It plays exactly the selection, from the clip's own file,
+  with the clip's audio levels (export-only effects play dry, as in the
+  Audio levels box). Moving a handle while it plays keeps playing where it
+  was if that's still inside the selection, else starts again at In. The
+  strip draws its position as a line; click or drag the row above the
+  waveform to move it. Nothing plays until you press Play, the editor's
+  player pauses while the box is open, and closing it lets the file go.
 - **S** or Split cuts the selected clip at the playhead (or the top clip
   there), **Delete** removes the selected clip, **M** mutes or unmutes it,
   **Esc** deselects, **Space** plays.
@@ -669,7 +702,13 @@ before. Projects without levels export exactly as they did.
   reduction, Normalize, Chipmunk, Deep voice: the browser has no gate,
   denoiser or loudness meter, and can't shift pitch and keep time); the box
   marks them with * and says "Not previewed" while they're applied, and the
-  preview plays those dry. The compressor and limiter, the vibrato and
+  live preview plays those dry. Generate preview hears them, over the first
+  12 s of the clip only. Rendered previews are cached in the cache folder
+  (`audio-previews/<user>/<project>/`, named by a hash of the file, window,
+  gain and effects) and removed after an hour or beyond the newest 50; at
+  most two render at once over all users (six more wait, then the box says
+  to try again), each stops after 60 s, identical requests share one render,
+  and Cancel stops it. The compressor and limiter, the vibrato and
   flanger sweeps and the hiss and crackle (different random numbers) sound
   close to the export rather than identical. A reverb's or echo's tail is
   cut at the clip's end.
