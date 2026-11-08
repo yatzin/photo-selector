@@ -64,7 +64,7 @@ export function EditorDialog({ state, icon: Icon, title, subtitle, size = "md", 
   /** The footer's content: a DialogFooter. */
   footer: ReactNode
   children: ReactNode
-  /** What gets the focus on open (default: the first control in the body). */
+  /** What gets the focus on open (default: the element marked data-initial-focus, else the first control). */
   initialFocus?: RefObject<HTMLElement | null>
   /** Where the focus goes on close when the element that opened the dialog is gone. */
   returnFocus?: () => HTMLElement | null
@@ -90,7 +90,7 @@ export function EditorDialog({ state, icon: Icon, title, subtitle, size = "md", 
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop className="editor-dialog-backdrop fixed inset-0 z-50 bg-black/35 supports-backdrop-filter:backdrop-blur-[2px] dark:bg-black/60" />
         <DialogPrimitive.Popup
-          initialFocus={initialFocus ?? true}
+          initialFocus={initialFocus ?? (() => document.querySelector<HTMLElement>("[data-editor-dialog] [data-initial-focus]") ?? true)}
           finalFocus={finalFocus}
           data-editor-dialog
           className={cn(

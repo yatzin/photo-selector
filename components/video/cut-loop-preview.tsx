@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useRef, useState, type RefObject } from "react"
-import { Pause, Play, Volume2, VolumeX } from "lucide-react"
 import { clipLength, isStill, isTextClip, type Clip, type Project } from "@/lib/video/project"
 import { textSize } from "@/lib/video/text"
 import { IDENTITY } from "@/lib/video/transform"
@@ -9,6 +8,7 @@ import { loopFrame, loopPlan, loopSound, transitionLook } from "@/lib/video/tran
 import type { CutAudio, TransitionType } from "@/lib/video/transition-types"
 import { placement, TextPicture } from "./preview"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
+import { PreviewMonitor, PreviewTransport, TransportLegend, type TransportBand } from "./ui/preview-transport"
 
 // The Transition dialog's live preview of one cut: the two real clips (video,
 // image or text, placed by their transforms) looping from up to 2 s before the
@@ -181,15 +181,34 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
     )
   }
 
-  const pct = (s: number) => `${Math.min(100, Math.max(0, (s / plan.total) * 100))}%`
+  const frac = (s: number) => (plan.total > 0 ? s / plan.total : 0)
   const half = plan.duration / 2
   // The audio overlap's span on the bar: before the cut for a J, after it for an L.
   const band = audio ? (audio.mode === "j" ? [plan.cut - audio.duration, plan.cut] : [plan.cut, plan.cut + audio.duration]) : null
   const bandLabel = audio ? (audio.mode === "j" ? `Audio starts early (J-cut, ${audio.duration} s)` : `Audio carries on (L-cut, ${audio.duration} s)`) : null
+  const bands: TransportBand[] = [
+    ...(plan.duration > 0 ? [{ from: frac(plan.cut - half), to: frac(plan.cut + half), tone: "event" as const }] : []),
+    ...(band ? [{ from: frac(band[0]), to: frac(band[1]), tone: "audio" as const }] : []),
+  ]
 
   return (
-    <div className="grid gap-1.5">
-      <div className="relative w-full overflow-hidden rounded-lg bg-black" style={{ aspectRatio: `${W} / ${H}` }} role="img" aria-label="Preview of the cut, looping">
+    <div className="grid gap-2" data-cut-loop>
+      <PreviewMonitor
+        label="Preview of the cut, looping"
+        stageStyle={{ aspectRatio: `${W} / ${H}` }}
+        footer={
+          <PreviewTransport
+            playing={playing}
+            onToggle={() => setPlaying((p) => !p)}
+            progress={frac(t)}
+            bands={bands}
+            marks={[frac(plan.cut)]}
+            time={`${t.toFixed(1)} / ${plan.total.toFixed(1)} s`}
+            muted={!soundOn}
+            onMute={() => setSoundOn((on) => !on)}
+          />
+        }
+      >
         <div className="absolute inset-0 isolate">
           <TransitionFxDefs />
           <div className="absolute inset-0" style={{ zIndex: look?.fromOnTop ? 3 : 1, visibility: frame.from ? "visible" : "hidden", ...fxStyle(look?.from) }}>
@@ -203,45 +222,8 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
           <FxOverlays overlays={look?.overlays} zIndex={4} />
           {look?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: 4, background: look.tint.color, opacity: look.tint.opacity }} />}
         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setPlaying((p) => !p)}
-          aria-label={playing ? "Pause the preview" : "Play the preview"}
-          title={playing ? "Pause" : "Play"}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {playing ? <Pause className="h-3.5 w-3.5 fill-current" /> : <Play className="h-3.5 w-3.5 fill-current" />}
-        </button>
-        <button
-          type="button"
-          onClick={() => setSoundOn((on) => !on)}
-          aria-pressed={!soundOn}
-          aria-label={soundOn ? "Mute preview" : "Unmute preview"}
-          title={soundOn ? "Mute preview" : "Unmute preview"}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
-        </button>
-        <div aria-hidden className="relative h-4 min-w-0 flex-1">
-          <div className="absolute inset-x-0 top-1 h-1 rounded-full bg-muted" />
-          {plan.duration > 0 && (
-            <div className="absolute top-0.5 h-2 rounded-sm bg-amber-400/80 dark:bg-amber-500/80" style={{ left: pct(plan.cut - half), width: `calc(${pct(plan.cut + half)} - ${pct(plan.cut - half)})` }} />
-          )}
-          <div className="absolute top-0 h-3 w-px bg-foreground/50" style={{ left: pct(plan.cut) }} />
-          {band && (
-            <div title={bandLabel ?? undefined} className="absolute bottom-0 flex h-1 items-center rounded-full bg-teal-500 dark:bg-teal-300" style={{ left: pct(band[0]), width: `calc(${pct(band[1])} - ${pct(band[0])})` }} />
-          )}
-          <div className="absolute top-1 h-1 rounded-full bg-editor-accent" style={{ width: pct(t) }} />
-        </div>
-      </div>
-      {bandLabel && (
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span aria-hidden className="h-1 w-3 rounded-full bg-teal-500 dark:bg-teal-300" />
-          {bandLabel}
-        </div>
-      )}
+      </PreviewMonitor>
+      <TransportLegend items={[...(plan.duration > 0 ? [{ tone: "event" as const, label: "Transition" }] : []), ...(bandLabel ? [{ tone: "audio" as const, label: bandLabel }] : [])]} />
     </div>
   )
 }

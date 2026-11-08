@@ -46,6 +46,8 @@ type Common<T extends string> = {
   tileData?: (item: T) => Record<string, string>
   scrollRef?: RefObject<HTMLDivElement | null>
   className?: string
+  /** The dialog's first focus: the chosen tile (or the first). */
+  initialFocus?: boolean
 }
 
 type Single<T extends string> = Common<T> & {
@@ -63,7 +65,7 @@ type Multi<T extends string> = Common<T> & {
 }
 
 export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
-  const { label, groups, nameOf, glyph, glyphBox = true, keywordsOf, badge, describe, minTile = "5.5rem", searchLabel, maxHeight, onFocusItem, tileData, className } = props
+  const { label, groups, nameOf, glyph, glyphBox = true, keywordsOf, badge, describe, minTile = "5.5rem", searchLabel, maxHeight, onFocusItem, tileData, className, initialFocus } = props
   const multi = props.mode === "multi"
   const none = !multi && props.none ? props.none : null
   const total = groups.reduce((n, g) => n + g.items.length, 0)
@@ -138,6 +140,7 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
         tabIndex={item === tabStop ? 0 : -1}
         data-on={isOn || undefined}
         data-tile={item}
+        data-initial-focus={initialFocus && item === tabStop ? true : undefined}
         {...(item === "none" ? {} : tileData?.(item))}
         onClick={() => (multi ? item !== "none" && props.onToggle(item) : props.onChange(item))}
         onFocus={() => item !== "none" && onFocusItem?.(item)}

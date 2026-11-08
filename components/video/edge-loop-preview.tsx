@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useRef, useState, type CSSProperties } from "react"
-import { Pause, Play, Volume2, VolumeX } from "lucide-react"
 import { audioCutState, audioEdgeState, PLAIN, pictureEdgeGain, type AudioFxState } from "@/lib/video/audio-fx"
 import { clipLength, isStill, isTextClip, type Clip, type Project } from "@/lib/video/project"
 import { textSize } from "@/lib/video/text"
@@ -11,6 +10,7 @@ import type { AudioTransitionType, Edge, TransitionType } from "@/lib/video/tran
 import { applyFx, offSpeed } from "./audio-graph"
 import { placement, TextPicture } from "./preview"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
+import { PreviewMonitor, PreviewTransport, TransportLegend } from "./ui/preview-transport"
 
 // The Transition dialog's loops for what CutLoopPreview doesn't show: a
 // clip's edge transition against nothing (EdgeLoopPreview: the picture over a
@@ -104,18 +104,19 @@ function drive(v: HTMLMediaElement | null, opts: { playing: boolean; runs: boole
   }
 }
 
-function Controls({ playing, setPlaying, soundOn, setSoundOn, children }: { playing: boolean; setPlaying: (f: (p: boolean) => boolean) => void; soundOn: boolean; setSoundOn: (f: (p: boolean) => boolean) => void; children: React.ReactNode }) {
-  const button = "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+/** The loop's transport: play, mute and its progress with the band where the effect runs. */
+function Controls({ playing, setPlaying, soundOn, setSoundOn, t, total, band }: { playing: boolean; setPlaying: (f: (p: boolean) => boolean) => void; soundOn: boolean; setSoundOn: (f: (p: boolean) => boolean) => void; t: number; total: number; band: [number, number] | null }) {
+  const frac = (s: number) => (total > 0 ? s / total : 0)
   return (
-    <div className="flex items-center gap-2">
-      <button type="button" onClick={() => setPlaying((p) => !p)} aria-label={playing ? "Pause the preview" : "Play the preview"} title={playing ? "Pause" : "Play"} className={button}>
-        {playing ? <Pause className="h-3.5 w-3.5 fill-current" /> : <Play className="h-3.5 w-3.5 fill-current" />}
-      </button>
-      <button type="button" onClick={() => setSoundOn((on) => !on)} aria-pressed={!soundOn} aria-label={soundOn ? "Mute preview" : "Unmute preview"} title={soundOn ? "Mute preview" : "Unmute preview"} className={button}>
-        {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
-      </button>
-      {children}
-    </div>
+    <PreviewTransport
+      playing={playing}
+      onToggle={() => setPlaying((p) => !p)}
+      progress={frac(t)}
+      bands={band ? [{ from: frac(band[0]), to: frac(band[1]), tone: "event" }] : []}
+      time={`${t.toFixed(1)} / ${total.toFixed(1)} s`}
+      muted={!soundOn}
+      onMute={() => setSoundOn((on) => !on)}
+    />
   )
 }
 
@@ -177,24 +178,21 @@ export function EdgeLoopPreview({ project, clip, edge, type, duration, videoUrl,
     if (mirror) return <VideoMirror video={() => videoRef.current} className="absolute object-contain" style={style} />
     return <video ref={videoRef} playsInline preload="auto" aria-hidden className="absolute object-contain" style={style} onLoadedMetadata={(e) => setAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight)} />
   }
-  const pct = (s: number) => `${Math.min(100, Math.max(0, (s / plan.total) * 100))}%`
   return (
-    <div className="grid gap-1.5" data-edge-loop={edge}>
-      <div className="relative w-full overflow-hidden rounded-lg" style={{ aspectRatio: `${W} / ${H}`, ...CHECKER }} role="img" aria-label={`Preview of the ${edge === "in" ? "in" : "out"} transition against nothing, looping`}>
+    <div className="grid gap-2" data-edge-loop={edge}>
+      <PreviewMonitor
+        label={`Preview of the ${edge === "in" ? "in" : "out"} transition against nothing, looping`}
+        stageStyle={{ aspectRatio: `${W} / ${H}`, ...CHECKER }}
+        footer={<Controls playing={playing} setPlaying={setPlaying} soundOn={soundOn} setSoundOn={setSoundOn} t={t} total={plan.total} band={d > 0 ? [plan.lead, plan.lead + d] : null} />}
+      >
         <div className="absolute inset-0 isolate">
           <TransitionFxDefs />
           <div className="absolute inset-0" style={{ zIndex: 2, visibility: shown ? "visible" : "hidden", ...fxStyle(look?.to) }}>{picture()}</div>
           {shown && <FxCopies styles={look?.toCopies} zIndex={2} id="edge">{picture(true)}</FxCopies>}
           <FxOverlays overlays={look?.overlays} zIndex={4} />
         </div>
-      </div>
-      <Controls playing={playing} setPlaying={setPlaying} soundOn={soundOn} setSoundOn={setSoundOn}>
-        <div aria-hidden className="relative h-4 min-w-0 flex-1">
-          <div className="absolute inset-x-0 top-1 h-1 rounded-full bg-muted" />
-          {d > 0 && <div className="absolute top-0.5 h-2 rounded-sm bg-amber-400/80 dark:bg-amber-500/80" style={{ left: pct(plan.lead), width: `calc(${pct(plan.lead + d)} - ${pct(plan.lead)})` }} />}
-          <div className="absolute top-1 h-1 rounded-full bg-editor-accent" style={{ width: pct(t) }} />
-        </div>
-      </Controls>
+      </PreviewMonitor>
+      <TransportLegend items={[...(d > 0 ? [{ tone: "event" as const, label: edge === "in" ? "Transition in" : "Transition out" }] : [])]} />
     </div>
   )
 }
@@ -277,30 +275,23 @@ export function AudioLoopPreview({ cut, edge, type, duration, audioUrl }: {
     }).join(" ")
   )
   const pct = (s: number) => `${Math.min(100, Math.max(0, total > 0 ? (s / total) * 100 : 0))}%`
-  const colours = ["stroke-sky-600 dark:stroke-sky-300", "stroke-amber-600 dark:stroke-amber-300"]
+  const colours = ["stroke-sky-300", "stroke-amber-300"]
   return (
-    <div className="grid gap-1.5" data-audio-loop={cut ? "cut" : "edge"}>
-      <div className="relative h-24 overflow-hidden rounded-lg border border-border bg-muted/40" role="img" aria-label="Preview of the sound, looping: each clip's level along the loop">
-        {band && <div className="absolute inset-y-0 bg-amber-400/25 dark:bg-amber-500/20" style={{ left: pct(band[0]), width: `calc(${pct(band[1])} - ${pct(band[0])})` }} />}
-        <svg aria-hidden viewBox="0 0 100 24" preserveAspectRatio="none" className="absolute inset-x-0 top-3 bottom-3 h-[calc(100%-1.5rem)] w-full">
-          {lines.map((pts, i) => <polyline key={i} points={pts} fill="none" strokeWidth={1.5} vectorEffect="non-scaling-stroke" className={colours[i]} />)}
+    <div className="grid gap-2" data-audio-loop={cut ? "cut" : "edge"}>
+      <PreviewMonitor
+        stageClassName="h-32 bg-neutral-950"
+        label="Preview of the sound, looping: each clip's level along the loop"
+        footer={<Controls playing={playing} setPlaying={setPlaying} soundOn={soundOn} setSoundOn={setSoundOn} t={t} total={total} band={band} />}
+      >
+        <div aria-hidden className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_49.5%,rgb(255_255_255/0.06)_50%,transparent_50.5%)]" />
+        {band && <div className="absolute inset-y-0 bg-amber-400/15" style={{ left: pct(band[0]), width: `calc(${pct(band[1])} - ${pct(band[0])})` }} />}
+        <svg aria-hidden viewBox="0 0 100 24" preserveAspectRatio="none" className="absolute inset-x-0 top-4 bottom-4 h-[calc(100%-2rem)] w-full">
+          {lines.map((pts, i) => <polyline key={i} points={pts} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" className={edge ? "stroke-teal-300" : colours[i]} />)}
         </svg>
-        <div className="absolute inset-y-0 w-px bg-editor-accent" style={{ left: pct(t) }} />
+        <div className="absolute inset-y-0 w-px bg-white/80" style={{ left: pct(t) }} />
         {sounds.map((s, i) => <audio key={i} ref={(el) => { refs.current[i] = el }} preload="auto" data-loop-audio={i} hidden />)}
-      </div>
-      <Controls playing={playing} setPlaying={setPlaying} soundOn={soundOn} setSoundOn={setSoundOn}>
-        <div aria-hidden className="relative h-4 min-w-0 flex-1">
-          <div className="absolute inset-x-0 top-1 h-1 rounded-full bg-muted" />
-          {band && <div className="absolute top-0.5 h-2 rounded-sm bg-amber-400/80 dark:bg-amber-500/80" style={{ left: pct(band[0]), width: `calc(${pct(band[1])} - ${pct(band[0])})` }} />}
-          <div className="absolute top-1 h-1 rounded-full bg-editor-accent" style={{ width: pct(t) }} />
-        </div>
-      </Controls>
-      {cut && (
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1"><span aria-hidden className="h-0.5 w-3 bg-sky-600 dark:bg-sky-300" />Outgoing</span>
-          <span className="flex items-center gap-1"><span aria-hidden className="h-0.5 w-3 bg-amber-600 dark:bg-amber-300" />Incoming</span>
-        </div>
-      )}
+      </PreviewMonitor>
+      <TransportLegend items={cut ? [{ tone: "out", label: "Outgoing" }, { tone: "in", label: "Incoming" }, ...(band ? [{ tone: "event" as const, label: "Transition" }] : [])] : band ? [{ tone: "event", label: edge?.edge === "in" ? "Fade in" : "Fade out" }] : []} />
     </div>
   )
 }
