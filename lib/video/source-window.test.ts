@@ -93,6 +93,12 @@ describe("stepSelection", () => {
     near(stepSelection("move", 10, sel, "End", false, 0.2)!, { in: 6, out: 10 })
   })
 
+  it("lands on whole hundredths after many steps (no float drift into the project)", () => {
+    let s = { in: 7, out: 9 }
+    for (let i = 0; i < 10; i++) s = stepSelection("move", 10, s, "ArrowLeft", true, 0.2)!
+    expect(s).toEqual({ in: 6, out: 8 })
+  })
+
   it("clamps a step at the ends and ignores other keys", () => {
     near(stepSelection("out", 10, { in: 2, out: 9.99 }, "ArrowRight", true, 0.2)!, { in: 2, out: 10 })
     expect(stepSelection("in", 10, sel, "Enter", false, 0.2)).toBeNull()

@@ -76,7 +76,12 @@ export function stepSelection(
   mode: SourceDragMode, sourceDuration: number, selection: SourceSelection, key: string, shift: boolean, minLength: number
 ): SourceSelection | null {
   const step = shift ? 0.1 : 0.01
-  const by = (delta: number) => dragSelection(mode, sourceDuration, selection, delta, minLength, [], false)
+  // Rounded off float drift (well inside the model's 1e-9 slack), so repeated steps land on whole hundredths.
+  const tidy = (t: number) => Math.round(t * 1e10) / 1e10
+  const by = (delta: number) => {
+    const next = dragSelection(mode, sourceDuration, selection, delta, minLength, [], false)
+    return { in: tidy(next.in), out: tidy(next.out) }
+  }
   if (key === "ArrowRight" || key === "ArrowUp") return by(step)
   if (key === "ArrowLeft" || key === "ArrowDown") return by(-step)
   if (key === "Home") return by(-sourceDuration)
