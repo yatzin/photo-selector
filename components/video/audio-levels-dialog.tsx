@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ArrowDown, ArrowUp, Pause, Play, X } from "lucide-react"
+import { ArrowDown, ArrowUp, CircleCheck, Loader2, Pause, Play, RotateCw, TriangleAlert, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -9,7 +9,9 @@ import {
   AUDIO_FX_GROUPS, AUDIO_FX_TYPES, AUDIO_PRESETS, audioFxInfo, DEFAULT_AMOUNT, fxAmount, fxPreviewed, MAX_FX, MAX_GAIN_DB, MIN_GAIN_DB, normalizeClipAudio,
   type AudioFx, type AudioFxType, type ClipAudio,
 } from "@/lib/video/audio-levels"
+import { PREVIEW_CAP } from "@/lib/video/audio-preview"
 import { clipEnd, type Clip, type Project } from "@/lib/video/project"
+import { formatClock } from "@/lib/video/source-precision"
 import { cn } from "@/lib/utils"
 import { buildLevels, type LevelsChain } from "./audio-levels-graph"
 
@@ -20,9 +22,117 @@ import { buildLevels, type LevelsChain } from "./audio-levels-graph"
 // preview uses, following the controls as they move; effects Web Audio can't
 // do are named and play dry. Its AudioContext starts on the button press and
 // closes with the dialog. Apply is one edit; Cancel and Escape discard.
+//
+// With such an effect in the list, a warning above the effect's description
+// names them and offers Generate preview: the server renders the first
+// PREVIEW_CAP seconds of the clip through the export's own chain (the
+// audio-preview route), Cancel closes the request, and the result plays in a
+// small player there. While it matches the controls, the Preview button plays
+// it too (everything heard, Chipmunk included); after a change it offers
+// Re-render and Preview goes back to the live chain.
 
 /** How long the preview loops (s). */
 const LOOP = 6
+
+type Render =
+  | { status: "idle" }
+  | { status: "rendering"; started: number }
+  | { status: "ready"; url: string; durationSec: number; key: string }
+  | { status: "error"; message: string }
+
+/** The rendered preview: a request for it, its state and its own <audio> element. */
+function useRenderedPreview(folder: string, clip: Clip) {
+  const [render, setRender] = useState<Render>({ status: "idle" })
+  const [now, setNow] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [time, setTime] = useState(0)
+  const el = useRef<HTMLAudioElement>(null)
+  const request = useRef<AbortController | null>(null)
+
+  // The elapsed time while it renders.
+  useEffect(() => {
+    if (render.status !== "rendering") return
+    const id = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(id)
+  }, [render.status])
+
+  // Closing the dialog drops the request (the server stops the render) and the file.
+  useEffect(
+    () => () => {
+      request.current?.abort()
+      const a = el.current
+      if (a) {
+        a.pause()
+        a.removeAttribute("src")
+        a.load()
+      }
+    },
+    []
+  )
+
+  async function generate(audio: ClipAudio | undefined, key: string) {
+    request.current?.abort()
+    const ctl = new AbortController()
+    request.current = ctl
+    el.current?.pause()
+    const started = Date.now()
+    setNow(started)
+    setRender({ status: "rendering", started })
+    try {
+      const r = await fetch(`/api/video-projects/${encodeURIComponent(folder)}/audio-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId: clip.asset, in: clip.in, out: clip.out, gainDb: audio?.gainDb, fx: audio?.fx }),
+        signal: ctl.signal,
+      })
+      const data = (await r.json().catch(() => ({}))) as { url?: string; durationSec?: number; error?: string }
+      if (!r.ok || !data.url) throw new Error(data.error || "The preview couldn't be rendered.")
+      setTime(0)
+      setRender({ status: "ready", url: data.url, durationSec: data.durationSec ?? 0, key })
+    } catch (error) {
+      if (ctl.signal.aborted) return
+      setRender({ status: "error", message: error instanceof Error && error.message !== "Failed to fetch" ? error.message : "The preview couldn't be rendered." })
+    }
+  }
+
+  function cancel() {
+    request.current?.abort()
+    request.current = null
+    setRender({ status: "idle" })
+  }
+
+  function toggle() {
+    const a = el.current
+    if (!a) return
+    if (!a.paused) return a.pause()
+    void a.play().catch(() => setPlaying(false))
+  }
+
+  function pause() {
+    el.current?.pause()
+  }
+
+  const audioEl = (
+    <audio
+      ref={el}
+      src={render.status === "ready" ? render.url : undefined}
+      preload="auto"
+      loop
+      className="hidden"
+      data-rendered-preview
+      onPlay={() => setPlaying(true)}
+      onPause={() => setPlaying(false)}
+      onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+    />
+  )
+
+  const seek = (t: number) => {
+    if (el.current) el.current.currentTime = t
+    setTime(t)
+  }
+
+  return { render, elapsed: render.status === "rendering" ? Math.max(0, (now - render.started) / 1000) : 0, playing, time, generate, cancel, toggle, pause, seek, audioEl }
+}
 
 const fmtDb = (db: number) => `${db > 0 ? "+" : ""}${db}`
 
@@ -33,8 +143,10 @@ function parseDb(text: string): number | null {
   return Number.isFinite(n) && n >= MIN_GAIN_DB && n <= MAX_GAIN_DB ? n : null
 }
 
-export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, onClose }: {
+export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, onApply, onClose }: {
   project: Project
+  /** The project's folder, for the rendered preview. */
+  folder: string
   clip: Clip
   playhead: number
   /** The clip's media URL (its video or its sound file). */
@@ -60,6 +172,15 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
   // Where the loop starts and ends in the source: from the playhead when it's inside the clip, else the in point.
   const loopFrom = playhead >= clip.start && playhead < clipEnd(clip) - 0.5 ? clip.in + (playhead - clip.start) : clip.in
   const loopTo = Math.min(clip.out, loopFrom + LOOP)
+  const rendered = useRenderedPreview(folder, clip)
+  // What the rendered preview must match to stand for the controls.
+  const renderKey = JSON.stringify(audio ?? null)
+  const renderCurrent = rendered.render.status === "ready" && rendered.render.key === renderKey
+  const { pause: pauseRendered } = rendered
+  // A change makes the rendered preview stale: it stops, and Preview plays the live chain again.
+  useEffect(() => {
+    if (!renderCurrent) pauseRendered()
+  }, [renderCurrent]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The preview's chain follows the controls (at 0 dB while the volume field isn't a valid number), rebuilt only when they change.
   const previewKey = JSON.stringify((audio === null ? normalizeClipAudio({ fx }) : audio) ?? null)
@@ -87,7 +208,19 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
     []
   )
 
+  function stopLive() {
+    el.current?.pause()
+    cancelAnimationFrame(raf.current)
+    setPlaying(false)
+  }
+
   function togglePreview() {
+    // A rendered preview that matches the controls plays instead of the live chain.
+    if (renderCurrent) {
+      stopLive()
+      rendered.toggle()
+      return
+    }
     const a = el.current
     if (!a) return
     if (playing) {
@@ -96,6 +229,7 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
       setPlaying(false)
       return
     }
+    rendered.pause()
     if (!graph.current) {
       // Made inside the press, so the browser lets it start.
       const ctx = new AudioContext()
@@ -151,6 +285,82 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
   const info = audioFxInfo(focused)
   const unpreviewed = fx.filter((f) => !fxPreviewed(f.type)).map((f) => audioFxInfo(f.type).name)
   const gainNumber = gainDb ?? 0
+  const r = rendered.render
+  const previewPlaying = renderCurrent ? rendered.playing : playing
+
+  // Effects the live preview can't play: named, with Generate preview (and its player once rendered).
+  const exportOnly = unpreviewed.length > 0 && (
+    <div
+      role="region"
+      aria-label="Export-only effects"
+      data-audio-render={r.status === "ready" ? (renderCurrent ? "ready" : "stale") : r.status}
+      className={cn(
+        "grid gap-2 rounded-lg border p-3 text-xs",
+        renderCurrent
+          ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-950 dark:border-emerald-400/40 dark:text-emerald-50"
+          : "border-amber-600/40 bg-amber-500/10 text-amber-950 dark:border-amber-400/40 dark:text-amber-50"
+      )}
+    >
+      <div className="flex gap-2">
+        {renderCurrent ? <CircleCheck aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />}
+        <div className="grid gap-1">
+          <div className="text-sm font-medium">{renderCurrent ? "Preview ready — includes all effects" : "Export-only effects"}</div>
+          {!renderCurrent && <p className="leading-snug">Heard in export only: the preview can&apos;t play it faithfully.</p>}
+          <p className="leading-snug" data-audio-export-only>{unpreviewed.join(", ")}</p>
+        </div>
+      </div>
+      {r.status === "ready" && (
+        <div className="grid gap-1.5" data-audio-render-player>
+          <div className="flex items-center gap-2">
+            <Button type="button" size="icon-sm" variant="outline" aria-label={rendered.playing ? "Pause rendered preview" : "Play rendered preview"} aria-pressed={rendered.playing} onClick={() => {
+              stopLive()
+              rendered.toggle()
+            }}>
+              {rendered.playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </Button>
+            <input
+              type="range"
+              aria-label="Rendered preview position"
+              min={0}
+              max={Math.max(0.01, r.durationSec)}
+              step={0.01}
+              value={Math.min(rendered.time, r.durationSec)}
+              onChange={(e) => rendered.seek(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-editor-accent"
+            />
+            <span className="shrink-0 tabular-nums opacity-80">{formatClock(rendered.time)} / {formatClock(r.durationSec)}</span>
+          </div>
+          <p className="opacity-80">Rendered preview (with all effects)</p>
+        </div>
+      )}
+      {r.status === "ready" && !renderCurrent && <p className="font-medium" data-audio-render-stale>Settings changed since this preview</p>}
+      {r.status === "error" && <p role="alert" className="text-destructive">{r.message}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        {r.status === "rendering" ? (
+          <>
+            <Button type="button" size="sm" variant="secondary" disabled aria-live="polite">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Rendering…
+            </Button>
+            <span className="tabular-nums opacity-80" data-audio-render-elapsed>{rendered.elapsed.toFixed(1)} s</span>
+            <Button type="button" size="sm" variant="ghost" onClick={rendered.cancel} data-audio-render-cancel>Cancel</Button>
+          </>
+        ) : r.status === "ready" ? (
+          !renderCurrent && (
+            <Button type="button" size="sm" variant="secondary" disabled={audio === null} onClick={() => void rendered.generate(audio ?? undefined, renderKey)} data-audio-render-go>
+              <RotateCw className="h-3.5 w-3.5" />
+              Re-render
+            </Button>
+          )
+        ) : (
+          <Button type="button" size="sm" variant="secondary" disabled={audio === null} onClick={() => void rendered.generate(audio ?? undefined, renderKey)} data-audio-render-go>
+            {r.status === "error" ? "Retry" : "Generate preview"}
+          </Button>
+        )}
+        <span className="opacity-80">Preview covers the first {PREVIEW_CAP} s.</span>
+      </div>
+    </div>
+  )
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -261,17 +471,19 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
                 ))}
                 <p className="text-xs text-muted-foreground">* Heard in the export only; the preview plays it dry.</p>
               </div>
-              <div aria-live="polite" className="grid content-start gap-2 rounded-lg border border-border p-3 text-xs" data-audio-fx-info>
-                <div className="text-sm font-medium">{info.name}</div>
-                <p className="leading-snug">{info.description}</p>
-                {!fxPreviewed(info.id) && <p className="leading-snug text-muted-foreground">Heard in export only: the preview can&apos;t play it faithfully.</p>}
-                <div className="grid gap-0.5">
-                  <div className="font-medium text-muted-foreground">Best for</div>
-                  <p className="leading-snug">{info.bestFor}</p>
-                </div>
-                <div className="grid gap-0.5">
-                  <div className="font-medium text-muted-foreground">Avoid when</div>
-                  <p className="leading-snug">{info.avoid}</p>
+              <div className="grid min-w-0 content-start gap-3">
+                {exportOnly}
+                <div aria-live="polite" className="grid content-start gap-2 rounded-lg border border-border p-3 text-xs" data-audio-fx-info>
+                  <div className="text-sm font-medium">{info.name}</div>
+                  <p className="leading-snug">{info.description}</p>
+                  <div className="grid gap-0.5">
+                    <div className="font-medium text-muted-foreground">Best for</div>
+                    <p className="leading-snug">{info.bestFor}</p>
+                  </div>
+                  <div className="grid gap-0.5">
+                    <div className="font-medium text-muted-foreground">Avoid when</div>
+                    <p className="leading-snug">{info.avoid}</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -334,16 +546,24 @@ export function AudioLevelsDialog({ project, clip, playhead, mediaUrl, onApply, 
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
-            <Button type="button" variant="outline" onClick={togglePreview} aria-pressed={playing} data-audio-preview>
-              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {playing ? "Pause" : "Preview"}
+            <Button type="button" variant="outline" onClick={togglePreview} aria-pressed={previewPlaying} data-audio-preview data-audio-preview-source={renderCurrent ? "rendered" : "live"}>
+              {previewPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {previewPlaying ? "Pause" : "Preview"}
             </Button>
             <p className="text-xs text-muted-foreground" aria-live="polite">
-              {unpreviewed.length > 0 ? `Not previewed: ${unpreviewed.join(", ")} (applied in export). ` : ""}
-              Loops {Math.round((loopTo - loopFrom) * 10) / 10} s from {playhead >= clip.start && playhead < clipEnd(clip) - 0.5 ? "the playhead" : "the clip's start"}.
+              {renderCurrent && r.status === "ready" ? (
+                `Plays the rendered preview (with all effects), ${Math.round(r.durationSec * 10) / 10} s from the clip's start.`
+              ) : (
+                <>
+                  {unpreviewed.length > 0 ? `Not previewed: ${unpreviewed.join(", ")} (applied in export). ` : ""}
+                  Loops {Math.round((loopTo - loopFrom) * 10) / 10} s from {playhead >= clip.start && playhead < clipEnd(clip) - 0.5 ? "the playhead" : "the clip's start"}.
+                </>
+              )}
             </p>
             {/* The preview's own element: never on screen, played only through the dialog's chain. */}
             <audio ref={el} preload="none" className="hidden" />
+            {/* The rendered preview's element, played as it is. */}
+            {rendered.audioEl}
           </div>
 
           <DialogFooter>

@@ -752,6 +752,7 @@ export function Editor({
         <AudioLevelsDialog
           key={audioClip.id}
           project={project}
+          folder={folder}
           clip={audioClip}
           playhead={playhead}
           mediaUrl={isAudioClip(project, audioClip) ? audioUrl(audioClip.asset) : videoUrl(audioClip.asset)}
