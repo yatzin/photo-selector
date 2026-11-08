@@ -553,13 +553,12 @@ export function Editor({
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-4">
-        <ImportButton importer={importer} />
         <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
           <ArrowLeft className="h-4 w-4" />
           <span className="sr-only">All projects</span>
         </Link>
-        <h1 className="truncate font-heading text-base font-semibold">{project.name}</h1>
-        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+        <h1 className="min-w-0 truncate font-heading text-base font-semibold">{project.name}</h1>
+        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           {save === "saving" && <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>}
           {save === "saved" && <><Check className="h-3 w-3" /> Saved</>}
           {/* Only a failure is announced; Saving/Saved after every edit would be noise. */}
@@ -567,6 +566,7 @@ export function Editor({
             {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
           </span>
         </span>
+        <ImportButton importer={importer} />
         <div className="flex-1" />
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
