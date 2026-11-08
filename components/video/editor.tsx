@@ -175,7 +175,7 @@ export function Editor({
   const playhead = player.time
   const { toggle } = player
 
-  /** Opens the Transition / audio overlap dialog for the cut before clip `id`; the player pauses, so only the dialog's (muted) loop plays. */
+  /** Opens the Transition / audio overlap dialog for the cut before clip `id`; the player pauses (all its videos stop, so it is silent) and only the dialog's loop plays, with its sound. */
   const openTransition = (id: string) => {
     player.pause()
     setTransitionFor(id)

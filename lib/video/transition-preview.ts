@@ -1,4 +1,5 @@
-import type { TransitionType } from "./transition-types"
+import type { CutAudio, TransitionType } from "./transition-types"
+import { cutGains } from "./transitions"
 
 // How the preview draws a transition: CSS for the outgoing picture (`from`),
 // the incoming one (`to`, drawn over it) and an optional flat colour over both
@@ -126,4 +127,26 @@ export function loopFrame(plan: LoopPlan, t: number): { from: boolean; to: boole
   const start = plan.cut - half
   const inside = t >= start && t < plan.cut + half
   return { from: t < plan.cut + half, to: t >= start, progress: inside ? Math.min(1, Math.max(0, (t - start) / plan.duration)) : null }
+}
+
+/**
+ * What the loop plays for sound at `t`: whether each clip's video runs (the
+ * outgoing one until its cut's overlap ends, the incoming one from where it
+ * starts, a J-cut's lead or an L-cut's tail included) and its volume, as the
+ * editor's preview and the export mix it (cutGains: a transition's
+ * equal-power crossfade, or the J- or L-cut's timing).
+ */
+export function loopSound(plan: LoopPlan, t: number, audio: CutAudio | null): { from: { plays: boolean; gain: number }; to: { plays: boolean; gain: number } } {
+  const half = plan.duration / 2
+  const start = plan.cut - Math.max(half, audio?.mode === "j" ? audio.duration : 0)
+  const end = plan.cut + Math.max(half, audio?.mode === "l" ? audio.duration : 0)
+  const inside = t >= start && t < end
+  const tw = half > 0 && t >= plan.cut - half && t < plan.cut + half
+  const g = inside
+    ? cutGains(
+        { from: 0, to: 1, cut: plan.cut, start, end, audio, transition: tw ? { from: 0, to: 1, cut: plan.cut, duration: plan.duration, type: "fade", progress: (t - (plan.cut - half)) / plan.duration } : null },
+        t
+      )
+    : t < start ? { out: 1, in: 0 } : { out: 0, in: 1 }
+  return { from: { plays: t < end, gain: g.out }, to: { plays: t >= start, gain: g.in } }
 }

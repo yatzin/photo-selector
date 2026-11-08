@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { TRANSITION_TYPES } from "./transition-types"
-import { cssText, loopFrame, loopPlan, transitionKeyframes, transitionLook } from "./transition-preview"
+import { cssText, loopFrame, loopPlan, loopSound, transitionKeyframes, transitionLook } from "./transition-preview"
 
 describe("transitionLook", () => {
   it("draws a crossfade, a wipe and a slide as xfade does", () => {
@@ -52,5 +52,32 @@ describe("loopPlan and loopFrame", () => {
     const cut = loopPlan(6, 6, 0)
     expect(loopFrame(cut, 1.99)).toEqual({ from: true, to: false, progress: null })
     expect(loopFrame(cut, 2)).toEqual({ from: false, to: true, progress: null })
+  })
+})
+
+describe("loopSound", () => {
+  it("plays the outgoing sound before the cut and the incoming one after, crossfading through a transition", () => {
+    const plan = loopPlan(5, 5, 1)
+    expect(loopSound(plan, 0, null)).toEqual({ from: { plays: true, gain: 1 }, to: { plays: false, gain: 0 } })
+    const mid = loopSound(plan, plan.cut, null)
+    expect(mid.from.gain).toBeCloseTo(Math.SQRT1_2)
+    expect(mid.to.gain).toBeCloseTo(Math.SQRT1_2)
+    expect(loopSound(plan, plan.cut + 0.6, null)).toEqual({ from: { plays: false, gain: 0 }, to: { plays: true, gain: 1 } })
+  })
+
+  it("cuts the sound at a hard cut", () => {
+    const plan = loopPlan(5, 5, 0)
+    expect(loopSound(plan, plan.cut - 0.01, null).from.gain).toBe(1)
+    expect(loopSound(plan, plan.cut, null)).toEqual({ from: { plays: false, gain: 0 }, to: { plays: true, gain: 1 } })
+  })
+
+  it("starts the incoming sound early for a J-cut and runs the outgoing one on for an L-cut", () => {
+    const plan = loopPlan(5, 5, 0)
+    const j = { mode: "j" as const, duration: 1 }
+    expect(loopSound(plan, plan.cut - 1.1, j).to.plays).toBe(false)
+    expect(loopSound(plan, plan.cut - 0.5, j)).toEqual({ from: { plays: true, gain: 1 }, to: { plays: true, gain: 1 } })
+    const l = { mode: "l" as const, duration: 1 }
+    expect(loopSound(plan, plan.cut + 0.5, l)).toEqual({ from: { plays: true, gain: 1 }, to: { plays: true, gain: 1 } })
+    expect(loopSound(plan, plan.cut + 1.01, l).from.plays).toBe(false)
   })
 })
