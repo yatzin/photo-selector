@@ -116,6 +116,8 @@ export function useSelectionPlayer(selection: SourceSelection, audio: ClipAudio 
       a.pause()
       stopLoop()
       setPlaying(false)
+      // Where it stopped, not the last frame's time, so Set In/Out to playhead takes what was heard.
+      setPosition(a.currentTime)
       return
     }
     if (audio && !graph.current) {
