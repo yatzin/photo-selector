@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, t
 import { TriangleAlert } from "lucide-react"
 import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
 import { transitionLook, type LayerStyle } from "@/lib/video/transition-preview"
-import { laneClipAt, transitionAt } from "@/lib/video/transitions"
+import { laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
@@ -48,7 +48,7 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
  * transform it fills the canvas, letterboxed in black (object-contain); a
  * text's box (`{ w, h }`) is placed at its own size, centred, even then.
  */
-function placement(aspect: Content, W: number, H: number, t: Transform): CSSProperties {
+export function placement(aspect: Content, W: number, H: number, t: Transform): CSSProperties {
   if (isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
   const r = clipRect(aspect, W, H, t)
   const cl = cropLeftOf(t)
@@ -77,7 +77,7 @@ const TEXT_LAYOUT_PX = 100
  * export's drawtext puts it. Spaces are kept; nothing wraps. Hidden (its box
  * still placed) until the font has loaded, so it never shows in another font.
  */
-function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
+export function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
   const l = textLayout(text, TEXT_LAYOUT_PX)
   return (
     <svg viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="none" aria-hidden className={cn("absolute inset-0 h-full w-full", !ready && "invisible")}>
@@ -95,7 +95,7 @@ function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
 const pct = (n: number) => `${n * 100}%`
 
 /** A transition's look for one picture (lib/video/transition-preview) as the style of its canvas-sized layer. */
-const fxStyle = (s: LayerStyle | undefined): CSSProperties =>
+export const fxStyle = (s: LayerStyle | undefined): CSSProperties =>
   s ? { opacity: s.opacity, transform: s.transform, clipPath: s.clipPath, maskImage: s.maskImage, WebkitMaskImage: s.maskImage, filter: s.filter } : {}
 
 /** z-index of a lane's picture: the clip on show, and under it a transition's outgoing clip. */
@@ -412,12 +412,20 @@ export function Preview({
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
               const fx = w ? transitionLook(w.type, w.progress) : null
-              // Where the player plays a transition's outgoing video: the other slot, or the active one under a still.
-              const tailSlot = from && !isStill(project, from) ? (clip && !isStill(project, clip) ? 1 - player.active[lane] : player.active[lane]) : -1
+              // What the player's slots hold: the lane's own video (through an overlap, the incoming one from its
+              // start, a J-cut's lead too) and the overlap's outgoing video as the tail, in the other slot or under a still.
+              const own = laneElementAt(track, look)
+              const ownClip = own ? track.clips[own.index] : undefined
+              const ow = overlapAt(track, look)
+              const tailClip = ow && !isStill(project, track.clips[ow.from]) ? track.clips[ow.from] : undefined
+              const ownVideo = ownClip !== undefined && !isStill(project, ownClip)
+              const tailSlot = tailClip ? (ownVideo ? 1 - player.active[lane] : player.active[lane]) : -1
               return [0, 1].map((slot) => {
-                const incoming = clip !== undefined && !isStill(project, clip) && player.active[lane] === slot
-                const outgoing = !incoming && slot === tailSlot
-                const shown = incoming ? clip : outgoing ? from : undefined
+                const held = slot === tailSlot ? tailClip : ownVideo && player.active[lane] === slot ? ownClip : undefined
+                // A held video shows when it's the picture there (laneClipAt), or the outgoing one of a running transition;
+                // an audio overlap's video outside the transition plays on unseen.
+                const outgoing = held !== undefined && held === from
+                const shown = held !== undefined && (held === clip || outgoing) ? held : undefined
                 return (
                   <div key={`${lane}-${slot}`} className="absolute inset-0" style={shown ? { zIndex: laneZ(lane, outgoing), ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
                     <video

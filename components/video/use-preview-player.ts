@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
 import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { entrySourceTime, laneClipAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
+import { cutGains, entrySourceTime, laneElementAt, overlapAt, tailSourceTime } from "@/lib/video/transitions"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
 // has a lane of two <video> elements that take turns: one shows the track's
@@ -22,6 +22,13 @@ import { entrySourceTime, laneClipAt, tailSourceTime, transitionAt } from "@/lib
 // lane's tail in the other slot (in the active one when the incoming clip is
 // a still) until the window ends; the preview draws the two blended. Their
 // sound crossfades with equal-power gains.
+//
+// A J-cut or L-cut at a cut widens that same window (overlapAt): the incoming
+// clip's video starts its length before the cut (its picture hidden until
+// the transition, or the cut) and the outgoing one plays on that long after
+// it (its picture hidden after them). Their volumes follow cutGains: each
+// sound full from its new edge (a short fade there), cut at the picture cut
+// on the other side, both mixed in between.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
@@ -37,7 +44,8 @@ const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, prime
 /** The same clip for playback: what plays and when (a transform only changes where it shows, a mute only what's heard). */
 const samePlayback = (a: Clip, b: Clip) =>
   a === b ||
-  (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start && a.transition?.type === b.transition?.type && a.transition?.duration === b.transition?.duration)
+  (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start && a.transition?.type === b.transition?.type && a.transition?.duration === b.transition?.duration &&
+    a.cutAudio?.mode === b.cutAudio?.mode && a.cutAudio?.duration === b.cutAudio?.duration)
 
 /** Whether two lists of track clips play the same lane by lane (an empty lane matches a missing one). */
 function sameClips(a: Clip[][], b: Clip[][]): boolean {
@@ -70,8 +78,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const stallRef = useRef<{ v: HTMLVideoElement | null; time: number; at: number }>({ v: null, time: 0, at: 0 })
   // True while the other lanes are paused for a stalled clock.
   const heldRef = useRef(false)
-  // Per lane, the frame time (ms) of its last corrective seek.
+  // Per lane, the frame time (ms) of its last corrective seek, and of its tail's.
   const lastResync = useRef<number[]>(Array.from({ length: MAX_TRACKS }, () => -Infinity))
+  const lastTailResync = useRef<number[]>(Array.from({ length: MAX_TRACKS }, () => -Infinity))
   // The clips the preview last seeked for, to tell a clip edit from a mute toggle (samePlayback ignores the mute).
   const shownClips = useRef<Clip[][] | null>(null)
   const [active, setActive] = useState<number[]>(() => Array.from({ length: MAX_TRACKS }, () => 0))
@@ -150,11 +159,11 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     (lane: number, t: number) => {
       const L = lanes.current[lane]
       const track = projectRef.current.tracks[lane]
-      const at = track ? laneClipAt(track, t) : null
+      const at = track ? laneElementAt(track, t) : null
       L.index = at ? at.index : -1
       const clip = at && track ? track.clips[at.index] : undefined
-      // Inside a transition the outgoing video plays on as the tail: in the other slot, or in this one under a still.
-      const w = track ? transitionAt(track, t) : null
+      // Inside a transition or audio overlap the outgoing video plays on as the tail: in the other slot, or in this one under a still.
+      const w = track ? overlapAt(track, t) : null
       const from = w && track ? track.clips[w.from] : undefined
       const incomingVideo = clip !== undefined && at !== null && !isImage(clip)
       L.tail = from && !isImage(from) ? (incomingVideo ? 1 - L.active : L.active) : -1
@@ -169,18 +178,18 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     [load, isImage, nextVideo, upcoming]
   )
 
-  /** Through a transition, the outgoing video's sound fades out as the incoming one's fades in (equal power); else full volume. */
+  /** Through a cut's overlap, the two videos' volumes as cutGains says (a transition's equal-power crossfade, or a J- or L-cut's); else full volume. */
   const mixVolumes = useCallback((lane: number, t: number) => {
     const L = lanes.current[lane]
     const track = projectRef.current.tracks[lane]
-    const w = track ? transitionAt(track, t) : null
-    const g = w ? (w.progress * Math.PI) / 2 : 0
+    const w = track ? overlapAt(track, t) : null
+    const g = w ? cutGains(w, t) : { out: 1, in: 1 }
     const active = el(lane, L.active)
     if (L.tail >= 0) {
       const tail = el(lane, L.tail)
-      if (tail) tail.volume = Math.cos(g)
+      if (tail) tail.volume = g.out
     }
-    if (active && L.tail !== L.active) active.volume = w ? Math.sin(g) : 1
+    if (active && L.tail !== L.active) active.volume = g.in
   }, [])
 
   /** Moves the frame-rate playhead and tells its followers. */
@@ -353,8 +362,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         const L = lanes.current[lane]
         const starts = trackStarts(track)
         const current = track.clips[L.index]
-        // A transition's window is over: its outgoing video stops, and its slot waits on the next video.
-        if (L.tail >= 0 && transitionAt(track, t)?.to !== L.index) {
+        // A transition's (or audio overlap's) window is over: its outgoing video stops, and its slot waits on the next video.
+        if (L.tail >= 0 && overlapAt(track, t)?.to !== L.index) {
           const slot = L.tail
           L.tail = -1
           el(lane, slot)?.pause()
@@ -364,9 +373,23 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         // Move on just before the current clip's out point, as if at its end.
         const end = current ? starts[L.index] + clipLength(current) : Infinity
         const look = t >= end - END_MARGIN ? Math.max(t, end) : t
-        const at = laneClipAt(track, look)
+        const at = laneElementAt(track, look)
         const index = at ? at.index : -1
         if (index === L.index) {
+          // Keep the tail (an overlap's outgoing video) with the clock too: an L-cut runs it for seconds.
+          const tw = L.tail >= 0 && !heldRef.current ? overlapAt(track, t) : null
+          const tv = tw ? el(lane, L.tail) : null
+          if (tw && tv && !tv.paused && !tv.seeking && !tv.ended) {
+            const to = resyncTo({ current: tv.currentTime, expected: tailSourceTime(track, tw, t), limit: Number.isFinite(tv.duration) ? tv.duration - END_MARGIN : Infinity, now, lastResync: lastTailResync.current[lane] })
+            if (to !== null) {
+              lastTailResync.current[lane] = now
+              try {
+                tv.currentTime = to
+              } catch {
+                // Not seekable yet.
+              }
+            }
+          }
           // Keep a following lane's video with the clock (not while it's held for a stall).
           const clip = lane === master || heldRef.current ? undefined : playableClip(lane)
           const v = el(lane, L.active)
@@ -388,8 +411,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         cut = true
         const old = L.active
         const v = el(lane, old)
-        // A transition from the video on show starts: that video plays on as the tail.
-        const w = transitionAt(track, look)
+        // A transition or audio overlap from the video on show starts: that video plays on as the tail.
+        const w = overlapAt(track, look)
         const entering = w !== null && w.to === index && w.from === L.index && current !== undefined && !isImage(current)
         L.index = index
         const next = at ? track.clips[index] : undefined

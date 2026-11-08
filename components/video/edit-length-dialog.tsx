@@ -136,7 +136,7 @@ export function EditLengthDialog({ project, clip, track, onApply, onUnlink, onCl
             <div className="flex flex-wrap items-center gap-2">
               <p role="alert" className="text-xs text-destructive">{problem}</p>
               {problem === LINKED && (
-                <Button type="button" size="sm" variant="outline" onClick={onUnlink}>Unlink this clip&apos;s transitions</Button>
+                <Button type="button" size="sm" variant="outline" onClick={onUnlink}>Unlink this clip</Button>
               )}
             </div>
           )}

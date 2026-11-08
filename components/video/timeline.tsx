@@ -5,11 +5,11 @@ import { Blend, Film, Image as ImageIcon, Magnet, Plus, Type, Volume2, VolumeX, 
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, adjoins, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, isTextClip, leftTrimDraft, MAX_TRACKS, MIN_CLIP, moveClip,
+  addClip, addTrack, adjoins, assetKind, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS, MIN_CLIP, moveClip,
   removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setClipText, splitClip, totalLength, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
-import { linkedChain, moveGroup, setTransition, transitionName, unlinkClip } from "@/lib/video/transitions"
+import { linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
 import {
   autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
@@ -46,9 +46,12 @@ import { Thumb } from "./thumb"
 // Horizontal / Vertical (letters across or stacked). A ramp at each end of the
 // block shows how long its in and out animations run. A transition is an amber
 // block straddling its cut (click: the Transition dialog); the selected clip
-// has a white circle at each cut with an adjoining clip for adding one. A clip
-// linked by a transition can't be dragged off or trimmed apart at that cut: it
-// shows a red X and a notice offers to unlink it or move its whole chain.
+// has a white circle at each cut with an adjoining clip for adding one (or an
+// audio overlap: the same dialog). A J-cut or L-cut is a thin teal band along
+// the bottom of the clip its sound overlaps, beside the cut. A clip linked by
+// a transition or an audio overlap can't be dragged off or trimmed apart at
+// that cut: it shows a red X and a notice offers to unlink it or move its
+// whole chain.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -340,11 +343,11 @@ export function Timeline({
     const others = p.tracks[0].clips.filter((c) => c.id !== ignore)
     const slot = baseInsertion(others, start, ignore).index
     const after = others[slot]
-    return slot > 0 && after?.transition && adjoins(others[slot - 1], after) ? after.id : null
+    return slot > 0 && after && linksBefore(after) && adjoins(others[slot - 1], after) ? after.id : null
   }
 
-  /** The notice for an edit refused because a transition links clips (`cut`: the drop would part that one cut). */
-  const linkedNotice = (id: string, extra: Partial<Notice> = {}, cut = false): Notice => ({ text: "This clip is linked by a transition.", unlink: { id, cut }, ...extra })
+  /** The notice for an edit refused because a transition or audio overlap links clips (`cut`: the drop would part that one cut). */
+  const linkedNotice = (id: string, extra: Partial<Notice> = {}, cut = false): Notice => ({ text: "This clip is linked by a transition or audio overlap.", unlink: { id, cut }, ...extra })
 
   /** The hint and guide for a snapping drag landing on `track`: none on a snapped V1 (its insertion line doesn't snap). */
   const snapState = (track: number, off: boolean, guide: number | null) => (track === 0 && isMagnetic(live.current.project) ? null : { off, at: off ? null : guide })
@@ -514,12 +517,12 @@ export function Timeline({
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
-    // An edge at a cut with a transition can't move apart from its neighbour (a snapped V1 keeps them together, so there it can).
+    // An edge at a cut with a transition or audio overlap can't move apart from its neighbour (a snapped V1 keeps them together, so there it can).
     const p0 = live.current.project
     const clips0 = p0.tracks[track]?.clips ?? []
     const k0 = clips0.findIndex((c) => c.id === clip.id)
     const neighbour = edge === "in" ? clips0[k0] : clips0[k0 + 1]
-    const linkedEdge = neighbour?.transition && adjoins(clips0[edge === "in" ? k0 - 1 : k0], neighbour)
+    const linkedEdge = neighbour && linksBefore(neighbour) && adjoins(clips0[edge === "in" ? k0 - 1 : k0], neighbour)
     if (linkedEdge && !(track === 0 && isMagnetic(p0))) {
       onSelect(clip.id)
       refuse(clip.id, linkedNotice(clip.id))
@@ -562,9 +565,11 @@ export function Timeline({
         if (s === null) return
         // Off a snapped base leftTrimDraft's seconds are s itself.
         const trimmed = (p: Project) => (edge === "in" ? trimClip(p, clip.id, "in", leftTrimDraft(p, clip.id, s).seconds) : trimClip(p, clip.id, edge, s))
-        // A transition the trim leaves without enough footage goes (fixTransitions): say so.
-        const count = (p: Project) => p.tracks.reduce((n, t) => n + t.clips.filter((c) => c.transition).length, 0)
-        if (count(trimmed(live.current.project)) < count(live.current.project)) refuse(null, { text: "Transition removed: not enough footage left at the cut." })
+        // A transition or audio overlap the trim leaves without enough footage goes (fixTransitions): say so.
+        const count = (p: Project, key: "transition" | "cutAudio") => p.tracks.reduce((n, t) => n + t.clips.filter((c) => c[key]).length, 0)
+        const after = trimmed(live.current.project)
+        if (count(after, "transition") < count(live.current.project, "transition")) refuse(null, { text: "Transition removed: not enough footage left at the cut." })
+        else if (count(after, "cutAudio") < count(live.current.project, "cutAudio")) refuse(null, { text: "Audio overlap removed: not enough footage left at the cut." })
         onChange(trimmed)
       },
       true
@@ -619,7 +624,7 @@ export function Timeline({
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
         if (stays) return setLanded(clip.id)
-        // A clip linked by a transition doesn't come apart: it springs back, and the notice offers to unlink it or move its whole chain.
+        // A clip linked by a transition or audio overlap doesn't come apart: it springs back, and the notice offers to unlink it or move its whole chain.
         const chain = linkedChain(live.current.project, clip.id)
         if (chain.length > 1) {
           const replay = last
@@ -708,7 +713,7 @@ export function Timeline({
     e.preventDefault()
     const t = timeAt(e.clientX)
     const snapOn = !e.altKey
-    // Not in between two clips a transition links.
+    // Not in between two clips a transition or audio overlap links.
     const cut = linkedCutAt(track, t)
     if (cut) return refuse(null, linkedNotice(cut, {}, true))
     if (assetId) {
@@ -1101,8 +1106,24 @@ export function Timeline({
                       </button>
                     )
                   })}
+                  {track.clips.map((clip, k) => {
+                    // An audio overlap: a thin teal band along the bottom of the clip its sound overlaps, from the cut.
+                    const a = clip.cutAudio
+                    if (!a || !adjoins(track.clips[k - 1], clip)) return null
+                    const label = `${a.mode === "j" ? "J" : "L"}-cut ${secs(a.duration)} s`
+                    return (
+                      <div
+                        key={`ca-${clip.id}`}
+                        aria-hidden
+                        title={label}
+                        data-cut-audio={a.mode}
+                        className="absolute bottom-0.5 z-[14] h-1 rounded-full bg-teal-500 ring-1 ring-teal-900/40 dark:bg-teal-300 dark:ring-teal-950/60"
+                        style={{ left: (a.mode === "j" ? clip.start - a.duration : clip.start) * zoom, width: Math.max(2, a.duration * zoom) }}
+                      />
+                    )
+                  })}
                   {(() => {
-                    // The selected clip's cuts with a neighbour: a white circle on each opens its Transition dialog.
+                    // The selected clip's cuts with a neighbour: a white circle on each opens its Transition / audio overlap dialog.
                     const k = !drag && !trim && selectedId ? track.clips.findIndex((c) => c.id === selectedId) : -1
                     if (k < 0) return null
                     const c = track.clips[k]
@@ -1113,19 +1134,21 @@ export function Timeline({
                     ]
                     return cuts.map(({ side, at, holder }) => {
                       const tr = holder.transition
+                      const a = holder.cutAudio
+                      const set = [tr ? `${transitionName(tr.type)}, ${secs(tr.duration)} s` : "", a ? `${a.mode === "j" ? "J" : "L"}-cut ${secs(a.duration)} s` : ""].filter(Boolean).join("; ")
                       return (
                         <button
                           key={`cut-${side}`}
                           type="button"
-                          aria-label={`Transition ${side} this clip`}
-                          title={tr ? `Transition ${side} this clip: ${transitionName(tr.type)}, ${secs(tr.duration)} s` : `Add a transition ${side} this clip`}
+                          aria-label={`Transition / audio overlap ${side} this clip${set ? `: ${set}` : ""}`}
+                          title={set ? `Transition / audio overlap ${side} this clip: ${set}` : `Add a transition or audio overlap ${side} this clip`}
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={() => onTransition(holder.id)}
                           className={cn(
                             // On the clip's top border at the cut, so the trim handles below it stay free.
                             "absolute z-30 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-[0_1px_4px_rgb(0_0_0/0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             tight ? "top-1 h-4 w-4" : "top-2 h-5 w-5",
-                            tr ? "bg-editor-accent text-editor-accent-foreground ring-2 ring-white" : "bg-white text-neutral-900 ring-1 ring-black/25 hover:bg-neutral-100"
+                            tr || a ? "bg-editor-accent text-editor-accent-foreground ring-2 ring-white" : "bg-white text-neutral-900 ring-1 ring-black/25 hover:bg-neutral-100"
                           )}
                           style={{ left: at * zoom }}
                         >
@@ -1176,10 +1199,10 @@ export function Timeline({
               onClick={() => {
                 const { id, cut } = notice.unlink!
                 setNotice(null)
-                onChange((p) => (cut ? setTransition(p, id, null) : unlinkClip(p, id)))
+                onChange((p) => (cut ? unlinkCut(p, id) : unlinkClip(p, id)))
               }}
             >
-              {notice.unlink.cut ? "Unlink this transition" : "Unlink this clip's transitions"}
+              {notice.unlink.cut ? "Unlink this cut" : "Unlink this clip"}
             </button>
           )}
           {notice.group && (

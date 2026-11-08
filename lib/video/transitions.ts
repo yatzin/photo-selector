@@ -197,8 +197,8 @@ export function laneClipAt(track: Track, t: number): { index: number; start: num
   return trackClipAt(track, t)
 }
 
-/** Where the outgoing clip of a running transition is in its source at `t` (past its out point after the cut). */
-export const tailSourceTime = (track: Track, w: TransitionWindow, t: number) => {
+/** Where the outgoing clip of a running transition or overlap is in its source at `t` (past its out point after the cut). */
+export const tailSourceTime = (track: Track, w: { from: number }, t: number) => {
   const c = track.clips[w.from]
   return c.in + (t - c.start)
 }
