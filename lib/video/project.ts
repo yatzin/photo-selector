@@ -1,3 +1,4 @@
+import { normalizeClipAudio, sameClipAudio, type ClipAudio } from "./audio-levels"
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 import {
@@ -28,10 +29,13 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
  * `edgeIn` and `edgeOut` bring the clip in from nothing at its start and take
  * it out to nothing at its end, inside its own span (see fixEdges); only at
  * an edge no clip adjoins, and never on a text clip (its animations do that).
+ * `audio` sets the overall level and the effects of the clip's sound
+ * (lib/video/audio-levels); only on a clip with sound (hasSound), absent at
+ * 0 dB with no effects. A muted clip stays silent whatever it says.
  */
 export type Clip = {
   id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition; cutAudio?: CutAudio
-  edgeIn?: EdgeTransition; edgeOut?: EdgeTransition
+  edgeIn?: EdgeTransition; edgeOut?: EdgeTransition; audio?: ClipAudio
 }
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
@@ -600,6 +604,22 @@ export function setClipMuted(p: Project, clipId: string, muted: boolean): Projec
 }
 
 /**
+ * Sets a clip's audio levels (lib/video/audio-levels: gain and effects);
+ * undefined, or 0 dB with no effects, removes the field. The same project when
+ * the clip has no sound (hasSound), the levels don't validate or nothing
+ * changes.
+ */
+export function setClipAudio(p: Project, clipId: string, audio: ClipAudio | undefined): Project {
+  const at = find(p, clipId)
+  const next = audio === undefined ? undefined : normalizeClipAudio(audio)
+  if (!at || next === null || !hasSound(p, at.clip) || sameClipAudio(at.clip.audio, next)) return p
+  const clip: Clip = { ...at.clip }
+  if (next) clip.audio = next
+  else delete clip.audio
+  return withTrack(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? clip : c)))
+}
+
+/**
  * Puts `clip` on track `trackIndex` (one past the top adds a layer; AUDIO_TRACK
  * the audio layer) at `start`, slid clear of overlaps; the same project when
  * it can't, or when an audio clip would leave the audio layer or another clip
@@ -625,6 +645,7 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   if (clip.cutAudio) placed.cutAudio = clip.cutAudio
   if (clip.edgeIn) placed.edgeIn = clip.edgeIn
   if (clip.edgeOut) placed.edgeOut = clip.edgeOut
+  if (clip.audio) placed.audio = clip.audio
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -780,12 +801,12 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   const local = timelineTime - clip.start
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
-  // Both halves keep the picture where it was, the mute and the text; the first half keeps a text's in animation, the second its out one.
+  // Both halves keep the picture where it was, the mute, the audio levels and the text; the first half keeps a text's in animation, the second its out one.
   // So with edge transitions: the first keeps the in edge, the second the out edge (each fitted to its piece by settle).
   const texts = clip.text ? splitAnims(clip.text, local, clipLength(clip) - local) : null
   const second = {
     start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}), ...(texts ? { text: texts[1] } : {}),
-    ...(clip.edgeOut ? { edgeOut: clip.edgeOut } : {}),
+    ...(clip.edgeOut ? { edgeOut: clip.edgeOut } : {}), ...(clip.audio ? { audio: clip.audio } : {}),
   }
   const first = withoutEdge(clip, "out")
   if (isStill(p, clip)) {
@@ -887,7 +908,8 @@ function isInt(v: unknown, max: number): v is number {
  * layer are dropped. `edgeIn` and `edgeOut` need a known type and a duration
  * from MIN_EDGE to MAX_EDGE; one the clip can't have at that edge
  * (isEdgeType, or any on a text clip) is dropped, as is one at an edge a clip
- * adjoins, and the two are fitted to the clip's length (fixEdges).
+ * adjoins, and the two are fitted to the clip's length (fixEdges). `audio`
+ * must validate (normalizeClipAudio); it's kept only on a clip with sound.
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -987,6 +1009,12 @@ export function parseProject(json: unknown): Project | null {
         if (!isRecord(e) || !isAnyTransitionType(e.type) || !isNum(e.duration) || e.duration < MIN_EDGE - 1e-9 || e.duration > MAX_EDGE + 1e-9) return null
         // A type that edge of this clip can't have (a picture one on an audio clip, or any on a text, whose animations do this) is dropped.
         if (!text && isEdgeType(e.type, edge, audioOnly)) clip[key] = { type: e.type, duration: e.duration }
+      }
+      if (c.audio !== undefined) {
+        const audio = normalizeClipAudio(c.audio)
+        if (audio === null) return null
+        // Only a clip with sound keeps its levels (an image's, a text's or a silent video's are dropped).
+        if (audio && asset && asset.hasAudio && assetKind(asset) !== "image") clip.audio = audio
       }
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null
