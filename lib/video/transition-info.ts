@@ -179,14 +179,14 @@ export const AUDIO_TRANSITION_GUIDES: Record<AudioTransitionType, TransitionGuid
     avoid: "Very short fades, where the fast middle sounds like a cut; sounds that need to overlap evenly for the whole fade.",
   },
   "audio-log": {
-    does: "A logarithmic crossfade: the incoming sound comes up quickly and the outgoing one falls away fast at first, so the new sound takes over early.",
-    bestFor: "Bringing in a voice or a hit that has to be heard right away; cutting from loud music to something quieter without a hole.",
-    avoid: "Quiet outgoing sounds that vanish too soon; swells and builds that should take their time.",
+    does: "A logarithmic crossfade: the incoming sound comes up almost at once while the outgoing one holds on until late, so both are loud through the middle.",
+    bestFor: "Bringing in a voice or a hit that has to be heard right away; joining two quiet sounds without any hole between them.",
+    avoid: "Two loud sounds, where the middle gets louder than either; music in different keys, which clashes while both play.",
   },
   "audio-exp": {
-    does: "An exponential crossfade: the outgoing sound holds on for most of the fade and the incoming one stays low until late, so the old sound lingers.",
-    bestFor: "Letting a musical ending or a reverb tail finish; a slow, dreamy change where the new sound creeps in.",
-    avoid: "Dialogue that must start clearly; fast edits, where the new sound arrives too late.",
+    does: "An exponential crossfade: the outgoing sound drops away early and the incoming one stays low until late, so there is a soft dip in the middle.",
+    bestFor: "Two loud sounds that would clash if both played at full level; a gentle breath between two music cues.",
+    avoid: "Dialogue that must start clearly; continuous ambience, where the dip is heard as a gap.",
   },
   "audio-dip": {
     does: "The outgoing sound fades down to silence, a short pause of silence follows, then the incoming sound fades up from silence.",

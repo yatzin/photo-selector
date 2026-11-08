@@ -2,12 +2,13 @@ import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { parseStreams, type ProbedStreams } from "./import"
-import { adjoins, allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
+import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
 import { customExpr, stepsFor, whipBlurFilters } from "./transition-expr"
-import { CUT_AUDIO_FADE, isCustomTransition, type TransitionType } from "./transition-types"
+import { CUT_AUDIO_FADE, isAudioCurve, isAudioTransitionType, isCustomTransition, isTransitionType, type AudioCurve, type EdgeTransition, type TransitionType } from "./transition-types"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -183,11 +184,55 @@ export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"
 }
 
 /**
- * A clip's sound in the uniform graph: `pre` seconds of it before its start
- * and `post` past its end, fading in over `fadeIn` from its first sample and
- * out over `fadeOut` to its last (0: no fade), on ffmpeg's afade curves.
+ * A piece of a clip's sound worked on its own: source seconds [from, to)
+ * through `filters`, giving `out` seconds. With `rates`, it plays as that many
+ * equal stretches of output, each at its rate (pitch and speed together, a
+ * tape's), and then `filters`.
  */
-type SoundSpan = { pre: number; post: number; fadeIn: number; fadeOut: number; inCurve: string; outCurve: string }
+type Piece = { from: number; to: number; out: number; filters: string[]; rates?: number[] }
+
+/**
+ * A clip's sound in the uniform graph: `pre` seconds of it before its start
+ * and `post` past its end, fading in over `fadeIn` from its first sample (or
+ * from `inAt` s into it) and out over `fadeOut` to its last (or from `outAt`)
+ * (0: no fade), on ffmpeg's afade curves. A creative transition or edge
+ * works its first (`head`) or last (`tail`) stretch on its own (Piece); the
+ * rest (the main stretch) plays as it is, `shorten` seconds less of it at the
+ * end (a tape start's head takes that time).
+ */
+type SoundSpan = {
+  pre: number; post: number; fadeIn: number; fadeOut: number; inCurve: string; outCurve: string
+  inAt?: number; outAt?: number; head?: Piece; tail?: Piece; shorten?: number
+}
+
+/** ffmpeg's afade curve for each audio crossfade (and edge fade) curve. */
+export const AFADE_CURVE: Record<AudioCurve, string> = { "audio-linear": "tri", "audio-equalpower": "qsin", "audio-scurve": "hsin", "audio-log": "log", "audio-exp": "exp" }
+
+/** A low-pass sweep's steps. */
+const SWEEP_STEPS = 8
+
+/** A low-pass sweep over `d` s as filters: the cutoff steps down from SWEEP_OPEN to SWEEP_CLOSED (`closing`) or up, each step enabled for its slice of the piece's time. */
+function sweep(d: number, closing: boolean): string[] {
+  return Array.from({ length: SWEEP_STEPS }, (_, k) => {
+    const f = Math.round(sweepCutoff((k + 0.5) / SWEEP_STEPS, closing))
+    return `lowpass=f=${f}:enable='between(t,${num((k * d) / SWEEP_STEPS)},${num(((k + 1) * d) / SWEEP_STEPS)})'`
+  })
+}
+
+const fadeUp = (d: number) => `afade=t=in:st=0:d=${num(d)}:curve=qsin`
+const fadeDown = (at: number, d: number) => `afade=t=out:st=${num(at)}:d=${num(d)}:curve=qsin`
+
+/** An echo trail over `out` s: the dry sound (`src` s of it, its last 30% faded) padded with silence, echoed (ECHO_DELAYS), its last half faded away. */
+const echoTail = (src: number, out: number) => [
+  fadeDown(src * 0.7, src * 0.3), `apad=whole_dur=${num(out)}`, `aecho=0.8:0.9:${ECHO_DELAYS.map((e) => Math.round(e.delay * 1000)).join("|")}:${ECHO_DELAYS.map((e) => e.decay).join("|")}`,
+  `atrim=0:${num(out)}`, fadeDown(out / 2, out / 2),
+]
+
+/** The telephone band's filters, on until `until` s into the piece (always when absent). */
+const phone = (until?: number) => {
+  const on = until === undefined ? "" : `:enable='lt(t,${num(until)})'`
+  return [`highpass=f=${PHONE_BAND.low}${on}`, `lowpass=f=${PHONE_BAND.high}${on}`]
+}
 
 /**
  * Where the sound of `clips[k]` (one track's) runs. A transition at a cut
@@ -198,20 +243,73 @@ type SoundSpan = { pre: number; post: number; fadeIn: number; fadeOut: number; i
  * (tri) of CUT_AUDIO_FADE (at most the overlap) at the new edge; the other
  * sound cuts at the cut. Never before the timeline's 0 or the source's start,
  * nor past the source's end.
+ *
+ * Between audio clips the transition's own type decides: a curve crossfades
+ * on its afade curve (AFADE_CURVE), Dip to silence fades the outgoing sound
+ * out over the first 40% and the incoming one in over the last 40%, and the
+ * creative ones work the outgoing sound's last stretch (a low-pass sweep or a
+ * telephone band while it fades over the transition; a tape stop or an echo
+ * trail from half the transition before its out point, the transition long)
+ * while the incoming one fades in (in the telephone band for its first three
+ * quarters, for the telephone swap). At a free edge a picture clip's sound
+ * fades with its picture (equal power), and an audio clip's as its edge
+ * transition says, inside the clip.
  */
 function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
   const c = clips[k]
   const next = clips[k + 1]
   const span: SoundSpan = { pre: 0, post: 0, fadeIn: 0, fadeOut: 0, inCurve: "qsin", outCurve: "qsin" }
+  // What a creative type works on its own, built once pre and post are known.
+  let head: ((s: SoundSpan) => void) | null = null
+  let tail: ((s: SoundSpan) => void) | null = null
+  const length = clipLength(c)
+  const audioClip = isAudioClip(p, c)
   if (k > 0 && adjoins(clips[k - 1], c)) {
     const a = c.cutAudio
+    const tr = c.transition
     if (a?.mode === "j") Object.assign(span, { pre: a.duration, fadeIn: Math.min(CUT_AUDIO_FADE, a.duration), inCurve: "tri" })
-    else if (!a && c.transition) Object.assign(span, { pre: c.transition.duration / 2, fadeIn: c.transition.duration })
+    else if (!a && tr && isAudioTransitionType(tr.type)) {
+      const d = tr.duration
+      if (isAudioCurve(tr.type)) Object.assign(span, { pre: d / 2, fadeIn: d, inCurve: AFADE_CURVE[tr.type] })
+      else if (tr.type === "audio-dip") Object.assign(span, { inAt: 0.1 * d, fadeIn: 0.4 * d })
+      else if (tr.type === "audio-telephone") {
+        span.pre = d / 2
+        head = (s) => {
+          s.head = { from: c.in - s.pre, to: c.in + d / 2, out: s.pre + d / 2, filters: [...phone(0.75 * (s.pre + d / 2)), fadeUp(s.pre + d / 2)] }
+        }
+      } else Object.assign(span, { pre: d / 2, fadeIn: d })
+    } else if (!a && tr) Object.assign(span, { pre: tr.duration / 2, fadeIn: tr.duration })
+  } else if (c.edgeIn) {
+    const e = c.edgeIn
+    const d = e.duration
+    if (!audioClip || isAudioCurve(e.type)) Object.assign(span, { fadeIn: d, inCurve: audioClip && isAudioCurve(e.type) ? AFADE_CURVE[e.type] : "qsin" })
+    else if (e.type === "audio-lowpass") head = (s) => { s.head = { from: c.in, to: c.in + d, out: d, filters: [...sweep(d, false), fadeUp(d)] } }
+    else if (e.type === "audio-tapestop") head = (s) => { Object.assign(s, { head: { from: c.in, to: c.in + d / 2, out: d, rates: tapeRates(false), filters: [fadeUp(0.3 * d)] }, shorten: d / 2 }) }
   }
   if (adjoins(c, next)) {
     const a = next!.cutAudio
+    const tr = next!.transition
     if (a?.mode === "l") Object.assign(span, { post: a.duration, fadeOut: Math.min(CUT_AUDIO_FADE, a.duration), outCurve: "tri" })
-    else if (!a && next!.transition) Object.assign(span, { post: next!.transition.duration / 2, fadeOut: next!.transition.duration })
+    else if (!a && tr && isAudioTransitionType(tr.type)) {
+      const d = tr.duration
+      if (isAudioCurve(tr.type)) Object.assign(span, { post: d / 2, fadeOut: d, outCurve: AFADE_CURVE[tr.type] })
+      else if (tr.type === "audio-dip") tail = (s) => { Object.assign(s, { outAt: s.pre + length - d / 2, fadeOut: 0.4 * d }) }
+      else if (tr.type === "audio-lowpass" || tr.type === "audio-telephone") {
+        span.post = d / 2
+        tail = (s) => {
+          const out = d / 2 + s.post
+          s.tail = { from: c.out - d / 2, to: c.out + s.post, out, filters: [...(tr.type === "audio-lowpass" ? sweep(out, true) : phone()), fadeDown(0, out)] }
+        }
+      } else if (tr.type === "audio-tapestop") tail = (s) => { s.tail = { from: c.out - d / 2, to: c.out, out: d, rates: tapeRates(true), filters: [fadeDown(0.7 * d, 0.3 * d)] } }
+      else tail = (s) => { s.tail = { from: c.out - d / 2, to: c.out, out: d, filters: echoTail(d / 2, d) } }
+    } else if (!a && tr) Object.assign(span, { post: tr.duration / 2, fadeOut: tr.duration })
+  } else if (c.edgeOut) {
+    const e = c.edgeOut
+    const d = e.duration
+    if (!audioClip || isAudioCurve(e.type)) Object.assign(span, { fadeOut: d, outCurve: audioClip && isAudioCurve(e.type) ? AFADE_CURVE[e.type] : "qsin" })
+    else if (e.type === "audio-lowpass") tail = (s) => { s.tail = { from: c.out - d, to: c.out, out: d, filters: [...sweep(d, true), fadeDown(0, d)] } }
+    else if (e.type === "audio-tapestop") tail = (s) => { s.tail = { from: c.out - d, to: c.out - d / 2, out: d, rates: tapeRates(true), filters: [fadeDown(0.7 * d, 0.3 * d)] } }
+    else if (e.type === "audio-echo") tail = (s) => { s.tail = { from: c.out - d, to: c.out - d / 2, out: d, filters: echoTail(d / 2, d) } }
   }
   // A forged or stale project can ask for more than there is: no negative delay, no sound from before the source or past its end.
   const pre = Math.max(0, Math.min(span.pre, c.in, c.start))
@@ -219,6 +317,8 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
   const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
   const post = Math.max(0, Math.min(span.post, asset ? asset.duration - c.out : 0))
   if (post < span.post) Object.assign(span, { post, fadeOut: Math.min(span.fadeOut, post) })
+  head?.(span)
+  tail?.(span)
   return span
 }
 
@@ -254,7 +354,13 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
  *
  * The audio layer's clips (inputs after every picture's) add only their
  * sound, trimmed and delayed to their start like a video clip's (silent when
- * muted); with no picture clip at all the canvas stays black.
+ * muted); with no picture clip at all the canvas stays black. Their audio
+ * transitions shape the two sounds at a cut (soundSpan); nothing else moves.
+ *
+ * Edge transitions: a clip with an in or out edge transition takes the run
+ * path (a run of its own), and its run's joined picture is xfaded with a copy
+ * of itself whose alpha is 0 (edgeOf), so the effect uncovers or covers the
+ * layers under it; its sound fades with it (soundSpan).
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
   const { width: W, height: H, fps } = p
@@ -271,13 +377,40 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const sound = (c: Clip, i: number) => {
     if (c.muted || p.assets[c.asset]?.hasAudio === false) return
     const a = sounds.get(c.id)!
+    // The main stretch: between any head and tail piece, `shorten` less at its end.
+    const mainFrom = a.head ? a.head.to : c.in - a.pre
+    const mainTo = (a.tail ? a.tail.from : c.out + a.post) - (a.shorten ?? 0)
+    const total = (a.head?.out ?? 0) + (mainTo - mainFrom) + (a.tail?.out ?? 0)
     const fades = [
-      ...(a.fadeIn > 0 ? [`afade=t=in:st=0:d=${num(a.fadeIn)}:curve=${a.inCurve}`] : []),
-      ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(clipLength(c) + a.pre + a.post - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
+      ...(a.fadeIn > 0 ? [`afade=t=in:st=${num(a.inAt ?? 0)}:d=${num(a.fadeIn)}:curve=${a.inCurve}`] : []),
+      ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(a.outAt ?? (a.head || a.tail ? total : clipLength(c) + a.pre + a.post) - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
     ].map((f) => `${f},`).join("")
-    parts.push(
-      `[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
-    )
+    const delay = `adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
+    if (!a.head && !a.tail) {
+      parts.push(`[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}${delay}`)
+      mix.push(`[a${i}]`)
+      return
+    }
+    // Pieces worked on their own (a creative transition or edge), joined end to end: each stretch is cut from its own copy of the sound.
+    const pieces: Piece[] = [...(a.head ? [a.head] : []), { from: mainFrom, to: mainTo, out: mainTo - mainFrom, filters: [] }, ...(a.tail ? [a.tail] : [])]
+    const cuts = pieces.flatMap((piece) => (piece.rates ? piece.rates.map((rate, k) => ({ rate, from: piece.from + ((piece.to - piece.from) * k) / piece.rates!.length, to: piece.from + ((piece.to - piece.from) * (k + 1)) / piece.rates!.length })) : [{ rate: 1, from: piece.from, to: piece.to }]))
+    parts.push(`[${i}:a]asplit=${cuts.length}${cuts.map((_, k) => `[s${i}x${k}]`).join("")}`)
+    let n = 0
+    const joined = pieces.map((piece, j) => {
+      const own = (piece.rates ?? [1]).map(() => {
+        const cut = cuts[n]
+        const label = `[s${i}y${n}]`
+        // A tape's stretch at its speed: the samples relabelled at a lower rate (slower and lower), then resampled.
+        const speed = piece.rates ? `,asetrate=${Math.round(48000 * cut.rate)},aresample=48000` : ""
+        parts.push(`[s${i}x${n}]atrim=${num(cut.from)}:${num(cut.to)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo${speed}${label}`)
+        n++
+        return label
+      })
+      const after = piece.filters.length > 0 ? `,${piece.filters.join(",")}` : ""
+      parts.push(`${own.join("")}${own.length > 1 ? `concat=n=${own.length}:v=0:a=1` : "anull"}${after}[s${i}p${j}]`)
+      return `[s${i}p${j}]`
+    })
+    parts.push(`${joined.join("")}concat=n=${joined.length}:v=0:a=1,${fades}${delay}`)
     mix.push(`[a${i}]`)
   }
   /**
@@ -332,13 +465,42 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       else runs.push([c])
     })
   }
+  /**
+   * A run's in or out edge transition on its joined stream (`joined`, on its
+   * own time from 0, `length` long): xfade between the run and a copy of it
+   * with its alpha set to 0 (the same picture, transparent), so the effect
+   * uncovers or covers whatever is under the run. The in edge fades from the
+   * copy's first `d` s into the run; the out edge from the run into the
+   * copy's last `d` s. The app's own transitions work on planar RGB, as at a cut.
+   */
+  const edgeOf = (joined: string, edge: "in" | "out", e: EdgeTransition, length: number, n: number): string => {
+    const type = e.type as TransitionType
+    const d = e.duration
+    const id = `${edge === "in" ? "ei" : "eo"}${n}`
+    parts.push(`${joined}format=yuva420p,split[${id}r][${id}c]`)
+    const copy = edge === "in" ? `trim=duration=${num(d)}` : `trim=start=${num(length - d)}`
+    parts.push(`[${id}c]${copy},setpts=PTS-STARTPTS,lutyuv=a=0[${id}t]`)
+    const [a, b] = edge === "in" ? [`[${id}t]`, `[${id}r]`] : [`[${id}r]`, `[${id}t]`]
+    const timing = `duration=${num(d)}:offset=${num(edge === "in" ? 0 : length - d)}`
+    if (isCustomTransition(type)) {
+      const blur = whipBlurFilters(type, W, H, edge === "in" ? 0 : length - d, d).map((f) => `,${f}`).join("")
+      parts.push(`${a}format=gbrap[${id}a]`, `${b}format=gbrap[${id}b]`)
+      parts.push(`[${id}a][${id}b]xfade=transition=custom:${timing}:expr='${customExpr(type, W / H, stepsFor(d, fps))}',format=yuva420p${blur}[${id}x]`)
+    } else {
+      parts.push(`${a}${b}xfade=transition=${type}:${timing}[${id}x]`)
+    }
+    return `[${id}x]`
+  }
   let under = "[bg]"
   runs.forEach((run, n) => {
     const out = n === runs.length - 1 ? "[v]" : `[l${n + 1}]`
     const first = run[0]
     const last = run[run.length - 1]
     const end = last.start + clipLength(last)
-    if (run.length === 1) {
+    // Picture edge transitions only (a text clip has none; parse keeps it so).
+    const edgeIn = first.edgeIn && isTransitionType(first.edgeIn.type) ? first.edgeIn : undefined
+    const edgeOut = last.edgeOut && isTransitionType(last.edgeOut.type) ? last.edgeOut : undefined
+    if (run.length === 1 && !edgeIn && !edgeOut) {
       const s = source(first)
       parts.push(`${under}${s.label}overlay=${s.at}:enable='between(t,${num(first.start)},${num(end)})':eof_action=pass${out}`)
       under = out
@@ -371,6 +533,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       }
       joined = `[tx${s.i}]`
     })
+    if (edgeIn) joined = edgeOf(joined, "in", edgeIn, end - first.start, n)
+    if (edgeOut) joined = edgeOf(joined, "out", edgeOut, end - first.start, n)
     parts.push(`${joined}setpts=PTS+${num(first.start)}/TB[u${n}]`)
     parts.push(`${under}[u${n}]overlay=x=0:y=0:enable='between(t,${num(first.start)},${num(end)})':eof_action=pass${out}`)
     under = out
@@ -401,8 +565,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
  * the graph is the same as it always was. A text clip (its PNG in `files`
- * under textFileKey), a transition, an audio overlap or a clip on the audio
- * layer always takes the uniform graph.
+ * under textFileKey), a transition, an audio overlap, an edge transition or
+ * a clip on the audio layer always takes the uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -419,7 +583,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 
