@@ -34,6 +34,11 @@ const settled = (v: Promise<AssetPeaks | null> | AssetPeaks | null | undefined):
 
 /** The peaks of `assetId` in project `projectFolder`; fetched only while `enabled`. */
 export function useAssetPeaks(projectFolder: string, assetId: string, enabled: boolean): AssetPeaks | null {
+  return useAssetPeaksState(projectFolder, assetId, enabled).peaks
+}
+
+/** useAssetPeaks with whether the request is still out ("loading") or gave nothing ("failed": no sound, an error, a network failure). */
+export function useAssetPeaksState(projectFolder: string, assetId: string, enabled: boolean): { status: "loading" | "ready" | "failed"; peaks: AssetPeaks | null } {
   const url = `/api/video-projects/${encodeURIComponent(projectFolder)}/peaks/${encodeURIComponent(assetId)}`
   const [loaded, setLoaded] = useState<{ url: string; peaks: AssetPeaks | null } | null>(null)
   useEffect(() => {
@@ -48,8 +53,9 @@ export function useAssetPeaks(projectFolder: string, assetId: string, enabled: b
       alive = false
     }
   }, [url, enabled])
-  if (!enabled) return null
+  const state = (peaks: AssetPeaks | null) => ({ status: peaks ? ("ready" as const) : ("failed" as const), peaks })
+  if (!enabled) return { status: "loading", peaks: null }
   const known = cache.get(url)
-  if (settled(known)) return known
-  return loaded?.url === url ? loaded.peaks : null
+  if (settled(known)) return state(known)
+  return loaded?.url === url ? state(loaded.peaks) : { status: "loading", peaks: null }
 }

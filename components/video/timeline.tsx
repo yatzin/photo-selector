@@ -1595,6 +1595,7 @@ export function Timeline({
         <EditLengthDialog
           key={lengthClip.id}
           project={project}
+          folder={folder}
           clip={lengthClip}
           track={lengthTrack}
           onUnlink={() => {
