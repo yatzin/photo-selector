@@ -121,7 +121,7 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
       aria-label={`${dir > 0 ? "Increase" : "Decrease"} ${label}`}
       disabled={disabled || (num !== null && (dir > 0 ? max !== undefined && num >= max : min !== undefined && num <= min))}
       onClick={(e) => stepBy(dir, e.shiftKey ? 10 : 1)}
-      className="flex w-8 shrink-0 items-center justify-center text-muted-foreground outline-none hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:w-11"
+      className="flex w-7 shrink-0 items-center justify-center text-muted-foreground outline-none hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 pointer-coarse:w-11"
     >
       {dir > 0 ? <Plus className="size-3.5" /> : <Minus className="size-3.5" />}
     </button>
@@ -175,9 +175,9 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={key}
             onFocus={(e) => e.currentTarget.select()}
-            className={cn("h-full w-full min-w-0 bg-transparent px-2 text-center text-sm font-medium tabular-nums outline-none disabled:cursor-not-allowed", unit && "pr-6", inputClassName)}
+            className={cn("h-full w-full min-w-0 bg-transparent px-1.5 text-center text-sm font-medium tabular-nums outline-none disabled:cursor-not-allowed", unit && (unit.length > 1 ? "pr-6" : "pr-4"), inputClassName)}
           />
-          {unit && <span aria-hidden className="pointer-events-none absolute right-2 text-xs text-muted-foreground">{unit}</span>}
+          {unit && <span aria-hidden className="pointer-events-none absolute right-1.5 text-xs text-muted-foreground">{unit}</span>}
         </div>
         {stepper(1)}
       </div>

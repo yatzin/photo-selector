@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ArrowDownToLine, ArrowRightToLine, Type } from "lucide-react"
+import { ArrowRightFromLine, ArrowRightToLine, Type } from "lucide-react"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
@@ -50,12 +50,12 @@ function AnimCard({ id, kind, type, seconds, max, error, onType, onSeconds }: {
   onType: (type: AnimType | "none") => void
   onSeconds: (seconds: string) => void
 }) {
-  const Icon = kind === "in" ? ArrowRightToLine : ArrowDownToLine
+  const Icon = kind === "in" ? ArrowRightToLine : ArrowRightFromLine
   return (
     <fieldset className="grid content-start gap-3 rounded-xl border border-border p-3.5" data-anim={kind}>
       <legend className="sr-only">{kind === "in" ? "In" : "Out"}</legend>
       <div className="flex items-center gap-2.5" aria-hidden>
-        <span className="flex size-7 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className={cn("size-4", kind === "out" && "-rotate-90")} /></span>
+        <span className="flex size-7 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="size-4" /></span>
         <div className="grid leading-tight">
           <span className="text-[13px] font-semibold">{kind === "in" ? "In" : "Out"}</span>
           <span className="text-xs text-muted-foreground">{kind === "in" ? "Plays from the clip's start" : "Plays up to the clip's end"}</span>
@@ -187,7 +187,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
               { value: "animation", label: "Animation", id: "edit-text-tab-animation", controls: "edit-text-panel-animation", marker: inType !== "none" || outType !== "none" },
             ]}
           />
-          <p className="text-xs text-muted-foreground">Resize it with the corner handles on the canvas.</p>
+          {tab === "text" && <p className="text-xs text-muted-foreground">Resize it with the corner handles on the canvas.</p>}
         </div>
         {/* The hero: the text as it will look. */}
         <div

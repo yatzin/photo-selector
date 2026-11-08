@@ -1,6 +1,6 @@
 "use client"
 
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react"
+import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react"
 import { Ban, Check, Search, X } from "lucide-react"
 import { gridMove, isGridKey, matchesQuery } from "@/lib/video/dialog-ui"
 import { typeAhead } from "@/lib/video/fonts"
@@ -39,7 +39,7 @@ type Common<T extends string> = {
   searchLabel?: string
   /** Jump chips over the grid (default: more than two groups). */
   jumpChips?: boolean
-  /** The grid scrolls inside this height (CSS length); none: it grows. */
+  /** From 640 px wide the grid scrolls inside this height (CSS length); none: it grows. */
   maxHeight?: string
   onFocusItem?: (item: T) => void
   /** data-* attributes per tile (e.g. data-fx, data-family). */
@@ -119,7 +119,10 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
     const root = scroll.current
     const head = root?.querySelector<HTMLElement>(`[data-tile-group="${CSS.escape(name)}"]`)
     if (!root || !head) return
-    root.scrollTo({ top: head.offsetTop - (searchable || jumpChips ? 0 : 0), behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })
+    const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
+    // The grid's own box when it scrolls, else the dialog's body.
+    if (root.scrollHeight > root.clientHeight + 1) root.scrollTo({ top: head.offsetTop, behavior })
+    else head.scrollIntoView({ block: "start", behavior })
   }
 
   const tile = (item: T | "none", index: number) => {
@@ -258,8 +261,9 @@ export function TileGrid<T extends string>(props: Single<T> | Multi<T>) {
         id={`${uid}-grid`}
         role={multi ? "group" : "radiogroup"}
         aria-label={label}
-        className={cn("relative -mx-1 grid content-start gap-3 overflow-y-auto overscroll-contain px-1 pb-1", maxHeight && "rounded-lg")}
-        style={maxHeight ? { maxHeight } : undefined}
+        // On a narrow screen the dialog's body is the one scroll; from 640 px the grid scrolls in its own box.
+        className={cn("relative -mx-1 grid content-start gap-3 px-1 pb-1", maxHeight && "rounded-lg sm:max-h-(--tile-max) sm:overflow-y-auto sm:overscroll-contain")}
+        style={maxHeight ? ({ "--tile-max": maxHeight } as CSSProperties) : undefined}
         data-transition-grid
       >
         {shown.map((g, gi) => (
