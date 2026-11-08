@@ -340,6 +340,32 @@ export function transitionKeyframes(type: TransitionType, prefix: string): strin
   ].join("\n")
 }
 
+/**
+ * CSS keyframes for a looping sample of an edge transition (the dialog's
+ * tiles), timed as transitionKeyframes: nothing (or the clip) for the first
+ * quarter, the edge transition over the middle half, the clip (or nothing)
+ * for the last quarter. Only the clip is drawn (edgeLook): `<prefix>-<edge>-<type>-to`,
+ * its copies `-to-c<i>` and overlays `-ov<i>`.
+ */
+export function edgeKeyframes(type: TransitionType, edge: Edge, prefix: string): string {
+  const steps = isCustomTransition(type) ? 24 : 12
+  const parts = edgeLook(type, edge, 0.5)
+  const to: string[] = []
+  const copies = (parts.toCopies ?? []).map(() => [] as string[])
+  const overlays = (parts.overlays ?? []).map(() => [] as string[])
+  const rest: LayerStyle = { opacity: 1, transform: "none", clipPath: "none", filter: "none" }
+  for (let k = 0; k <= steps; k++) {
+    const p = k / steps
+    const at = k === 0 ? "0%,25%" : k === steps ? "75%,100%" : `${25 + 50 * p}%`
+    const look = edgeLook(type, edge, p)
+    to.push(`${at}{${cssText({ ...rest, ...look.to })}}`)
+    look.toCopies?.forEach((c, i) => copies[i]?.push(`${at}{${cssText({ ...rest, ...c })}}`))
+    look.overlays?.forEach((o, i) => overlays[i]?.push(`${at}{${overlayCss(o)}}`))
+  }
+  const block = (name: string, list: string[]) => `@keyframes ${prefix}-${edge}-${type}-${name}{${list.join("")}}`
+  return [block("to", to), ...copies.map((l, i) => block(`to-c${i}`, l)), ...overlays.map((l, i) => block(`ov${i}`, l))].join("\n")
+}
+
 /** An overlay's box and look as CSS declarations, on a canvas-sized parent. */
 export const overlayCss = (o: Overlay) => `left:${pct(o.x)};top:${pct(o.y)};width:${pct(o.w)};height:${pct(o.h)};background:${o.background};opacity:${o.opacity ?? 1}`
 

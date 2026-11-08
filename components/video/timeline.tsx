@@ -10,7 +10,9 @@ import {
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
 import { beginMove, chainIds, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS, type LockState } from "@/lib/video/group-lock"
-import { linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
+import { audioEdgeState } from "@/lib/video/audio-fx"
+import { isAudioTransitionType, type Edge } from "@/lib/video/transition-types"
+import { edgeTransitionName, linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
 import {
   autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
@@ -66,7 +68,16 @@ import { Thumb } from "./thumb"
 // video, image or text dropped or dragged onto it is refused (a red ghost).
 // It shows while it has clips, and while a sound file is dragged in. Its
 // clips are teal with a music note and their waveform, and snap with the
-// other layers' edges like any clip; they have no transitions.
+// other layers' edges like any clip. Adjoining audio clips take audio
+// transitions (the same circles, amber block and dialog), and their chains
+// lock and move like any other, along the audio layer only.
+//
+// The selected clip's free edges (no clip touching them) have a white circle
+// too, just inside the block: it opens the Transition dialog for an in or out
+// transition against nothing (a text clip's open its Edit text dialog on the
+// Animation tab instead). A clip's edge transition shows as an amber ramp at
+// that end, as long as it runs; on an audio clip, a line drawing the fade's
+// level over the waveform.
 
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
@@ -136,7 +147,7 @@ function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: n
 /** The keys of every chain of linked clips in the project. */
 function chainKeys(p: Project): Set<string> {
   const keys = new Set<string>()
-  for (const t of p.tracks) {
+  for (const t of p.audioTrack ? [...p.tracks, p.audioTrack] : p.tracks) {
     for (const c of t.clips) {
       const ids = linkedChain(p, c.id)
       if (ids.length > 1) keys.add(chainKey(ids))
@@ -185,7 +196,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, transitionFor = null,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, transitionFor = null,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -212,6 +223,8 @@ export function Timeline({
   onEditText: (id: string, section?: "text" | "animation") => void
   /** Open the Transition dialog for the cut before clip `id`. */
   onTransition: (id: string) => void
+  /** Open the Transition dialog for clip `id`'s free edge (a text clip's Animation tab instead). */
+  onEdgeTransition: (id: string, edge: Edge) => void
   /** The clip whose Transition dialog is open (the cut before it), if any: opening it locks an unlocked group around that cut. */
   transitionFor?: string | null
 }) {
@@ -327,7 +340,7 @@ export function Timeline({
     if (!transitionFor) return
     const p = live.current.project
     const ids = linkedChain(p, transitionFor)
-    const clips = p.tracks.find((t) => t.clips.some((c) => c.id === transitionFor))?.clips ?? []
+    const clips = [...p.tracks, ...(p.audioTrack ? [p.audioTrack] : [])].find((t) => t.clips.some((c) => c.id === transitionFor))?.clips ?? []
     const before = clips[clips.findIndex((c) => c.id === transitionFor) - 1]
     if (before && ids.includes(before.id)) setLocks((s) => lock(s, chainKey(ids)))
   }, [transitionFor])
@@ -762,13 +775,13 @@ export function Timeline({
         if (!moved) {
           moved = true
           const p = live.current.project
-          const chain = audio ? [] : linkedChain(p, clip.id)
+          const chain = linkedChain(p, clip.id)
           if (chain.length > 1) {
             const key = chainKey(chain)
             const now = Date.now()
             if (isUnlocked(locksRef.current, key, now)) {
               setLocks((s) => beginMove(s, key, now))
-              const clips = p.tracks[track].clips.filter((c) => chain.includes(c.id))
+              const clips = trackAt(p, track)!.clips.filter((c) => chain.includes(c.id))
               group = { key, ids: chain, start: clips[0].start, length: clipEnd(clips[clips.length - 1]) - clips[0].start, at: 0 }
               groupDrag.current = {
                 key,
@@ -796,7 +809,8 @@ export function Timeline({
         if (group) {
           // The group moves as one block, along its layer or onto another one.
           group.at = timeAt(ev.clientX)
-          const r = groupTarget(new Set(group.ids), rowAt(ev.clientY), Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off)
+          // An audio chain stays on the audio layer, moving in time only.
+          const r = groupTarget(new Set(group.ids), audio ? AUDIO_TRACK : rowAt(ev.clientY), Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off, audio)
           to = r.to
           setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy, target: r.to, end: r.to.start + group.length })
           setSnap(snapState(r.to.track, off, r.guide))
@@ -856,12 +870,13 @@ export function Timeline({
    * same points a dragged clip's edges snap to, slid clear of the layer's
    * other clips (moveGroup does the same), and the time it snapped to. On a
    * snapped V1, the boundary of the slot the pointer time `at` picks. One
-   * past the top is a new layer; the audio layer is `refused`.
+   * past the top is a new layer; the audio layer is `refused`, except for an
+   * `audio` chain, which is always placed there.
    */
-  function groupTarget(ids: Set<string>, track: number, left: number, length: number, at: number, snapOn: boolean): { to: DropTarget; guide: number | null } {
+  function groupTarget(ids: Set<string>, track: number, left: number, length: number, at: number, snapOn: boolean, audio = false): { to: DropTarget; guide: number | null } {
     const { project: p, playhead: t, zoom: z } = live.current
-    if (track === AUDIO_TRACK) return { to: { track, start: left, refused: true }, guide: null }
-    const others = p.tracks[track]?.clips.filter((c) => !ids.has(c.id)) ?? []
+    if (track === AUDIO_TRACK && !audio) return { to: { track, start: left, refused: true }, guide: null }
+    const others = trackAt(p, track)?.clips.filter((c) => !ids.has(c.id)) ?? []
     if (track === 0 && isMagnetic(p)) return { to: { track, start: baseInsertion(others, at).start }, guide: null }
     const points = [0, t, ...allClips(p).filter((c) => !ids.has(c.id)).flatMap((c) => [c.start, clipEnd(c)])]
     const s = snapOn ? snapEdges([left, left + length], points, SNAP_PX, z) : null
@@ -1245,6 +1260,45 @@ export function Timeline({
                             style={{ width: Math.min(text.animOut.duration * zoom, clipWidth) }}
                           />
                         )}
+                        {(["in", "out"] as const).map((edge) => {
+                          // A picture edge transition's length: an amber ramp up from the clip's start or down to its end (an audio clip's: its fade's level, drawn below).
+                          const e = edge === "in" ? clip.edgeIn : clip.edgeOut
+                          if (!e || audio) return null
+                          return (
+                            <div
+                              key={`ramp-${edge}`}
+                              aria-hidden
+                              title={`${edgeTransitionName(e.type, edge)} ${edge} ${secs(e.duration)} s`}
+                              data-edge-ramp={edge}
+                              className={cn(
+                                "pointer-events-none absolute inset-y-0 z-[1] bg-amber-400/45 dark:bg-amber-300/40",
+                                edge === "in" ? "left-0 [clip-path:polygon(0_100%,100%_0,100%_100%)]" : "right-0 [clip-path:polygon(0_0,100%_100%,0_100%)]"
+                              )}
+                              style={{ width: Math.min(e.duration * zoom, clipWidth) }}
+                            />
+                          )
+                        })}
+                        {audio && (clip.edgeIn || clip.edgeOut) && (
+                          // An audio clip's edge fades: their level as a line over the waveform, full at the top.
+                          <svg aria-hidden data-edge-fade className="pointer-events-none absolute inset-0 z-[2] h-full w-full" preserveAspectRatio="none" viewBox={`0 0 ${clipWidth} 100`}>
+                            {(["in", "out"] as const).map((edge) => {
+                              const e = edge === "in" ? clip.edgeIn : clip.edgeOut
+                              if (!e || !isAudioTransitionType(e.type)) return null
+                              const type = e.type
+                              const w = Math.min(e.duration * zoom, clipWidth)
+                              const pts = Array.from({ length: 25 }, (_, n) => {
+                                const x = n / 24
+                                const gain = audioEdgeState(type, edge, x).gain
+                                return `${edge === "in" ? x * w : clipWidth - w + x * w},${4 + (1 - gain) * 92}`
+                              }).join(" ")
+                              return (
+                                <polyline key={edge} points={pts} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" className="stroke-amber-500 dark:stroke-amber-300">
+                                  <title>{`${edgeTransitionName(type, edge)} ${secs(e.duration)} s`}</title>
+                                </polyline>
+                              )
+                            })}
+                          </svg>
+                        )}
                         {text ? (
                           // The text itself, on one line, over a block in its layer's place.
                           <span className="pointer-events-none absolute inset-x-3 inset-y-0 flex items-center gap-1 overflow-hidden text-[11px] font-medium text-violet-950 dark:text-violet-50">
@@ -1373,9 +1427,8 @@ export function Timeline({
                     )
                   })}
                   {(() => {
-                    // The selected clip's cuts with a neighbour: a white circle on each opens its Transition / audio overlap dialog.
-                    // The audio layer's clips never link: no circles there.
-                    const k = !drag && !trim && selectedId && !isAudio ? track.clips.findIndex((c) => c.id === selectedId) : -1
+                    // The selected clip's cuts with a neighbour: a white circle on each opens its Transition (and audio overlap) dialog.
+                    const k = !drag && !trim && selectedId ? track.clips.findIndex((c) => c.id === selectedId) : -1
                     if (k < 0) return null
                     const c = track.clips[k]
                     const next = track.clips[k + 1]
@@ -1383,6 +1436,8 @@ export function Timeline({
                       ...(adjoins(track.clips[k - 1], c) ? [{ side: "before" as const, at: c.start, holder: c }] : []),
                       ...(adjoins(c, next) ? [{ side: "after" as const, at: clipEnd(c), holder: next }] : []),
                     ]
+                    // The audio layer's cuts have no audio overlap.
+                    const what = isAudio ? "Transition" : "Transition / audio overlap"
                     return cuts.map(({ side, at, holder }) => {
                       const tr = holder.transition
                       const a = holder.cutAudio
@@ -1391,8 +1446,8 @@ export function Timeline({
                         <button
                           key={`cut-${side}`}
                           type="button"
-                          aria-label={`Transition / audio overlap ${side} this clip${set ? `: ${set}` : ""}`}
-                          title={set ? `Transition / audio overlap ${side} this clip: ${set}` : `Add a transition or audio overlap ${side} this clip`}
+                          aria-label={`${what} ${side} this clip${set ? `: ${set}` : ""}`}
+                          title={set ? `${what} ${side} this clip: ${set}` : `Add a ${what.toLowerCase().replace(" / ", " or ")} ${side} this clip`}
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={() => onTransition(holder.id)}
                           className={cn(
@@ -1404,6 +1459,44 @@ export function Timeline({
                           style={{ left: at * zoom }}
                         >
                           <Blend aria-hidden className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />
+                        </button>
+                      )
+                    })
+                  })()}
+                  {(() => {
+                    // The selected clip's free edges: a white circle just inside each (clear of the trim handle) opens its in or out transition.
+                    const k = !drag && !trim && selectedId ? track.clips.findIndex((c) => c.id === selectedId) : -1
+                    if (k < 0) return null
+                    const c = track.clips[k]
+                    const width = Math.max(clipLength(c) * zoom - 2, 8)
+                    const edges: Edge[] = [...(!adjoins(track.clips[k - 1], c) ? ["in" as const] : []), ...(!adjoins(c, track.clips[k + 1]) ? ["out" as const] : [])]
+                    // Inset by the trim handle (12 px) and the circle's radius, so neither covers the other.
+                    const r = tight ? 8 : 10
+                    const inset = Math.min(12 + r, width / 2)
+                    return edges.map((edge) => {
+                      // A text clip's edges are its In and Out animations.
+                      const anim = isTextClip(c) ? (edge === "in" ? c.text.animIn : c.text.animOut) : undefined
+                      const e = edge === "in" ? c.edgeIn : c.edgeOut
+                      const set = anim ?? e
+                      const name = anim ? `${edge === "in" ? "In" : "Out"} animation` : e ? edgeTransitionName(e.type, edge) : ""
+                      const label = `Transition ${edge}`
+                      return (
+                        <button
+                          key={`edge-${edge}`}
+                          type="button"
+                          aria-label={set ? `${label}: ${name}, ${secs(set.duration)} s` : label}
+                          title={set ? `${label}: ${name}, ${secs(set.duration)} s` : isTextClip(c) ? `${edge === "in" ? "In" : "Out"} animation (Edit text)` : `Add a transition ${edge} ${edge === "in" ? "from" : "to"} nothing`}
+                          data-edge-circle={edge}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => onEdgeTransition(c.id, edge)}
+                          className={cn(
+                            "absolute z-30 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-[0_1px_4px_rgb(0_0_0/0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            tight ? "top-1 h-4 w-4" : "top-2 h-5 w-5",
+                            set ? "bg-editor-accent text-editor-accent-foreground ring-2 ring-white" : "bg-white text-neutral-900 ring-1 ring-black/25 hover:bg-neutral-100"
+                          )}
+                          style={{ left: (edge === "in" ? c.start * zoom + inset : c.start * zoom + width - inset) }}
+                        >
+                          <Blend aria-hidden className={cn(tight ? "h-2.5 w-2.5" : "h-3 w-3", edge === "out" && "-scale-x-100")} />
                         </button>
                       )
                     })

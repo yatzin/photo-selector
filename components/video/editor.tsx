@@ -20,7 +20,8 @@ import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
-import { applyCut, cutsOf } from "@/lib/video/transitions"
+import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
+import type { Edge } from "@/lib/video/transition-types"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { ImportButton } from "./import-button"
@@ -28,7 +29,7 @@ import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline, type DropTarget } from "./timeline"
-import { TransitionDialog } from "./transition-dialog"
+import { TransitionDialog, type TransitionTarget } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 import { useMediaImport } from "./use-media-import"
 
@@ -88,11 +89,13 @@ export function Editor({
   const [textFor, setTextFor] = useState<string | null>(null)
   const [textSection, setTextSection] = useState<TextSection>("text")
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
-  // The clip after the cut whose Transition dialog is open (it holds the transition).
-  const [transitionFor, setTransitionFor] = useState<string | null>(null)
-  // The selected clip's cuts with an adjoining neighbour, for the toolbar's Transition before / after.
-  // An audio clip has no cuts to join: no Transition before / after for it.
-  const selectedCuts = selectedId && !project.audioTrack?.clips.some((c) => c.id === selectedId && isAudioClip(project, c)) ? cutsOf(project, selectedId) : null
+  // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
+  const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
+  // The clip after the cut whose dialog is open, for the timeline (opening it locks the group around that cut).
+  const transitionFor = transitionTarget && !transitionTarget.edge ? transitionTarget.clipId : null
+  // The selected clip's cuts with an adjoining neighbour, for the toolbar's Transition before / after (a free edge: Transition in / out).
+  const selectedCuts = selectedId ? cutsOf(project, selectedId) : null
+  const selectedClip = selectedId ? allClips(project).find((c) => c.id === selectedId) : undefined
 
   /** Opens a text clip's Edit text dialog on its Text tab, or on its Animation tab. */
   const openText = useCallback((id: string, section: TextSection = "text") => {
@@ -100,8 +103,18 @@ export function Editor({
     setTextFor(id)
   }, [])
 
-  /** One user gesture: one undo step. Repeats with the same `group` in quick succession make one step together. */
-  const edit = useCallback((change: (p: Project) => Project, group?: string) => {
+  /**
+   * One user gesture: one undo step. Repeats with the same `group` in quick
+   * succession make one step together. An edit that takes away an edge
+   * transition because a clip now touches that edge says so (not the
+   * Transition dialog's own Remove, `quiet`).
+   */
+  const edit = useCallback((change: (p: Project) => Project, group?: string, quiet = false) => {
+    if (!quiet) {
+      const before = latest.current
+      const lost = lostEdges(before, change(before))
+      if (lost > 0) toast.info("Edge transition removed: the clip now has a neighbour")
+    }
     setEditor((s) => {
       const next = change({ ...s.meta, ...s.history.present })
       const history = commit(s.history, editOf(next), group)
@@ -199,7 +212,16 @@ export function Editor({
   /** Opens the Transition / audio overlap dialog for the cut before clip `id`; the player pauses (all its videos stop, so it is silent) and only the dialog's loop plays, with its sound. */
   const openTransition = (id: string) => {
     player.pause()
-    setTransitionFor(id)
+    setTransitionTarget({ clipId: id })
+  }
+
+  /** Opens the Transition dialog for a clip's free edge; a text clip's In and Out are its animations, so its Edit text dialog opens on the Animation tab instead. */
+  const openEdge = (id: string, edge: Edge) => {
+    const clip = allClips(project).find((c) => c.id === id)
+    if (!clip) return
+    if (isTextClip(clip)) return openText(id, "animation")
+    player.pause()
+    setTransitionTarget({ clipId: id, edge })
   }
 
   /** Playback pauses while the ruler is scrubbed and picks up again after. */
@@ -628,20 +650,27 @@ export function Editor({
                 <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
                   <Type className="h-4 w-4" /> Add text
                 </Button>
-                {selectedCuts &&
+                {selectedCuts && selectedClip &&
                   (["before", "after"] as const).map((side) => {
+                    // A neighbour there: the cut's dialog; a free edge: the clip's own in or out transition (a text's animation).
                     const holder = selectedCuts[side]
+                    const edge: Edge = side === "before" ? "in" : "out"
+                    const set = holder ? null : (edge === "in" ? selectedClip.edgeIn : selectedClip.edgeOut)
+                    const what = holder
+                      ? `Transition ${side}${isAudioClip(project, selectedClip) ? "" : " / audio overlap"}`
+                      : isTextClip(selectedClip)
+                        ? `${edge === "in" ? "In" : "Out"} animation (Edit text)`
+                        : `Transition ${edge}${set ? `: ${edgeTransitionName(set.type, edge)}, ${Number(set.duration.toFixed(2))} s` : ""}`
                     return (
                       <Button
                         key={side}
                         type="button"
                         size="icon-sm"
                         variant="ghost"
-                        onClick={() => holder && openTransition(holder)}
-                        disabled={!holder}
-                        title={holder ? `Transition / audio overlap ${side}` : `Transition / audio overlap ${side} (no clip right ${side} this one on its layer)`}
-                        aria-label={`Transition / audio overlap ${side}`}
-                        className={side === "after" ? "[&_svg]:-scale-x-100" : undefined}
+                        onClick={() => (holder ? openTransition(holder) : openEdge(selectedClip.id, edge))}
+                        title={what}
+                        aria-label={holder ? `Transition ${side}` : `Transition ${edge}`}
+                        className={cn(side === "after" && "[&_svg]:-scale-x-100", set && "text-editor-accent")}
                       >
                         <Blend className="h-4 w-4" />
                       </Button>
@@ -683,23 +712,28 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} transitionFor={transitionFor} />
           </div>
         </div>
       </div>
-      {transitionFor && allClips(project).some((c) => c.id === transitionFor) && (
+      {transitionTarget && allClips(project).some((c) => c.id === transitionTarget.clipId) && (
         <TransitionDialog
-          key={transitionFor}
+          key={`${transitionTarget.clipId}:${transitionTarget.edge ?? "cut"}`}
           project={project}
-          clipId={transitionFor}
+          target={transitionTarget}
           thumbUrl={thumbUrl}
           videoUrl={videoUrl}
           imageUrl={imageUrl}
+          audioUrl={audioUrl}
           onApply={(spec) => {
-            const id = transitionFor
+            const id = transitionTarget.clipId
             edit((p) => applyCut(p, id, spec))
           }}
-          onClose={() => setTransitionFor(null)}
+          onApplyEdge={(spec) => {
+            const { clipId: id, edge } = transitionTarget
+            if (edge) edit((p) => setEdgeTransition(p, id, edge, spec), undefined, true)
+          }}
+          onClose={() => setTransitionTarget(null)}
         />
       )}
       {textClip && isTextClip(textClip) && (
@@ -718,4 +752,18 @@ export function Editor({
       )}
     </div>
   )
+}
+
+/** How many edge transitions `after` (an edit of `before`) took away from clips that are still there. */
+function lostEdges(before: Project, after: Project): number {
+  if (before === after) return 0
+  const now = new Map(allClips(after).map((c) => [c.id, c]))
+  let lost = 0
+  for (const c of allClips(before)) {
+    const next = now.get(c.id)
+    if (!next) continue
+    if (c.edgeIn && !next.edgeIn) lost++
+    if (c.edgeOut && !next.edgeOut) lost++
+  }
+  return lost
 }
