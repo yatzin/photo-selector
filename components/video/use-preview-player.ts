@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
-import { clipLength, isStill, MAX_TRACKS, totalLength, trackClipAt, trackStarts, type Clip, type Project } from "@/lib/video/project"
-import { cutGains, entrySourceTime, laneElementAt, overlapAt, tailSourceTime } from "@/lib/video/transitions"
+import { audioCutState, audioEdgeState, combineFx, PLAIN, pictureEdgeGain } from "@/lib/video/audio-fx"
+import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { isAudioTransitionType, isTransitionType } from "@/lib/video/transition-types"
+import { cutGains, edgeAt, entrySourceTime, laneClipAt, laneElementAt, overlapAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
+import { applyFx, offSpeed } from "./audio-graph"
 
 // Plays the timeline in the browser with no re-encoding. Every track (layer)
 // has a lane of two <video> elements that take turns: one shows the track's
@@ -35,7 +38,15 @@ import { cutGains, entrySourceTime, laneElementAt, overlapAt, tailSourceTime } f
 // waits on the next clip), seeked to in + (t - start) and kept with the clock
 // as a following lane's video is; a muted clip's element is muted. Audio
 // clips have no picture, so they never drive the clock and the preview shows
-// nothing for them.
+// nothing for them. An audio transition works as a picture one does: from
+// its window's start the incoming clip plays in one element and the outgoing
+// one plays on as the tail in the other until the window ends, each shaped as
+// the export shapes it (lib/video/audio-fx: the curve's gain, and for the
+// creative ones Web Audio filters, a feedback delay or a tape's playbackRate,
+// components/video/audio-graph). An audio clip's edge transition shapes its
+// own element the same way; a picture clip's edge transition fades its
+// video's sound with the picture (equal power). An element running at a
+// tape's speed is left off the clock until it's back to normal speed.
 
 const END_MARGIN = 0.04 // seconds before a clip's out point at which we move on
 const TIME_STEP = 1 / 30 // re-render the playhead at most this often
@@ -48,11 +59,12 @@ type Lane = { loaded: (string | null)[]; active: number; index: number; primed: 
 
 const newLane = (): Lane => ({ loaded: [null, null], active: 0, index: -1, primed: [false, false], tail: -1 })
 
-/** The same clip for playback: what plays and when (a transform only changes where it shows, a mute only what's heard). */
+/** The same clip for playback: what plays and when, and how its edges sound (a transform only changes where it shows, a mute only what's heard). */
 const samePlayback = (a: Clip, b: Clip) =>
   a === b ||
   (a.id === b.id && a.asset === b.asset && a.in === b.in && a.out === b.out && a.start === b.start && a.transition?.type === b.transition?.type && a.transition?.duration === b.transition?.duration &&
-    a.cutAudio?.mode === b.cutAudio?.mode && a.cutAudio?.duration === b.cutAudio?.duration)
+    a.cutAudio?.mode === b.cutAudio?.mode && a.cutAudio?.duration === b.cutAudio?.duration && a.edgeIn?.type === b.edgeIn?.type && a.edgeIn?.duration === b.edgeIn?.duration &&
+    a.edgeOut?.type === b.edgeOut?.type && a.edgeOut?.duration === b.edgeOut?.duration)
 
 /** Whether two lists of track clips play the same lane by lane (an empty lane matches a missing one). */
 function sameClips(a: Clip[][], b: Clip[][]): boolean {
@@ -68,7 +80,8 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
   // The audio layer's two elements, the clip each holds (id and asset), the one playing and the clip at the playhead (-1: none).
   const audioEls = useRef<(HTMLAudioElement | null)[]>([null, null])
-  const audioLane = useRef({ loaded: [null, null] as (string | null)[], clipIds: [null, null] as (string | null)[], active: 0, index: -1 })
+  // `tail`: the element playing an audio transition's outgoing clip (-1: none).
+  const audioLane = useRef({ loaded: [null, null] as (string | null)[], clipIds: [null, null] as (string | null)[], active: 0, index: -1, tail: -1 })
   const lastAudioResync = useRef(-Infinity)
   const audioUrlRef = useRef(audioUrlFor)
   const lanes = useRef<Lane[]>(Array.from({ length: MAX_TRACKS }, newLane))
@@ -150,28 +163,58 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     }
   }, [])
 
-  /** The audio layer at time `t`: its clip in the playing element, seeked; the next clip waiting in the other; silence (paused) in a gap. */
+  /**
+   * The audio layer at time `t`: its clip (through a transition, the incoming
+   * one, from before its in point) in the playing element, seeked; the
+   * transition's outgoing clip in the other as the tail, or else the next
+   * clip waiting there; silence (paused) in a gap.
+   */
   const showAudio = useCallback(
     (t: number) => {
       const A = audioLane.current
       const track = projectRef.current.audioTrack
-      const at = track ? trackClipAt(track, t) : null
+      const at = track ? laneClipAt(track, t) : null
       A.index = at ? at.index : -1
       const clip = at && track ? track.clips[at.index] : undefined
+      const w = track ? transitionAt(track, t) : null
+      const from = w && track ? track.clips[w.from] : undefined
+      A.tail = from ? 1 - A.active : -1
       if (clip && at) loadAudio(A.active, clip, at.sourceTime)
       else audioEls.current[A.active]?.pause()
+      if (A.tail >= 0 && from && w && track) {
+        loadAudio(A.tail, from, tailSourceTime(track, w, t))
+        return
+      }
       const next = track ? (at ? track.clips[at.index + 1] : track.clips.find((c) => c.start > t)) : undefined
       audioEls.current[1 - A.active]?.pause()
-      if (next) loadAudio(1 - A.active, next, next.in)
+      if (next && track) loadAudio(1 - A.active, next, entrySourceTime(track, next))
     },
     [loadAudio]
   )
 
-  /** Plays the audio layer's clip at the playhead, if there is one (a refusal just leaves it silent). */
+  /** Plays the audio layer's clip at the playhead and a transition's outgoing clip, if there are any (a refusal just leaves them silent). */
   const playAudio = useCallback(() => {
     const A = audioLane.current
-    if (A.index < 0) return
-    audioEls.current[A.active]?.play().catch(() => {})
+    if (A.index >= 0) audioEls.current[A.active]?.play().catch(() => {})
+    if (A.tail >= 0) audioEls.current[A.tail]?.play().catch(() => {})
+  }, [])
+
+  /** The audio layer's two elements shaped for `t`: an audio transition's two sounds (audioCutState) and the clip's own edge transition (audioEdgeState); plain otherwise. */
+  const mixAudio = useCallback((t: number) => {
+    const A = audioLane.current
+    const track = projectRef.current.audioTrack
+    const w = track ? transitionAt(track, t) : null
+    const audioCut = w && isAudioTransitionType(w.type) ? w.type : null
+    let own = audioCut && w ? audioCutState(audioCut, "in", w.progress) : PLAIN
+    const clip = track?.clips[A.index]
+    const e = clip ? edgeAt(clip, t) : null
+    if (e && isAudioTransitionType(e.type)) own = combineFx(own, audioEdgeState(e.type, e.edge, e.progress))
+    const active = audioEls.current[A.active]
+    if (active) applyFx(active, own)
+    const tail = A.tail >= 0 ? audioEls.current[A.tail] : null
+    if (tail) applyFx(tail, audioCut && w ? audioCutState(audioCut, "out", w.progress) : PLAIN)
+    const idle = A.tail >= 0 ? null : audioEls.current[1 - A.active]
+    if (idle) applyFx(idle, PLAIN)
   }, [])
 
   // A still (an image's or a text clip) has nothing for a <video> to play.
@@ -242,18 +285,25 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     [load, isImage, nextVideo, upcoming]
   )
 
-  /** Through a cut's overlap, the two videos' volumes as cutGains says (a transition's equal-power crossfade, or a J- or L-cut's); else full volume. */
+  /**
+   * Through a cut's overlap, the two videos' volumes as cutGains says (a
+   * transition's equal-power crossfade, or a J- or L-cut's); else full
+   * volume. A clip's picture edge transition fades its own sound with it.
+   */
   const mixVolumes = useCallback((lane: number, t: number) => {
     const L = lanes.current[lane]
     const track = projectRef.current.tracks[lane]
     const w = track ? overlapAt(track, t) : null
     const g = w ? cutGains(w, t) : { out: 1, in: 1 }
+    const clip = track?.clips[L.index]
+    const e = clip ? edgeAt(clip, t) : null
+    const edge = e && isTransitionType(e.type) ? pictureEdgeGain(e.edge, e.progress) : 1
     const active = el(lane, L.active)
     if (L.tail >= 0) {
       const tail = el(lane, L.tail)
       if (tail) tail.volume = g.out
     }
-    if (active && L.tail !== L.active) active.volume = g.in
+    if (active && L.tail !== L.active) active.volume = g.in * edge
   }, [])
 
   /** Moves the frame-rate playhead and tells its followers. */
@@ -353,6 +403,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         mixVolumes(lane, look)
       }
       showAudio(look)
+      mixAudio(look)
       setTimeline(clamped)
       if (playingRef.current) {
         for (let lane = 0; lane < p.tracks.length; lane++) {
@@ -363,7 +414,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         playAudio()
       }
     },
-    [setTimeline, showLane, mixVolumes, playSlot, playableClip, showAudio, playAudio]
+    [setTimeline, showLane, mixVolumes, playSlot, playableClip, showAudio, mixAudio, playAudio]
   )
 
   const tick = useCallback(
@@ -414,7 +465,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           // play() on an ended video would start it over.
           else if (!v.ended) playSlot(lane, lanes.current[lane].active)
         }
-        if (stalled) audioEls.current[audioLane.current.active]?.pause()
+        if (stalled) for (const a of audioEls.current) a?.pause()
         else playAudio()
       }
 
@@ -510,20 +561,46 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         }
       }
       // The audio layer: at a cut, the waiting element takes over (when it holds the new clip); else it keeps with the clock.
+      // Through an audio transition the outgoing element plays on as the tail until the window ends.
       const A = audioLane.current
       const audioTrack = p.audioTrack
-      const aAt = audioTrack ? trackClipAt(audioTrack, t) : null
+      const aAt = audioTrack ? laneClipAt(audioTrack, t) : null
       const aIndex = aAt ? aAt.index : -1
+      if (A.tail >= 0 && (!audioTrack || transitionAt(audioTrack, t)?.to !== A.index)) {
+        // The transition's window is over: the outgoing element stops and waits on the next clip.
+        const slot = A.tail
+        A.tail = -1
+        audioEls.current[slot]?.pause()
+        const after = audioTrack?.clips[A.index + 1]
+        if (after && audioTrack) loadAudio(slot, after, entrySourceTime(audioTrack, after))
+      }
       if (aIndex !== A.index) {
-        audioEls.current[A.active]?.pause()
+        const w = audioTrack ? transitionAt(audioTrack, t) : null
+        const entering = w !== null && A.index >= 0 && w.from === A.index && w.to === aIndex
+        const old = A.active
         const next = aAt && audioTrack ? audioTrack.clips[aAt.index] : undefined
-        if (next && A.clipIds[1 - A.active] === next.id) A.active = 1 - A.active
-        showAudio(t)
+        if (next && aAt) {
+          A.active = 1 - old
+          // The waiting element holds it already (seeked to its entry): just bring it to the clock.
+          if (A.clipIds[A.active] === next.id) {
+            const a = audioEls.current[A.active]
+            if (a && Math.abs(a.currentTime - aAt.sourceTime) > 0.05) loadAudio(A.active, next, aAt.sourceTime)
+          } else loadAudio(A.active, next, aAt.sourceTime)
+        } else audioEls.current[old]?.pause()
+        A.index = aIndex
+        if (entering && next) A.tail = old
+        else {
+          if (next) audioEls.current[old]?.pause()
+          A.tail = -1
+          const after = audioTrack ? (next ? audioTrack.clips[aIndex + 1] : audioTrack.clips.find((c) => c.start > t)) : undefined
+          if (after && audioTrack) loadAudio(next ? old : 1 - A.active, after, entrySourceTime(audioTrack, after))
+        }
         if (!heldRef.current) playAudio()
       } else if (aAt && audioTrack && !heldRef.current) {
         const clip = audioTrack.clips[aAt.index]
         const a = audioEls.current[A.active]
-        if (a && !a.seeking && !a.ended) {
+        // An element at a tape's speed runs off the clock on purpose.
+        if (a && !a.seeking && !a.ended && !offSpeed(a)) {
           if (a.paused) playAudio()
           const to = resyncTo({ current: a.currentTime, expected: aAt.sourceTime, limit: Number.isFinite(a.duration) ? Math.min(clip.out, a.duration - END_MARGIN) : clip.out, now, lastResync: lastAudioResync.current })
           if (to !== null) {
@@ -536,13 +613,14 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
           }
         }
       }
+      mixAudio(t)
       for (let lane = 0; lane < p.tracks.length; lane++) mixVolumes(lane, t)
       if (swapped) setActive(lanes.current.map((l) => l.active))
       if (cut || Math.abs(t - timeRef.current) >= TIME_STEP) setTimeline(t)
       else setFrame(t)
       raf.current = requestAnimationFrame((n) => tickRef.current(n))
     },
-    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip, mixVolumes, showAudio, playAudio]
+    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip, mixVolumes, playAudio, loadAudio, mixAudio]
   )
 
   const play = useCallback(() => {
@@ -591,7 +669,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
     }
     // The audio layer: its clip at the playhead plays (seek loaded it), and the waiting element is primed inside this gesture too.
     playAudio()
-    const waiting = audioEls.current[1 - audioLane.current.active]
+    const waiting = audioLane.current.tail >= 0 ? null : audioEls.current[1 - audioLane.current.active]
     if (waiting?.src) {
       void waiting.play().catch(() => {})
       waiting.pause()

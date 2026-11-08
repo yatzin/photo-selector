@@ -2,7 +2,7 @@ import {
   COLLAGE_ROWS, COLLAGE_SWIPE, collageCols, collageTile, exchangeParams, GLITCH_BLOCKS_FROM, GLITCH_STRIPS, glitchAmount, glitchFrame, glitchStep, heartOutline, heartScale, num, PAGE_SHADOW,
   pageParams, PAPER, revealOffset, STRIP_GLITCH, STRIP_SPLIT, stripJitter, stripStep, stripSwap, WHIP_VECTORS, whipBlurLevel, whipDir, whipOffset,
 } from "./transition-fx"
-import { isCustomTransition, type CustomTransition, type CutAudio, type TransitionType } from "./transition-types"
+import { isCustomTransition, type CustomTransition, type CutAudio, type Edge, type TransitionType } from "./transition-types"
 import { cutGains } from "./transitions"
 
 // How the preview draws a transition: CSS for the outgoing picture (`from`),
@@ -30,6 +30,7 @@ export type LayerStyle = {
   maskRepeat?: string
   filter?: string
   mixBlendMode?: "plus-lighter"
+  maskComposite?: "exclude"
 }
 
 export type Overlay = { x: number; y: number; w: number; h: number; background: string; opacity?: number }
@@ -226,6 +227,74 @@ function customLook(type: CustomTransition, q: number, aspect: number): Transiti
       const filter = level > 0 ? url(TRANSITION_FILTERS.blur(vx !== 0 ? "h" : "v", level)) : undefined
       return { from: { transform: translate(vx * o, vy * o), filter }, to: { transform: translate(vx * (o - 1), vy * (o - 1)), filter } }
     }
+  }
+}
+
+/**
+ * What a clip looks like `p` (0 to 1) of the way through its edge transition
+ * at `edge`, against nothing (the layers below show where it doesn't): the
+ * same maths as a cut's look, with the other picture transparent, as the
+ * export builds it (xfade against a transparent copy of the clip). At an in
+ * edge the clip is the incoming picture; where the outgoing one would cover
+ * it (a page turn's and a reveal's), it is clipped away. At an out edge it is
+ * the outgoing picture, hidden wherever the incoming one would show. The
+ * clip's own style is `to` (with `toCopies`); `from` is empty.
+ */
+export function edgeLook(type: TransitionType, edge: Edge, p: number, aspect = 16 / 9): TransitionLook {
+  const q = Math.min(1, Math.max(0, p))
+  const look = transitionLook(type, q, aspect)
+  const only = (to: LayerStyle, toCopies?: LayerStyle[], overlays?: Overlay[]): TransitionLook => ({ from: {}, to, ...(toCopies?.length ? { toCopies } : {}), ...(overlays?.length ? { overlays } : {}) })
+  if (edge === "in") {
+    if (type === "pageturn") {
+      const g = pageParams(num, q)
+      return only({ clipPath: inset(0, 0, 0, g.fold) }, undefined, look.overlays)
+    }
+    if (type === "reveal") {
+      const o = revealOffset(num, q)
+      return only({ clipPath: inset(0, 0.5 - o, 0, 0.5 - o) })
+    }
+    return only(look.to, look.toCopies, look.overlays)
+  }
+  const rest = 1 - q
+  switch (type) {
+    case "fade":
+    case "dissolve":
+      return only({ opacity: round(rest) })
+    case "wipeleft":
+      return only({ clipPath: inset(0, q, 0, 0) })
+    case "wiperight":
+      return only({ clipPath: inset(0, 0, 0, q) })
+    case "wipeup":
+      return only({ clipPath: inset(0, 0, q, 0) })
+    case "wipedown":
+      return only({ clipPath: inset(q, 0, 0, 0) })
+    case "circleopen":
+      return only({ maskImage: `radial-gradient(circle farthest-corner at 50% 50%, transparent ${pct(q)}, #000 ${pct(q)})` })
+    case "circleclose":
+      return only({ maskImage: `radial-gradient(circle farthest-corner at 50% 50%, #000 ${pct(rest)}, transparent ${pct(rest)})` })
+    case "radial":
+      return only({ maskImage: `conic-gradient(from 0deg at 50% 50%, transparent ${round(q * 360)}deg, #000 ${round(q * 360)}deg)` })
+    case "zoomin":
+      return only({ ...look.from, opacity: round(1 - Math.max(0, 2 * q - 1)) })
+    case "pixelize":
+    case "hblur":
+      return only({ ...look.from, opacity: round(rest) })
+    case "heart": {
+      // The clip with a growing heart-shaped hole: the heart excluded from a full mask.
+      const s = heartScale(num, q, aspect)
+      return only({ maskImage: `${heartImage()}, linear-gradient(#000, #000)`, maskSize: `${pct((1.5 * s) / aspect)} ${pct(1.5 * s)}, 100% 100%`, maskPosition: "50% 50%, 0 0", maskRepeat: "no-repeat", maskComposite: "exclude" })
+    }
+    case "glitchreveal": {
+      // Strips that have swapped show nothing; the rest (swapping ones too) still show the clip.
+      const gone = Array.from({ length: GLITCH_STRIPS }, (_, k) => q >= stripSwap(num, k) + STRIP_GLITCH)
+      return only({ maskImage: stripMask(gone.map((g) => !g)) })
+    }
+    case "pageturn":
+      // The paper's back folding over; no shadow, there's nothing under it to shade.
+      return only(look.from, undefined, look.overlays?.slice(0, 1))
+    default:
+      // Slides, the exchange, the collage, the reveal, the glitch and the whips: the outgoing picture's own motion.
+      return only(look.from, look.fromCopies, look.overlays)
   }
 }
 

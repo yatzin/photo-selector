@@ -3,8 +3,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
 import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
-import { transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
-import { laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
+import { edgeLook, transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
+import { edgeAt, laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { isTransitionType } from "@/lib/video/transition-types"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
@@ -39,6 +39,8 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // browser can't decode shows a message here and still exports, one whose file
 // is missing says so (export fails on it). Play/Pause lives in the timeline's toolbar.
 // Double-clicking a text clip on the canvas opens its Edit text dialog (onEditText).
+// A clip's in or out edge transition is drawn on the clip itself, the other
+// side nothing (the layers below show through), as the export draws it.
 
 /**
  * Where a picture sits in the canvas box: its full rect in percent, the crop
@@ -250,6 +252,14 @@ export function Preview({
   })
   const top = hits.reduce<ActiveClip | null>((above, h) => h ?? above, null)
   const windows = project.tracks.map((t) => transitionAt(t, look))
+  // Each lane's look: its running transition's, else its clip's running edge transition's (against nothing, lib/video/transition-preview edgeLook).
+  const looks = project.tracks.map((_, lane): TransitionLook | null => {
+    const w = windows[lane]
+    if (w) return isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
+    const hit = hits[lane]
+    const e = hit ? edgeAt(hit.clip, look) : null
+    return e && isTransitionType(e.type) ? edgeLook(e.type, e.edge, e.progress, W / H) : null
+  })
   const currentAsset = top?.clip.asset
   const cantPlay = currentAsset !== undefined && player.failed.has(currentAsset)
   const missing = currentAsset !== undefined && player.missing.has(currentAsset)
@@ -422,7 +432,7 @@ export function Preview({
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w && isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
+              const fx = looks[lane]
               // What the player's slots hold: the lane's own video (through an overlap, the incoming one from its
               // start, a J-cut's lead too) and the overlap's outgoing video as the tail, in the other slot or under a still.
               const own = laneElementAt(track, look)
@@ -472,7 +482,7 @@ export function Preview({
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w && isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
+              const fx = looks[lane]
               return (
                 <Fragment key={`stills-${lane}`}>
                   {from && stillLayer(from, outgoingZ(lane, fx), fx?.from, fx?.fromCopies)}

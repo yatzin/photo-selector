@@ -18,6 +18,7 @@ export const fxStyle = (s: LayerStyle | undefined): CSSProperties =>
         opacity: s.opacity, transform: s.transform, transformOrigin: s.transformOrigin, clipPath: s.clipPath, filter: s.filter, mixBlendMode: s.mixBlendMode,
         maskImage: s.maskImage, WebkitMaskImage: s.maskImage, maskSize: s.maskSize, WebkitMaskSize: s.maskSize,
         maskPosition: s.maskPosition, WebkitMaskPosition: s.maskPosition, maskRepeat: s.maskRepeat, WebkitMaskRepeat: s.maskRepeat,
+        maskComposite: s.maskComposite, WebkitMaskComposite: s.maskComposite === "exclude" ? "xor" : undefined,
       }
     : {}
 

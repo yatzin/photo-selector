@@ -140,3 +140,25 @@ describe("the app's own transitions in the preview", () => {
     }
   })
 })
+
+describe("edgeLook", () => {
+  it("styles only the clip: in edges with the incoming look, out edges hidden where the incoming one would show", async () => {
+    const { edgeLook } = await import("./transition-preview")
+    const { EDGE_PICTURE_TYPES } = await import("./transition-types")
+    for (const edge of ["in", "out"] as const) {
+      for (const t of EDGE_PICTURE_TYPES[edge]) {
+        const look = edgeLook(t, edge, 0.5)
+        expect(look.from).toEqual({})
+        expect(look.to).toBeDefined()
+      }
+    }
+    expect(edgeLook("fade", "in", 0.25).to).toEqual({ opacity: 0.25 })
+    expect(edgeLook("fade", "out", 0.25).to).toEqual({ opacity: 0.75 })
+    // wipeleft uncovers from the right: in, the right part shows; out, the left part stays.
+    expect(edgeLook("wipeleft", "in", 0.25).to.clipPath).toBe("inset(0 0 0 75%)")
+    expect(edgeLook("wipeleft", "out", 0.25).to.clipPath).toBe("inset(0% 25% 0% 0%)")
+    expect(edgeLook("slideleft", "out", 0.5).to.transform).toBe("translateX(-50%)")
+    expect(edgeLook("heart", "out", 0.5).to.maskComposite).toBe("exclude")
+    expect(edgeLook("reveal", "in", 0.5).to.clipPath).toMatch(/^inset\(0% /)
+  })
+})
