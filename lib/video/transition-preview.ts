@@ -102,3 +102,28 @@ export function transitionKeyframes(type: TransitionType, prefix: string): strin
   const block = (name: string, list: string[]) => `@keyframes ${prefix}-${type}-${name}{${list.join("")}}`
   return [block("from", frames.from), block("to", frames.to), block("tint", frames.tint)].join("\n")
 }
+
+/**
+ * The Transition dialog's loop of a cut: `lead` seconds of the outgoing clip
+ * before the transition starts and `tail` of the incoming one after it ends
+ * (up to `extra` each, as much as the clips have outside the transition), the
+ * transition of `duration` (0: a hard cut) in between. Times are from the
+ * loop's start; `cut` is where the cut falls and `total` its length.
+ */
+export type LoopPlan = { lead: number; tail: number; cut: number; total: number; duration: number }
+
+export function loopPlan(outLength: number, inLength: number, duration: number, extra = 2): LoopPlan {
+  const half = Math.max(0, duration) / 2
+  const lead = Math.max(0, Math.min(extra, outLength - half))
+  const tail = Math.max(0, Math.min(extra, inLength - half))
+  return { lead, tail, cut: lead + half, total: lead + 2 * half + tail, duration: 2 * half }
+}
+
+/** What the loop shows at `t`: whether the outgoing (`from`) and incoming (`to`) pictures are up, and how far through the transition it is (null outside it). */
+export function loopFrame(plan: LoopPlan, t: number): { from: boolean; to: boolean; progress: number | null } {
+  const half = plan.duration / 2
+  if (plan.duration <= 0) return { from: t < plan.cut, to: t >= plan.cut, progress: null }
+  const start = plan.cut - half
+  const inside = t >= start && t < plan.cut + half
+  return { from: t < plan.cut + half, to: t >= start, progress: inside ? Math.min(1, Math.max(0, (t - start) / plan.duration)) : null }
+}

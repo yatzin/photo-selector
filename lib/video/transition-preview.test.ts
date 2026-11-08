@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { TRANSITION_TYPES } from "./transition-types"
-import { cssText, transitionKeyframes, transitionLook } from "./transition-preview"
+import { cssText, loopFrame, loopPlan, transitionKeyframes, transitionLook } from "./transition-preview"
 
 describe("transitionLook", () => {
   it("draws a crossfade, a wipe and a slide as xfade does", () => {
@@ -34,5 +34,23 @@ describe("transitionKeyframes", () => {
     expect(css).toContain("@keyframes tx-circleopen-to{0%,25%{")
     expect(css).toContain("@keyframes tx-circleopen-tint{")
     expect(cssText({ maskImage: "x", clipPath: "y" })).toBe("-webkit-mask-image:x;mask-image:x;clip-path:y")
+  })
+})
+
+describe("loopPlan and loopFrame", () => {
+  it("leads in and out by up to 2 s, as much as each clip has outside the transition", () => {
+    expect(loopPlan(6, 6, 1)).toEqual({ lead: 2, tail: 2, cut: 2.5, total: 5, duration: 1 })
+    expect(loopPlan(1.5, 3, 1)).toEqual({ lead: 1, tail: 2, cut: 1.5, total: 4, duration: 1 })
+    expect(loopPlan(4, 4, 0)).toEqual({ lead: 2, tail: 2, cut: 2, total: 4, duration: 0 })
+  })
+
+  it("shows the outgoing picture first, both through the transition, then the incoming one", () => {
+    const plan = loopPlan(6, 6, 1)
+    expect(loopFrame(plan, 1)).toEqual({ from: true, to: false, progress: null })
+    expect(loopFrame(plan, 2.5)).toEqual({ from: true, to: true, progress: 0.5 })
+    expect(loopFrame(plan, 4)).toEqual({ from: false, to: true, progress: null })
+    const cut = loopPlan(6, 6, 0)
+    expect(loopFrame(cut, 1.99)).toEqual({ from: true, to: false, progress: null })
+    expect(loopFrame(cut, 2)).toEqual({ from: false, to: true, progress: null })
   })
 })

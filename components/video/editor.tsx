@@ -20,7 +20,7 @@ import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
-import { cutsOf, setTransition } from "@/lib/video/transitions"
+import { cutsOf, setCutAudio, setTransition } from "@/lib/video/transitions"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview, type MediaDrop } from "./preview"
@@ -174,6 +174,12 @@ export function Editor({
   const player = usePreviewPlayer(project, videoUrl)
   const playhead = player.time
   const { toggle } = player
+
+  /** Opens the Transition / audio overlap dialog for the cut before clip `id`; the player pauses, so only the dialog's (muted) loop plays. */
+  const openTransition = (id: string) => {
+    player.pause()
+    setTransitionFor(id)
+  }
 
   /** Playback pauses while the ruler is scrubbed and picks up again after. */
   function scrub(active: boolean) {
@@ -599,10 +605,10 @@ export function Editor({
                         type="button"
                         size="icon-sm"
                         variant="ghost"
-                        onClick={() => holder && setTransitionFor(holder)}
+                        onClick={() => holder && openTransition(holder)}
                         disabled={!holder}
-                        title={holder ? `Transition ${side}` : `Transition ${side} (no clip right ${side} this one on its layer)`}
-                        aria-label={`Transition ${side}`}
+                        title={holder ? `Transition / audio overlap ${side}` : `Transition / audio overlap ${side} (no clip right ${side} this one on its layer)`}
+                        aria-label={`Transition / audio overlap ${side}`}
                         className={side === "after" ? "[&_svg]:-scale-x-100" : undefined}
                       >
                         <Blend className="h-4 w-4" />
@@ -645,7 +651,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={setTransitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} />
           </div>
         </div>
       </div>
@@ -655,9 +661,11 @@ export function Editor({
           project={project}
           clipId={transitionFor}
           thumbUrl={thumbUrl}
+          videoUrl={videoUrl}
+          imageUrl={imageUrl}
           onApply={(spec) => {
             const id = transitionFor
-            edit((p) => setTransition(p, id, spec))
+            edit((p) => setCutAudio(setTransition(p, id, spec.transition), id, spec.cutAudio))
           }}
           onClose={() => setTransitionFor(null)}
         />
