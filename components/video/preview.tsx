@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
 import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
-import { transitionLook, type LayerStyle } from "@/lib/video/transition-preview"
+import { transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
 import { laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
@@ -12,6 +12,7 @@ import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity,
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
 import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
+import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
 import { TransformOverlay, type GestureState, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
 
@@ -95,11 +96,15 @@ export function TextPicture({ text, ready }: { text: ClipText; ready: boolean })
 const pct = (n: number) => `${n * 100}%`
 
 /** A transition's look for one picture (lib/video/transition-preview) as the style of its canvas-sized layer. */
-export const fxStyle = (s: LayerStyle | undefined): CSSProperties =>
-  s ? { opacity: s.opacity, transform: s.transform, clipPath: s.clipPath, maskImage: s.maskImage, WebkitMaskImage: s.maskImage, filter: s.filter } : {}
+export { fxStyle }
 
-/** z-index of a lane's picture: the clip on show, and under it a transition's outgoing clip. */
-const laneZ = (lane: number, outgoing = false) => 2 * lane + (outgoing ? 1 : 2)
+/**
+ * z-index of a lane's pictures: the clip on show, under it a transition's
+ * outgoing clip (over it when the look says, `fromOnTop`), and a transition's
+ * overlays and tint over both.
+ */
+const laneZ = (lane: number, level: "outgoing" | "incoming" | "top" | "over") => 4 * lane + { outgoing: 1, incoming: 2, top: 3, over: 4 }[level]
+const outgoingZ = (lane: number, fx: TransitionLook | null) => laneZ(lane, fx?.fromOnTop ? "top" : "outgoing")
 
 /**
  * A sweep's or a typewriter's cut as a clip-path in the text box's own,
@@ -261,8 +266,8 @@ export function Preview({
     const ratio = w / h
     setAspects((a) => (a[assetId] === ratio ? a : { ...a, [assetId]: ratio }))
   }
-  /** A still (an image's picture or a text) in a canvas-sized layer at `zIndex`, styled by a transition's look; null for a video. */
-  const stillLayer = (clip: Clip, zIndex: number, fx: LayerStyle | undefined) => {
+  /** A still (an image's picture or a text) in a canvas-sized layer at `zIndex`, styled by a transition's look (and copies of it, `copies`); null for a video. */
+  const stillLayer = (clip: Clip, zIndex: number, fx: LayerStyle | undefined, copies?: LayerStyle[]) => {
     let inner: ReactNode
     if (isTextClip(clip)) {
       const ready = loadedFonts.has(fontFamily(fontById(clip.text.font)))
@@ -298,11 +303,15 @@ export function Preview({
       )
     }
     return (
-      <div key={clip.id} className="absolute inset-0" style={{ zIndex, ...fxStyle(fx) }}>
-        {inner}
-      </div>
+      <Fragment key={clip.id}>
+        <div className="absolute inset-0" style={{ zIndex, ...fxStyle(fx) }}>
+          {inner}
+        </div>
+        <FxCopies styles={copies} zIndex={zIndex} id={clip.id}>{inner}</FxCopies>
+      </Fragment>
     )
   }
+
   const lanes = project.tracks.slice(0, MAX_TRACKS)
   // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
   const textFonts = [...new Set(project.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
@@ -406,12 +415,13 @@ export function Preview({
         >
           {/* isolate: the layers' z-index stays inside the canvas, under the overlay. */}
           <div className="absolute inset-0 isolate overflow-hidden rounded-md bg-black">
+            <TransitionFxDefs />
             {/* Each video sits in a canvas-sized layer that a transition styles (lib/video/transition-preview). */}
             {lanes.map((track, lane) => {
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w ? transitionLook(w.type, w.progress) : null
+              const fx = w ? transitionLook(w.type, w.progress, W / H) : null
               // What the player's slots hold: the lane's own video (through an overlap, the incoming one from its
               // start, a J-cut's lead too) and the overlap's outgoing video as the tail, in the other slot or under a still.
               const own = laneElementAt(track, look)
@@ -426,20 +436,29 @@ export function Preview({
                 // an audio overlap's video outside the transition plays on unseen.
                 const outgoing = held !== undefined && held === from
                 const shown = held !== undefined && (held === clip || outgoing) ? held : undefined
+                const z = outgoing ? outgoingZ(lane, fx) : laneZ(lane, "incoming")
+                const videoStyle = shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined
                 return (
-                  <div key={`${lane}-${slot}`} className="absolute inset-0" style={shown ? { zIndex: laneZ(lane, outgoing), ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
-                    <video
-                      ref={(v) => player.attach(lane, slot, v)}
-                      playsInline
-                      preload="auto"
-                      aria-hidden={!shown}
-                      onError={() => player.onVideoError(lane, slot)}
-                      onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                      onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                      className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
-                      style={shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined}
-                    />
-                  </div>
+                  <Fragment key={`${lane}-${slot}`}>
+                    <div className="absolute inset-0" style={shown ? { zIndex: z, ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
+                      <video
+                        ref={(v) => player.attach(lane, slot, v)}
+                        playsInline
+                        preload="auto"
+                        aria-hidden={!shown}
+                        onError={() => player.onVideoError(lane, slot)}
+                        onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+                        onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
+                        className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
+                        style={videoStyle}
+                      />
+                    </div>
+                    {shown && (
+                      <FxCopies styles={outgoing ? fx?.fromCopies : fx?.toCopies} zIndex={z} id={`${lane}-${slot}`}>
+                        <VideoMirror video={() => player.videoAt(lane, slot)} className="absolute object-contain" style={videoStyle} />
+                      </FxCopies>
+                    )}
+                  </Fragment>
                 )
               })
             })}
@@ -448,12 +467,13 @@ export function Preview({
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w ? transitionLook(w.type, w.progress) : null
+              const fx = w ? transitionLook(w.type, w.progress, W / H) : null
               return (
                 <Fragment key={`stills-${lane}`}>
-                  {from && stillLayer(from, laneZ(lane, true), fx?.from)}
-                  {clip && stillLayer(clip, laneZ(lane), fx?.to)}
-                  {fx?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: laneZ(lane), background: fx.tint.color, opacity: fx.tint.opacity }} />}
+                  {from && stillLayer(from, outgoingZ(lane, fx), fx?.from, fx?.fromCopies)}
+                  {clip && stillLayer(clip, laneZ(lane, "incoming"), fx?.to, fx?.toCopies)}
+                  <FxOverlays overlays={fx?.overlays} zIndex={laneZ(lane, "over")} />
+                  {fx?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: laneZ(lane, "over"), background: fx.tint.color, opacity: fx.tint.opacity }} />}
                 </Fragment>
               )
             })}

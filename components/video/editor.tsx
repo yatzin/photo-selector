@@ -20,7 +20,7 @@ import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
-import { cutsOf, setCutAudio, setTransition } from "@/lib/video/transitions"
+import { applyCut, cutsOf } from "@/lib/video/transitions"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { Preview, type MediaDrop } from "./preview"
@@ -665,7 +665,7 @@ export function Editor({
           imageUrl={imageUrl}
           onApply={(spec) => {
             const id = transitionFor
-            edit((p) => setCutAudio(setTransition(p, id, spec.transition), id, spec.cutAudio))
+            edit((p) => applyCut(p, id, spec))
           }}
           onClose={() => setTransitionFor(null)}
         />

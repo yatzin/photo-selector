@@ -544,6 +544,9 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   useEffect(() => () => cancelAnimationFrame(raf.current), [])
 
+  /** A lane's slot video element (null: none yet), for what mirrors it (a transition's copies). */
+  const videoAt = useCallback((lane: number, slot: number) => els.current[lane]?.[slot] ?? null, [])
+
   /** The asset loaded in a lane's slot (null: none), for event handlers. */
   const assetIn = useCallback((lane: number, slot: number) => lanes.current[lane]?.loaded[slot] ?? null, [])
 
@@ -570,7 +573,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { attach, assetIn, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
+  return { attach, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
 }
 
 export type PreviewPlayer = ReturnType<typeof usePreviewPlayer>

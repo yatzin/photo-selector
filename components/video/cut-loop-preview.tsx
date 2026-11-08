@@ -7,7 +7,8 @@ import { textSize } from "@/lib/video/text"
 import { IDENTITY } from "@/lib/video/transform"
 import { loopFrame, loopPlan, loopSound, transitionLook } from "@/lib/video/transition-preview"
 import type { CutAudio, TransitionType } from "@/lib/video/transition-types"
-import { fxStyle, placement, TextPicture } from "./preview"
+import { placement, TextPicture } from "./preview"
+import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
 
 // The Transition dialog's live preview of one cut: the two real clips (video,
 // image or text, placed by their transforms) looping from up to 2 s before the
@@ -145,13 +146,14 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
     drive(toRef.current, to, toAt, frame.to || sound.to.plays, sound.to.gain, to.in + Math.max(0, plan.cut - Math.max(plan.duration / 2, audio?.mode === "j" ? audio.duration : 0)) - plan.cut)
   })
 
-  const look = frame.progress !== null && type !== "none" ? transitionLook(type, frame.progress) : null
+  const look = frame.progress !== null && type !== "none" ? transitionLook(type, frame.progress, W / H) : null
   const learn = (assetId: string, w: number, h: number) => {
     if (!(w > 0 && h > 0)) return
     setAspects((a) => (a[assetId] === w / h ? a : { ...a, [assetId]: w / h }))
   }
 
-  const picture = (clip: Clip, ref: RefObject<HTMLVideoElement | null>) => {
+  /** A clip's picture; `mirror`: a copy of it for a transition's look (a video's as a canvas mirroring the video). */
+  const picture = (clip: Clip, ref: RefObject<HTMLVideoElement | null>, mirror = false) => {
     const t = clip.transform ?? IDENTITY
     if (isTextClip(clip)) {
       return (
@@ -165,6 +167,7 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
       // eslint-disable-next-line @next/next/no-img-element
       return <img src={imageUrl(clip.asset)} alt="" draggable={false} className="absolute object-contain" style={style} onLoad={(e) => learn(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
     }
+    if (mirror) return <VideoMirror video={() => ref.current} className="absolute object-contain" style={style} />
     return (
       <video
         ref={ref}
@@ -188,13 +191,17 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
     <div className="grid gap-1.5">
       <div className="relative w-full overflow-hidden rounded-lg bg-black" style={{ aspectRatio: `${W} / ${H}` }} role="img" aria-label="Preview of the cut, looping">
         <div className="absolute inset-0 isolate">
-          <div className="absolute inset-0" style={{ zIndex: 1, visibility: frame.from ? "visible" : "hidden", ...fxStyle(look?.from) }}>
+          <TransitionFxDefs />
+          <div className="absolute inset-0" style={{ zIndex: look?.fromOnTop ? 3 : 1, visibility: frame.from ? "visible" : "hidden", ...fxStyle(look?.from) }}>
             {picture(from, fromRef)}
           </div>
+          {frame.from && <FxCopies styles={look?.fromCopies} zIndex={look?.fromOnTop ? 3 : 1} id="from">{picture(from, fromRef, true)}</FxCopies>}
           <div className="absolute inset-0" style={{ zIndex: 2, visibility: frame.to ? "visible" : "hidden", ...fxStyle(look?.to) }}>
             {picture(to, toRef)}
           </div>
-          {look?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: 3, background: look.tint.color, opacity: look.tint.opacity }} />}
+          {frame.to && <FxCopies styles={look?.toCopies} zIndex={2} id="to">{picture(to, toRef, true)}</FxCopies>}
+          <FxOverlays overlays={look?.overlays} zIndex={4} />
+          {look?.tint && <div aria-hidden className="absolute inset-0" style={{ zIndex: 4, background: look.tint.color, opacity: look.tint.opacity }} />}
         </div>
       </div>
       <div className="flex items-center gap-2">
