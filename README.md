@@ -456,12 +456,20 @@ Not while the project is exporting, or while that file is being imported.
   ("J-cut 1 s" on hover), and the cut's circle shows as set. The loop in the
   box plays the overlap's sound and marks it on its bar, labelled under it
   ("Audio starts early (J-cut, 1 s)").
-- **Linked clips.** Clips joined by transitions or audio overlaps move
-  together or not at all. Dragging one away springs it back with a red X and
-  a notice, with **Unlink this clip** (takes the transitions and audio
-  overlaps off both of its sides) and
-  **Move all linked clips (N)**, which moves the whole chain along its layer
-  by the drag you just made (one undo step; not to another layer). Trimming
+- **Linked clips.** Clips joined by transitions or audio overlaps (a group)
+  are locked in place. As soon as you start dragging one, a red X covers it,
+  the clip stays where it is, and a notice offers **Unlink this clip** (takes
+  the transitions and audio overlaps off both of its sides) and **Move group
+  (N)**. Move group unlocks that group only: drag any of its clips and they
+  all move together along their layer (snapping as one block, one undo step
+  per drag; not to another layer). The first drag starts a 5 minute window,
+  shown as a countdown on the group (amber in the last 30 seconds), in which
+  you can move it as often as you like. When the time runs out the group
+  locks again (a drag in progress springs back), and a drag then shows the
+  red X across every clip of the group. Opening the Transition dialog for a
+  cut inside the group locks it at once. An unlock you don't use lapses when
+  you select a clip outside the group, make another edit, or after 5
+  minutes. Nothing about this is saved: reloading locks every group. Trimming
   the edge at a transition is refused the same way (Unlink only), except on a
   snapped layer 1, where the clips stay together; trimming the other edge
   keeps the transition, shortened if it no longer fits. A file dropped
