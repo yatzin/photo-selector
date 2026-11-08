@@ -43,8 +43,8 @@ import { Thumb } from "./thumb"
 // ruler (or with Ctrl/Cmd over the clips) and scrolls sideways over the clips
 // (Shift: up and down). A clip with sound has its own mute button and, when
 // waveforms are on, its waveform over the thumbnail. Right-clicking a clip
-// opens its menu (split at the playhead, delete, mute, and for an image Edit
-// length..., a dialog for its start and length). A text clip is a coloured
+// opens its menu (split at the playhead, delete, mute, and Edit length..., a
+// dialog for its start and length, and for a clip with sound its source window). A text clip is a coloured
 // block with its text; it has Edit length... too, Edit text... (also a
 // double-click), Animation... (the same dialog on its Animation tab) and
 // Horizontal / Vertical (letters across or stacked). A ramp at each end of the
@@ -1017,7 +1017,8 @@ export function Timeline({
       items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
       items.push({ label: "Edit Audio Levels...", dot: clip.audio !== undefined, onSelect: () => onEditAudio(id) })
     }
-    if (image || isTextClip(clip) || (asset !== undefined && assetKind(asset) === "audio")) items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
+    // Every clip: a video's also crops and slides its source there, as an audio clip's does.
+    items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
     if (isTextClip(clip)) {
       const text = clip.text
       items.push(
