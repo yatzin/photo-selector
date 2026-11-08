@@ -9,12 +9,14 @@ import { useAssetPeaks } from "./use-asset-peaks"
 // redraws (once a frame at most) when the zoom, a trim or the row height
 // changes, never during playback. A clip wider than MAX_CANVAS device px gets
 // a canvas that size over the part in view, moved along as the view scrolls.
+// A clip's audio level (`gain`, linear) scales the bars; a bar it pushes past
+// full height is drawn full and in red, as the boost would clip there.
 
 const STEP = 2 // css px per bar, gap included
 const MAX_CANVAS = 4096 // device px
 
 export const ClipWaveform = memo(function ClipWaveform({
-  folder, assetId, inSec, outSec, width, height, left, muted, scroller,
+  folder, assetId, inSec, outSec, width, height, left, muted, scroller, gain = 1,
 }: {
   folder: string
   assetId: string
@@ -28,6 +30,8 @@ export const ClipWaveform = memo(function ClipWaveform({
   muted: boolean
   /** The timeline's scroll viewport, for very wide clips. */
   scroller: RefObject<HTMLDivElement | null>
+  /** The clip's audio level as a linear gain (1: as recorded). */
+  gain?: number
 }) {
   const peaks = useAssetPeaks(folder, assetId, true)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -59,12 +63,14 @@ export const ClipWaveform = memo(function ClipWaveform({
       ctx.clearRect(0, 0, c.width, c.height)
       const span = outSec - inSec
       const bars = waveformBars(peaks.peaks, peaks.rate, inSec + (start / width) * span, inSec + ((start + w) / width) * span, w, STEP)
-      ctx.fillStyle = muted ? "rgba(255, 255, 255, 0.3)" : "rgba(255, 255, 255, 0.7)"
+      const fill = muted ? "rgba(255, 255, 255, 0.3)" : "rgba(255, 255, 255, 0.7)"
       const mid = c.height / 2
       const barW = Math.max(1, Math.round(STEP * dpr) - 1)
       const half = (c.height - 2 * dpr) / 2
       bars.forEach((b, j) => {
-        const h = Math.max(dpr / 2, b * half)
+        const level = b * gain
+        ctx.fillStyle = level > 1 && !muted ? "rgba(248, 113, 113, 0.9)" : fill
+        const h = Math.max(dpr / 2, Math.min(1, level) * half)
         ctx.fillRect(Math.round(j * STEP * dpr), Math.round(mid - h), barW, Math.max(1, Math.round(2 * h)))
       })
     }
@@ -78,7 +84,7 @@ export const ClipWaveform = memo(function ClipWaveform({
       cancelAnimationFrame(frame)
       if (wide) el?.removeEventListener("scroll", schedule)
     }
-  }, [peaks, inSec, outSec, width, height, left, muted, scroller])
+  }, [peaks, inSec, outSec, width, height, left, muted, scroller, gain])
 
   if (!peaks) return null
   return (

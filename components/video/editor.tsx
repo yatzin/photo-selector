@@ -13,7 +13,7 @@ import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
   addClip, addTextClip, allClips, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
-  removeClip, resolveStart, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
+  removeClip, resolveStart, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { DEFAULT_TEXT } from "@/lib/video/text"
 import { usedTextColours } from "@/lib/video/text-colours"
@@ -22,6 +22,7 @@ import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
 import type { Edge } from "@/lib/video/transition-types"
+import { AudioLevelsDialog } from "./audio-levels-dialog"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
 import { ImportButton } from "./import-button"
@@ -89,6 +90,9 @@ export function Editor({
   const [textFor, setTextFor] = useState<string | null>(null)
   const [textSection, setTextSection] = useState<TextSection>("text")
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
+  // The clip whose Audio levels dialog is open.
+  const [audioFor, setAudioFor] = useState<string | null>(null)
+  const audioClip = audioFor ? allClips(project).find((c) => c.id === audioFor) : undefined
   // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
   const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
   // The clip after the cut whose dialog is open, for the timeline (opening it locks the group around that cut).
@@ -222,6 +226,12 @@ export function Editor({
     if (isTextClip(clip)) return openText(id, "animation")
     player.pause()
     setTransitionTarget({ clipId: id, edge })
+  }
+
+  /** Opens the Audio levels dialog for clip `id`; the player pauses (silent) while only the dialog's preview plays. */
+  const openAudio = (id: string) => {
+    player.pause()
+    setAudioFor(id)
   }
 
   /** Playback pauses while the ruler is scrubbed and picks up again after. */
@@ -712,7 +722,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} transitionFor={transitionFor} />
           </div>
         </div>
       </div>
@@ -734,6 +744,20 @@ export function Editor({
             if (edge) edit((p) => setEdgeTransition(p, id, edge, spec), undefined, true)
           }}
           onClose={() => setTransitionTarget(null)}
+        />
+      )}
+      {audioClip && (
+        <AudioLevelsDialog
+          key={audioClip.id}
+          project={project}
+          clip={audioClip}
+          playhead={playhead}
+          mediaUrl={isAudioClip(project, audioClip) ? audioUrl(audioClip.asset) : videoUrl(audioClip.asset)}
+          onApply={(audio) => {
+            const id = audioClip.id
+            edit((p) => setClipAudio(p, id, audio))
+          }}
+          onClose={() => setAudioFor(null)}
         />
       )}
       {textClip && isTextClip(textClip) && (

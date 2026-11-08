@@ -10,13 +10,16 @@ import { cn } from "@/lib/utils"
 // the arrows, Home and End move it, Enter or Space runs it. Escape, Tab, a
 // press outside, any scroll, a resize or the window losing focus closes it,
 // and so does running an item. Items with `checked` are a radio pair (a
-// check mark on the one that's on), set off from the others by a line.
+// check mark on the one that's on), set off from the others by a line. An
+// item with `dot` shows a small dot after its label (it has settings already).
 
 export type ClipMenuItem = {
   label: string
   /** The key that does the same, shown at the right (Delete, S, M). */
   hint?: string
   disabled?: boolean
+  /** A small dot after the label: the item already has settings (e.g. audio levels set). */
+  dot?: boolean
   /** A choice of several (menuitemradio): whether it's the one that's on. */
   checked?: boolean
   onSelect: () => void
@@ -131,6 +134,12 @@ export function ClipMenu({ x, y, label, items, onClose }: {
           <span className="flex items-center gap-2">
             {item.checked !== undefined && <Check aria-hidden className={cn("h-3.5 w-3.5", !item.checked && "invisible")} />}
             {item.label}
+            {item.dot && (
+              <>
+                <span aria-hidden data-menu-dot className="h-1.5 w-1.5 rounded-full bg-editor-accent" />
+                <span className="sr-only">(set)</span>
+              </>
+            )}
           </span>
           {item.hint && <kbd className="font-sans text-xs text-muted-foreground">{item.hint}</kbd>}
         </button>

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
+import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, SlidersHorizontal, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
@@ -11,6 +11,7 @@ import {
 import { setClipTiming } from "@/lib/video/clip-timing"
 import { beginMove, chainIds, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS, type LockState } from "@/lib/video/group-lock"
 import { audioEdgeState } from "@/lib/video/audio-fx"
+import { audioSummary, dbToGain } from "@/lib/video/audio-levels"
 import { isAudioTransitionType, type Edge } from "@/lib/video/transition-types"
 import { edgeTransitionName, linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
@@ -196,7 +197,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, transitionFor = null,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, onEditAudio, transitionFor = null,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -225,6 +226,8 @@ export function Timeline({
   onTransition: (id: string) => void
   /** Open the Transition dialog for clip `id`'s free edge (a text clip's Animation tab instead). */
   onEdgeTransition: (id: string, edge: Edge) => void
+  /** Open the Audio levels dialog for clip `id` (a clip with sound). */
+  onEditAudio: (id: string) => void
   /** The clip whose Transition dialog is open (the cut before it), if any: opening it locks an unlocked group around that cut. */
   transitionFor?: string | null
 }) {
@@ -1010,7 +1013,10 @@ export function Timeline({
         },
       },
     ]
-    if (audible) items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
+    if (audible) {
+      items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
+      items.push({ label: "Edit Audio Levels...", dot: clip.audio !== undefined, onSelect: () => onEditAudio(id) })
+    }
     if (image || isTextClip(clip) || (asset !== undefined && assetKind(asset) === "audio")) items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
     if (isTextClip(clip)) {
       const text = clip.text
@@ -1319,6 +1325,7 @@ export function Timeline({
                             left={left * zoom}
                             muted={muted}
                             scroller={scroller}
+                            gain={dbToGain(clip.audio?.gainDb ?? 0)}
                           />
                         )}
                         {text ? null : image ? (
@@ -1357,6 +1364,20 @@ export function Timeline({
                           >
                             {muted ? <VolumeX className={cn("text-red-300", tight ? "h-2.5 w-2.5" : "h-3 w-3")} /> : <Volume2 className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />}
                           </button>
+                        )}
+                        {audible && clip.audio && (
+                          // Audio levels set: a small mark left of the mute button (decoration; the title names them).
+                          <span
+                            aria-hidden
+                            data-audio-badge
+                            title={`Audio: ${audioSummary(clip.audio)}`}
+                            className={cn(
+                              "absolute z-10 flex items-center justify-center rounded bg-black/50 text-amber-200",
+                              tight ? "top-0 right-[2.125rem] h-3.5 w-3.5" : "top-1 right-[2.375rem] h-4 w-4"
+                            )}
+                          >
+                            <SlidersHorizontal className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />
+                          </span>
                         )}
                         {badges.map((b) =>
                           // An unlocked group's countdown, on its first block on this layer.
