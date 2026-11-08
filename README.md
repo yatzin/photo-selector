@@ -504,6 +504,34 @@ Not while the project is exporting, or while that file is being imported.
   that comes to touch that end (a move, a trim, a drop) takes it away, with
   the notice "Edge transition removed: the clip now has a neighbour"; undo
   brings it back.
+- **Audio levels.** Right-click a clip with sound (an audio clip, or a video
+  whose file has sound) and pick **Edit Audio Levels...** (after Mute; a dot
+  beside it when the clip has levels set). **Volume** turns the whole clip
+  down or up, -60 to +24 dB in 0.5 dB steps (slider or the dB box;
+  double-click the slider or press Reset for 0 dB). **Filters** add up to
+  four effects, run in the order listed: click a chip to add or remove one
+  (the box under the chips says what the one you point at does, what it's
+  best for and when to avoid it; a fifth gets a note to remove one first),
+  then reorder with the arrows, set the intensity slider where there is one,
+  or take one off with X. Presets set the list in one click: Voice clean-up
+  (Low cut, Compressor, Voice boost, Normalize), Radio (Old-time radio),
+  Phone (Telephone) and Muffled hallway (Muffled, Room reverb). The groups:
+  Clean-up and tone (Low cut, High cut, Bass boost, Treble boost, Voice
+  boost, Tame harshness, Compressor, Limiter, Noise gate, Noise reduction,
+  Normalize to -16 LUFS, Stereo to mono, Wide stereo), Space (Room reverb,
+  Hall reverb, Echo, Slapback), Character (Lo-fi, Telephone, Old-time radio,
+  Through a can, Megaphone, Muffled, Underwater) and Creative (Robot,
+  Chipmunk, Deep voice, Alien, Vinyl crackle). **Preview** plays the clip's
+  sound through them, about 6 s from its start (or from the playhead when
+  it's inside the clip), looping and following the controls as you move
+  them; the editor's player is paused while the box is open. Apply is one
+  undo step, Cancel or Esc discards, Remove all takes the levels off. The
+  editor's preview plays clips with levels the same way, with their fades
+  and transitions on top; a muted clip stays silent. On the timeline such a
+  clip shows a small sliders mark ("Audio: +3 dB, Telephone" on hover) and
+  its waveform grows or shrinks with the volume (red where a boost would
+  clip). Splitting keeps the levels on both pieces; moving, Edit length,
+  undo and redo keep them too.
 - **Linked clips.** Clips joined by transitions or audio overlaps (a group)
   are locked in place. As soon as you start dragging one, a red X covers it,
   the clip stays where it is, and a notice offers **Unlink this clip** (takes
@@ -536,7 +564,8 @@ Not while the project is exporting, or while that file is being imported.
   too little footage shortens it or takes it off with a notice. The notice
   stays while you point at it.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
-  is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
+  is inside that clip), Delete, Mute or Unmute and Edit Audio Levels... (a
+  clip with sound) and, for
   an image or text, Edit length... (text also has Edit text..., Animation...
   and Horizontal / Vertical). The arrow keys, Home and End move through it,
   Enter runs an item and Esc closes it. The menu shows each item's shortcut.
@@ -601,10 +630,18 @@ the clip with a copy of itself made transparent (its alpha set to 0), so the
 effect uncovers or covers whatever is below; an audio clip's edge is an afade
 curve, a low-pass sweep, a tape start or stop, or an echo tail inside the
 clip.
+Audio levels go on each clip's sound right after it's cut from the file:
+`volume=<gain>dB`, then each effect's filters in order (highpass, lowpass,
+bandpass, equalizer, bass and treble shelves, acompressor, alimiter, agate,
+afftdn, loudnorm, pan, adelay, aecho taps for the reverbs and echoes, aeval
+for clipping, bit reduction, ring modulation and the fixed-seed hiss and
+crackle, vibrato, flanger, asetrate with atempo for the pitch shifts), cut
+back to the clip's length, then its fades, J- or L-cut and transitions as
+before. Projects without levels export exactly as they did.
 
 **Limits in this version**
-- No volume control on audio clips yet (only the fades at their ends and
-  the transitions between them). Text has no size box
+- Audio levels are one setting for the whole clip (no volume curve over
+  time). Text has no size box
  (use the corner handles) and no
   outline or shadow.
 - Transitions and audio overlaps only between clips that touch on one
@@ -616,6 +653,15 @@ clip.
   has three taps, and a browser plays a tape no slower than 1/16 speed. A
   dissolve or pixelate at an in or out end previews as a fade or a blur, as
   at a cut.
+- Audio levels: the preview builds the same filter chain from the same
+  numbers, but five effects are heard in the export only (Noise gate, Noise
+  reduction, Normalize, Chipmunk, Deep voice: the browser has no gate,
+  denoiser or loudness meter, and can't shift pitch and keep time); the box
+  marks them with * and says "Not previewed" while they're applied, and the
+  preview plays those dry. The compressor and limiter, the vibrato and
+  flanger sweeps and the hiss and crackle (different random numbers) sound
+  close to the export rather than identical. A reverb's or echo's tail is
+  cut at the clip's end.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 
