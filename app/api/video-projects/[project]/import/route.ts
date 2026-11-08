@@ -53,6 +53,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   if (Number(request.headers.get("content-length") ?? 0) > MAX_IMPORT_CHUNK_BYTES) return json({ error: "That piece is too large." }, 413)
 
   let name = rawName
+  const first = !upload
   if (!upload) {
     if (offset !== 0) return json({ error: "Invalid upload." }, 400)
     const started = await startUpload(userFolder, folder, rawName, size)
@@ -66,7 +67,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   }
 
   const written = await writeChunk(userFolder, folder, upload, name, size, offset, request.body)
-  if ("error" in written) return json({ error: written.error, upload }, written.status)
+  if ("error" in written) {
+    // A first piece that didn't arrive (a cancel before the browser knew the upload's id): nothing to resume, so nothing is kept.
+    if (first) await cancelUpload(userFolder, folder, upload, name)
+    return json({ error: written.error, ...(first ? {} : { upload }) }, written.status)
+  }
   if (written.received < size) return json({ upload, received: written.received })
 
   const id = upload

@@ -462,6 +462,10 @@ export function Preview({
                 )
               })
             })}
+            {/* The audio layer's two elements (use-preview-player): sound only, nothing to see. */}
+            {[0, 1].map((slot) => (
+              <audio key={`audio-${slot}`} ref={(a) => player.attachAudio(slot, a)} preload="auto" data-audio-slot={slot} hidden />
+            ))}
             {/* Stills after the videos in the DOM, so a still coming and going never moves (and so pauses) a video. */}
             {lanes.map((track, lane) => {
               const clip = hits[lane]?.clip

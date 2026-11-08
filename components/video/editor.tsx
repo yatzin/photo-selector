@@ -12,8 +12,8 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, assetKind, baseInsertion, clipLength, clipsAt, DEFAULT_IMAGE, freeTrackFor, isMagnetic, isTextClip, MAX_TRACKS, removeAsset, removeClip, resolveStart,
-  setClipMuted, setClipText, setTransform, splitClip, totalLength, trackEnd, type Asset, type Clip, type Edit, type Project,
+  addClip, addTextClip, allClips, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  removeClip, resolveStart, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { DEFAULT_TEXT } from "@/lib/video/text"
 import { usedTextColours } from "@/lib/video/text-colours"
@@ -23,12 +23,14 @@ import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf } from "@/lib/video/transitions"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type InboxFolder } from "./file-tree"
+import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
 import { Timeline, type DropTarget } from "./timeline"
 import { TransitionDialog } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
+import { useMediaImport } from "./use-media-import"
 
 // The editor: file tree on the left, preview in the middle, timeline below.
 // Slice 1 shell: import, add to timeline and autosave; drag/trim/split come
@@ -52,9 +54,16 @@ function landing(p: Project, track: number, length: number, start: number, id: s
  */
 type EditorState = { meta: Omit<Project, keyof Edit>; history: History<Edit> }
 
+/** A project split into its server-owned part and its undoable edit (editOf: the tracks and the audio layer). */
+function splitProject(p: Project): EditorState["meta"] {
+  const meta: Partial<Project> = { ...p }
+  delete meta.tracks
+  delete meta.audioTrack
+  return meta as EditorState["meta"]
+}
+
 function initialState(p: Project): EditorState {
-  const { tracks, ...meta } = p
-  return { meta, history: createHistory<Edit>({ tracks }) }
+  return { meta: splitProject(p), history: createHistory<Edit>(editOf(p)) }
 }
 
 export function Editor({
@@ -82,7 +91,9 @@ export function Editor({
   // The clip after the cut whose Transition dialog is open (it holds the transition).
   const [transitionFor, setTransitionFor] = useState<string | null>(null)
   // The selected clip's cuts with an adjoining neighbour, for the toolbar's Transition before / after.
-  const selectedCuts = selectedId ? cutsOf(project, selectedId) : null
+  // An audio clip has no cuts to join: no Transition before / after for it.
+  const selectedCuts = selectedId && !project.audioTrack?.clips.some((c) => c.id === selectedId && isAudioClip(project, c)) ? cutsOf(project, selectedId) : null
+
   /** Opens a text clip's Edit text dialog on its Text tab, or on its Animation tab. */
   const openText = useCallback((id: string, section: TextSection = "text") => {
     setTextSection(section)
@@ -93,7 +104,7 @@ export function Editor({
   const edit = useCallback((change: (p: Project) => Project, group?: string) => {
     setEditor((s) => {
       const next = change({ ...s.meta, ...s.history.present })
-      const history = commit(s.history, { tracks: next.tracks }, group)
+      const history = commit(s.history, editOf(next), group)
       return history === s.history ? s : { ...s, history }
     })
   }, [])
@@ -171,7 +182,17 @@ export function Editor({
     },
     [project.assets, userFolder, folder]
   )
-  const player = usePreviewPlayer(project, videoUrl)
+  /** A sound file's URL, for the preview's audio elements. */
+  const audioUrl = useCallback(
+    (assetId: string) => {
+      const asset = project.assets[assetId]
+      return asset && assetKind(asset) === "audio" ? mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "original", assetId) : ""
+    },
+    [project.assets, userFolder, folder]
+  )
+  const player = usePreviewPlayer(project, videoUrl, audioUrl)
+  // Import: files from the computer land in Project media as each one finishes (the server owns assets: take the new one from its reply).
+  const importer = useMediaImport(folder, (id, asset) => setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [id]: asset } } })))
   const playhead = player.time
   const { toggle } = player
 
@@ -256,6 +277,15 @@ export function Editor({
       asset = imported.asset
     }
     const length = assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration
+    if (assetKind(asset) === "audio") {
+      // A sound file goes on the audio layer at the playhead (slid clear of its clips there).
+      const id = newId()
+      edit((p) => addClip(p, assetId, AUDIO_TRACK, { start: at }, id))
+      setSelectedId(id)
+      const start = resolveStart(trackAt(latest.current, AUDIO_TRACK)!.clips, length, at, id)
+      if (Math.abs(start - at) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+      return
+    }
     const track = freeTrackFor(latest.current, at, length)
     if (track === null) {
       toast.info("No free layer at the playhead. Move the playhead or remove a layer.")
@@ -295,8 +325,7 @@ export function Editor({
     const n = removeAsset(latest.current, assetId).removedClips
     setEditor((s) => {
       const { project: next } = removeAsset({ ...s.meta, ...s.history.present }, assetId)
-      const { tracks, ...meta } = next
-      return { meta, history: createHistory<Edit>({ tracks }) }
+      return initialState(next)
     })
     toast.success(n > 0 ? `Removed ${file} and ${n} clip${n === 1 ? "" : "s"}` : `Removed ${file}`)
     return true
@@ -394,8 +423,8 @@ export function Editor({
 
   function addToTimeline(assetId: string) {
     const id = newId()
-    // After the base track's last clip.
-    edit((p) => addClip(p, assetId, 0, { start: trackEnd(p.tracks[0]) }, id))
+    // After the base track's last clip (a sound file: after the audio layer's).
+    edit((p) => addClip(p, assetId, 0, { start: trackEnd(p.assets[assetId]?.kind === "audio" ? trackAt(p, AUDIO_TRACK)! : p.tracks[0]) }, id))
   }
 
   const { pause } = player
@@ -414,8 +443,10 @@ export function Editor({
   // What S and the Split button cut: the selected clip when something is selected (and only when the playhead
   // is over it, never another clip), else the topmost clip under the playhead.
   const playheadHits = clipsAt(project, playhead)
+  // The audio layer isn't among the picture layers clipsAt sees: a selected audio clip under the playhead splits too.
+  const selectedAudio = selectedId ? project.audioTrack?.clips.find((c) => c.id === selectedId) : undefined
   const splitTarget = selectedId
-    ? (playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? null)
+    ? (playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? (selectedAudio && playhead >= selectedAudio.start && playhead < clipEnd(selectedAudio) ? selectedAudio.id : null))
     : (playheadHits.top?.clip.id ?? null)
 
   /** Splits at the playhead (S, or the toolbar); false when there's no clip under it. One undo step. */
@@ -448,7 +479,7 @@ export function Editor({
   function toggleMuteSelected(): boolean {
     const clip = selectedId ? allClips(project).find((c) => c.id === selectedId) : undefined
     const asset = clip && project.assets[clip.asset]
-    if (!clip || !asset || assetKind(asset) !== "video" || !asset.hasAudio) return false
+    if (!clip || !asset || assetKind(asset) === "image" || !asset.hasAudio) return false
     const id = clip.id
     const muted = !clip.muted
     edit((p) => setClipMuted(p, id, muted))
@@ -522,6 +553,7 @@ export function Editor({
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-4">
+        <ImportButton importer={importer} />
         <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
           <ArrowLeft className="h-4 w-4" />
           <span className="sr-only">All projects</span>
@@ -544,7 +576,7 @@ export function Editor({
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
-          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} />
+          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} />
         </aside>
         <div ref={column} className="flex min-w-0 flex-1 flex-col">
           {/* With a set height the preview gives way first (flex-shrink) and the timeline grows; CSS keeps both minimums. */}

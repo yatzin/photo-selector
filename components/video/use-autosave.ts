@@ -10,7 +10,8 @@ export type { SaveState }
 const SLOW_SAVE = 400 // ms before a running save shows as "saving"
 
 /** The server keeps its own assets, name and settings and takes only the tracks (see mergeClientProject). */
-const sameTracks = (a: Project, b: Project) => a.tracks === b.tracks
+/** The edit is the same: the tracks and the audio layer (assets and settings are server-owned). */
+const sameTracks = (a: Project, b: Project) => a.tracks === b.tracks && a.audioTrack === b.audioTrack
 
 /**
  * Saves the project after 1.5 s without changes (at least every 5 s during a

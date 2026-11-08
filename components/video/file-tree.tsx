@@ -1,10 +1,12 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronDown, ChevronRight, Folder, Loader2, Plus, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronRight, Folder, Loader2, Music, Plus, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { formatBytes, mediaUrl } from "@/lib/format"
+import { cn } from "@/lib/utils"
+
 import { formatTimecode } from "@/lib/video/time"
 import { allClips, assetKind, type Project } from "@/lib/video/project"
 import { Thumb } from "./thumb"
@@ -12,9 +14,11 @@ import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
 // Inbox, whose files are dragged onto the timeline or the player (that copies
-// them into Project media). A Project media item is deleted from its
-// right-click menu (or Delete on the focused row), after a warning that says
-// how many timeline clips go with it.
+// them into Project media). Files dragged from the computer onto Project media
+// upload into it, as the editor bar's Import button does (onImportFiles). A
+// sound file shows a music note instead of a thumbnail. A Project media item
+// is deleted from its right-click menu (or Delete on the focused row), after a
+// warning that says how many timeline clips go with it.
 
 export type InboxFolder = { folder: string; files: { name: string; size: number; kind: "image" | "video" }[] }
 
@@ -69,8 +73,11 @@ function RowMenu({ x, y, file, disabled, onDelete, onClose }: { x: number; y: nu
   )
 }
 
+/** True for a drag of files from the computer (not one of the app's own drags: an Inbox file, a media item, a clip). */
+const isFileDrag = (dt: DataTransfer) => dt.types.includes("Files") && !dt.types.includes(ASSET_DRAG_TYPE) && !dt.types.includes(INBOX_DRAG_TYPE)
+
 export function FileTree({
-  inbox, project, thumbUrl, importing, onAdd, onDelete,
+  inbox, project, thumbUrl, importing, onAdd, onDelete, onImportFiles,
 }: {
   inbox: InboxFolder[]
   project: Project
@@ -81,8 +88,12 @@ export function FileTree({
   onAdd: (assetId: string) => void
   /** Deletes a media item (and its clips) from the project; true when it's gone. */
   onDelete: (assetId: string) => Promise<boolean>
+  /** Files from the computer dropped on Project media: upload them into it. */
+  onImportFiles: (files: File[]) => void
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  // Files from the computer over Project media: its drop outline.
+  const [fileOver, setFileOver] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const [confirm, setConfirm] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -107,48 +118,81 @@ export function FileTree({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto text-sm">
-      <p className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Project media</p>
-      {assets.length === 0 && <p className="px-3 pb-2 text-xs text-muted-foreground">Drag files from the Inbox below onto the timeline.</p>}
-      <ul className="px-2">
-        {assets.map(([id, a]) => (
-          <li
-            key={id}
-            draggable
-            tabIndex={0}
-            aria-label={`${a.file}, press Delete to remove it from the project`}
-            onDragStart={(e) => {
-              e.dataTransfer.setData(ASSET_DRAG_TYPE, id)
-              e.dataTransfer.effectAllowed = "copy"
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              // The keyboard's menu key has no pointer position: open by the row.
-              const r = e.currentTarget.getBoundingClientRect()
-              const keyboard = e.clientX === 0 && e.clientY === 0
-              setMenu({ id, x: keyboard ? r.left + 16 : e.clientX, y: keyboard ? r.bottom : e.clientY })
-            }}
-            onKeyDown={(e) => {
-              if (e.target !== e.currentTarget || (e.key !== "Delete" && e.key !== "Backspace")) return
-              // Handled here: the editor's Delete (remove the selected clip) skips a prevented key.
-              e.preventDefault()
-              if (!locked(id)) setConfirm(id)
-            }}
-            className="group flex cursor-grab items-center gap-2 rounded-md p-1 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
-          >
-            <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate" title={a.file}>{a.file}</span>
-              <span className="block text-[11px] text-muted-foreground tabular-nums">
-                {assetKind(a) === "image" ? `Image · ${formatTimecode(a.duration)}` : formatTimecode(a.duration)}
+      <section
+        aria-label="Project media"
+        data-testid="project-media"
+        className={cn("relative rounded-md pb-1", fileOver && "outline-2 -outline-offset-2 outline-dashed outline-sky-500 bg-sky-500/10 dark:outline-editor-accent dark:bg-editor-accent/10")}
+        onDragOver={(e) => {
+          if (!isFileDrag(e.dataTransfer)) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "copy"
+          setFileOver(true)
+        }}
+        onDragLeave={(e) => {
+          if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+          setFileOver(false)
+        }}
+        onDrop={(e) => {
+          setFileOver(false)
+          if (!isFileDrag(e.dataTransfer)) return
+          e.preventDefault()
+          onImportFiles(Array.from(e.dataTransfer.files))
+        }}
+      >
+        <p className="px-3 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Project media</p>
+        {assets.length === 0 && <p className="px-3 pb-2 text-xs text-muted-foreground">Import files, drop them here, or drag them from the Inbox below onto the timeline.</p>}
+        {fileOver && (
+          <div aria-hidden className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+            <span className="flex items-center gap-1.5 rounded-md bg-neutral-900/80 px-2.5 py-1 text-xs text-white shadow"><Upload className="h-3.5 w-3.5" /> Drop to import</span>
+          </div>
+        )}
+        <ul className="px-2">
+          {assets.map(([id, a]) => (
+            <li
+              key={id}
+              draggable
+              tabIndex={0}
+              aria-label={`${a.file}, press Delete to remove it from the project`}
+              onDragStart={(e) => {
+                e.dataTransfer.setData(ASSET_DRAG_TYPE, id)
+                e.dataTransfer.effectAllowed = "copy"
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                // The keyboard's menu key has no pointer position: open by the row.
+                const r = e.currentTarget.getBoundingClientRect()
+                const keyboard = e.clientX === 0 && e.clientY === 0
+                setMenu({ id, x: keyboard ? r.left + 16 : e.clientX, y: keyboard ? r.bottom : e.clientY })
+              }}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget || (e.key !== "Delete" && e.key !== "Backspace")) return
+                // Handled here: the editor's Delete (remove the selected clip) skips a prevented key.
+                e.preventDefault()
+                if (!locked(id)) setConfirm(id)
+              }}
+              className="group flex cursor-grab items-center gap-2 rounded-md p-1 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+            >
+              {assetKind(a) === "audio" ? (
+                <span aria-hidden className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-teal-500/20 text-teal-700 dark:bg-teal-400/20 dark:text-teal-200">
+                  <Music className="h-4 w-4" />
+                </span>
+              ) : (
+                <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate" title={a.file}>{a.file}</span>
+                <span className="block text-[11px] text-muted-foreground tabular-nums">
+                  {assetKind(a) === "image" ? `Image · ${formatTimecode(a.duration)}` : assetKind(a) === "audio" ? `Audio · ${formatTimecode(a.duration)}` : formatTimecode(a.duration)}
+                </span>
               </span>
-            </span>
-            <Button type="button" size="icon-sm" variant="ghost" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => onAdd(id)} title="Add to timeline">
-              <Plus className="h-4 w-4" />
-              <span className="sr-only">Add {a.file} to timeline</span>
-            </Button>
-          </li>
-        ))}
-      </ul>
+              <Button type="button" size="icon-sm" variant="ghost" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => onAdd(id)} title="Add to timeline">
+                <Plus className="h-4 w-4" />
+                <span className="sr-only">Add {a.file} to timeline</span>
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <p className="mt-3 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Inbox</p>
       <p className="px-3 pb-1 text-xs text-muted-foreground">Drag clips onto the timeline</p>
