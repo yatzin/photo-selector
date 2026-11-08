@@ -161,10 +161,10 @@ export function DialogFooter({ start, summary, children }: { start?: ReactNode; 
   )
 }
 
-/** The footer's Cancel: closes without changing anything. */
-export function CancelButton({ state, label = "Cancel", disabled }: { state: EditorDialogState; label?: string; disabled?: boolean }) {
+/** The footer's Cancel: closes without changing anything (the first focus of a confirmation, with `initialFocus`). */
+export function CancelButton({ state, label = "Cancel", disabled, initialFocus }: { state: EditorDialogState; label?: string; disabled?: boolean; initialFocus?: boolean }) {
   return (
-    <Button type="button" variant="outline" size="lg" disabled={disabled} className="px-3.5 pointer-coarse:h-11" onClick={() => state.close()}>
+    <Button type="button" variant="outline" size="lg" disabled={disabled} className="px-3.5 pointer-coarse:h-11" onClick={() => state.close()} data-initial-focus={initialFocus || undefined}>
       {label}
     </Button>
   )

@@ -1011,6 +1011,7 @@ export function Timeline({
       {
         label: "Delete",
         hint: "Delete",
+        destructive: true,
         onSelect: () => {
           onChange((p) => removeClip(p, id))
           onSelect(null)
@@ -1558,7 +1559,7 @@ export function Timeline({
         // Where the Alt hint goes; it stays while hovered or focused.
         <div
           className={cn(
-            "absolute top-7 z-50 flex items-center gap-2 whitespace-nowrap rounded-full bg-neutral-900/90 py-0.5 pr-1 pl-3 text-[11px] text-white shadow dark:bg-neutral-100/95 dark:text-neutral-900",
+            "absolute top-7 z-50 flex items-center gap-2 whitespace-nowrap rounded-full bg-neutral-900/90 py-1 pr-1 pl-3 text-[11px] text-white shadow-lg ring-1 ring-white/10 dark:bg-neutral-100/95 dark:text-neutral-900 dark:ring-black/10",
             notice.anchor?.side === "left" ? "" : notice.anchor?.side === "right" ? "-translate-x-full" : "-translate-x-1/2"
           )}
           style={{ left: notice.anchor?.x ?? header + Math.max(0, (viewport > 0 ? viewport : 600) - header) / 2 }}
@@ -1571,7 +1572,7 @@ export function Timeline({
           {notice.unlink && (
             <button
               type="button"
-              className="rounded-full bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20"
+              className="rounded-full bg-white/15 px-2.5 py-1 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20 pointer-coarse:py-2"
               onClick={() => {
                 const { id, cut } = notice.unlink!
                 setNotice(null)
@@ -1584,7 +1585,7 @@ export function Timeline({
           {notice.group && (
             <button
               type="button"
-              className="rounded-full bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20"
+              className="rounded-full bg-white/15 px-2.5 py-1 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20 pointer-coarse:py-2"
               onClick={() => {
                 // Unlocks that chain only; its window starts with its first drag.
                 const { key } = notice.group!
@@ -1596,8 +1597,8 @@ export function Timeline({
               Move group ({notice.group.count})
             </button>
           )}
-          <button type="button" aria-label="Dismiss" className="rounded-full p-0.5 hover:bg-white/20 dark:hover:bg-black/10" onClick={() => setNotice(null)}>
-            <X className="h-3 w-3" />
+          <button type="button" aria-label="Dismiss" className="flex size-6 items-center justify-center rounded-full outline-none hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-black/10 pointer-coarse:size-9" onClick={() => setNotice(null)}>
+            <X className="size-3.5" />
           </button>
         </div>
       )}

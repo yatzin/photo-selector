@@ -11,7 +11,9 @@ import { cn } from "@/lib/utils"
 // press outside, any scroll, a resize or the window losing focus closes it,
 // and so does running an item. Items with `checked` are a radio pair (a
 // check mark on the one that's on), set off from the others by a line. An
-// item with `dot` shows a small dot after its label (it has settings already).
+// item with `dot` shows a small dot after its label (it has settings already),
+// and a `destructive` one is in the destructive colour. It scales in from the
+// pointer (still with reduced motion).
 
 export type ClipMenuItem = {
   label: string
@@ -22,6 +24,8 @@ export type ClipMenuItem = {
   dot?: boolean
   /** A choice of several (menuitemradio): whether it's the one that's on. */
   checked?: boolean
+  /** It deletes something: shown in the destructive colour. */
+  destructive?: boolean
   onSelect: () => void
 }
 
@@ -103,7 +107,7 @@ export function ClipMenu({ x, y, label, items, onClose }: {
       aria-label={label}
       onKeyDown={onKeyDown}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed z-50 min-w-48 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none"
+      className="fixed z-50 min-w-52 origin-top-left rounded-xl bg-popover p-1 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-100 dark:ring-white/10"
       style={at ? { left: at.left, top: at.top } : { left: x, top: y, visibility: "hidden" }}
     >
       {items.map((item, i) => (
@@ -124,8 +128,10 @@ export function ClipMenu({ x, y, label, items, onClose }: {
             item.onSelect()
           }}
           className={cn(
-            "flex w-full items-center justify-between gap-6 rounded-md px-2 py-1.5 text-left outline-none",
+            "flex min-h-8 w-full items-center justify-between gap-6 rounded-lg px-2.5 py-1.5 text-left outline-none pointer-coarse:min-h-11",
             "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
+            "forced-colors:focus:outline-2 forced-colors:focus:outline-[Highlight]",
+            item.destructive && "text-destructive hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive",
             "disabled:pointer-events-none disabled:opacity-50",
             // A line above the first of a radio group.
             item.checked !== undefined && items[i - 1]?.checked === undefined && i > 0 && "relative mt-2 before:absolute before:inset-x-0 before:-top-1 before:h-px before:bg-border"
@@ -141,7 +147,7 @@ export function ClipMenu({ x, y, label, items, onClose }: {
               </>
             )}
           </span>
-          {item.hint && <kbd className="font-sans text-xs text-muted-foreground">{item.hint}</kbd>}
+          {item.hint && <kbd className="rounded border border-border bg-muted/60 px-1.5 py-px font-sans text-[11px] text-muted-foreground">{item.hint}</kbd>}
         </button>
       ))}
     </div>,

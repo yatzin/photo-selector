@@ -3,6 +3,7 @@
 import { useRef } from "react"
 import { Loader2, RotateCcw, TriangleAlert, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { IMPORT_ACCEPT } from "@/lib/video/import"
 import type { MediaImport } from "./use-media-import"
 
@@ -39,10 +40,11 @@ export function ImportButton({ importer }: { importer: MediaImport }) {
       {items.length > 0 && (
         <ul
           aria-label="Imports"
-          className="absolute left-0 top-full z-50 mt-1 w-80 max-w-[calc(100vw-2rem)] space-y-1 rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg"
+          className="absolute left-0 top-full z-50 mt-1.5 w-80 max-w-[calc(100vw-2rem)] space-y-0.5 rounded-xl bg-popover p-1.5 text-xs text-popover-foreground shadow-lg ring-1 ring-foreground/10 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-100 dark:ring-white/10"
         >
+          <li aria-hidden className="section-label px-1.5 pt-0.5 pb-1">{busy ? `Importing ${items.filter((i) => i.state === "queued" || i.state === "uploading").length} of ${items.length}` : "Imports"}</li>
           {items.map((item) => (
-            <li key={item.key} className="rounded-md px-1.5 py-1">
+            <li key={item.key} className="rounded-lg px-1.5 py-1.5 hover:bg-muted/50">
               <div className="flex items-center gap-2">
                 {item.state === "failed" && <TriangleAlert aria-hidden className="h-3.5 w-3.5 shrink-0 text-destructive" />}
                 <span className="min-w-0 flex-1 truncate" title={item.name}>{item.name}</span>
@@ -72,7 +74,7 @@ export function ImportButton({ importer }: { importer: MediaImport }) {
               {item.state === "failed" ? (
                 <p className="mt-0.5 break-words text-destructive">{item.error}</p>
               ) : (
-                <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={`${item.name} upload`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(item.progress * 100)}>
+                <div className={cn("mt-1.5 h-1 overflow-hidden rounded-full bg-muted", item.state === "uploading" && "shimmer")} role="progressbar" aria-label={`${item.name} upload`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(item.progress * 100)}>
                   <div className="h-full rounded-full bg-editor-accent transition-[width]" style={{ width: `${item.progress * 100}%` }} />
                 </div>
               )}

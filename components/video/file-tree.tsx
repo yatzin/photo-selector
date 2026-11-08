@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ChevronDown, ChevronRight, Folder, Loader2, Music, Plus, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { formatTimecode } from "@/lib/video/time"
 import { allClips, assetKind, type Project } from "@/lib/video/project"
 import { Thumb } from "./thumb"
+import { Callout } from "./ui/callout"
+import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialog } from "./ui/editor-dialog"
 import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE } from "./timeline"
 
 // Left panel: the project's own media (already imported) and the Video Editing
@@ -249,27 +250,45 @@ export function FileTree({
         />
       )}
       {confirm !== null && confirmAsset && (
-        <Dialog open onOpenChange={(o) => !o && !busy && setConfirm(null)}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Delete from project</DialogTitle>
-              <DialogDescription className="break-words">
-                Delete {confirmAsset.file} from this project?{" "}
-                {uses > 0
-                  ? `It is removed from the project media and from the timeline (${uses} clip${uses === 1 ? " uses" : "s use"} it).`
-                  : "It is removed from the project media. It is not on the timeline."}{" "}
-                This can&apos;t be undone.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setConfirm(null)} disabled={busy}>Cancel</Button>
-              <Button type="button" variant="destructive" onClick={() => void deleteConfirmed()} disabled={busy || locked(confirm)}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Delete
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <DeleteAssetDialog file={confirmAsset.file} uses={uses} busy={busy} locked={locked(confirm)} onConfirm={() => void deleteConfirmed()} onClose={() => setConfirm(null)} />
       )}
     </div>
+  )
+}
+
+/** "Delete from project": what the item's deletion takes with it, on the editor's dialog shell. */
+function DeleteAssetDialog({ file, uses, busy, locked, onConfirm, onClose }: { file: string; uses: number; busy: boolean; locked: boolean; onConfirm: () => void; onClose: () => void }) {
+  const state = useEditorDialog(onClose)
+  return (
+    <EditorDialog
+      state={state}
+      icon={Trash2}
+      title="Delete from project"
+      subtitle={file}
+      size="sm"
+      dismissible={!busy}
+      onSubmit={() => !busy && !locked && onConfirm()}
+      footer={
+        <DialogFooter>
+          <CancelButton state={state} disabled={busy} initialFocus />
+          <PrimaryButton
+            busy={busy}
+            disabledReason={locked ? "It's being imported again: wait for that to finish." : null}
+            className="bg-destructive text-white hover:bg-destructive/90 dark:text-neutral-950"
+          >
+            {busy ? <Loader2 className="motion-safe:animate-spin" /> : <Trash2 />}
+            Delete file
+          </PrimaryButton>
+        </DialogFooter>
+      }
+    >
+      <Callout tone="danger" title="This can't be undone">
+        <p className="break-words">
+          {uses > 0
+            ? `${file} is removed from the project media and from the timeline (${uses} clip${uses === 1 ? " uses" : "s use"} it).`
+            : `${file} is removed from the project media. It is not on the timeline.`}
+        </p>
+      </Callout>
+    </EditorDialog>
   )
 }
