@@ -286,8 +286,8 @@ Not while the project is exporting, or while that file is being imported.
   first request, and keeps the result next to it in `assets/` as
   `.<file>.peaks`; deleting the media item deletes it too.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut), Add text, Transition
-  before and after while a clip is selected, and Reset when the
+  Delete (each button's tooltip names its shortcut), Add text, Transition /
+  audio overlap before and after while a clip is selected, and Reset when the
   selected clip is moved, scaled, cropped, turned or flipped; Play/Pause in
   the middle; the waveform button and the zoom slider at the right.
 - In the dark theme the editor's accent (playhead, selection, trim handles,
@@ -349,15 +349,22 @@ Not while the project is exporting, or while that file is being imported.
 - **Transitions.** Two clips on the same layer that touch (one ends where
   the next starts) can blend into each other. Select a clip: a white circle
   with the transition icon sits on its top edge at each side where another
-  clip touches it, and the toolbar shows **Transition before** and
-  **Transition after** (greyed out on a side with no clip touching). Either
-  opens the **Transition** box: the two clips, a grid of transitions, each
-  playing a small sample (Fade: Crossfade, Fade through black, Fade through
-  white; Wipe left, right, up and down; Slide left, right, up and down;
-  Shape: Circle open, Circle close, Radial; Effect: Pixelate, Dissolve, Zoom
-  in, Blur), **None** to take it off, and the duration in seconds. Apply (or
-  Remove) is one undo step; the arrow keys move through the grid and Esc
-  cancels. As in Premiere and DaVinci Resolve, the transition is centred on
+  clip touches it, and the toolbar shows **Transition / audio overlap
+  before** and **after** (greyed out on a side with no clip touching). Either
+  opens the **Transition / audio overlap** box: the two clips, a grid of
+  transitions, each playing a small sample (Fade: Crossfade, Fade through
+  black, Fade through white; Wipe left, right, up and down; Slide left, right,
+  up and down; Shape: Circle open, Circle close, Radial; Effect: Pixelate,
+  Dissolve, Zoom in, Blur), **None** to take it off, and the duration in
+  seconds. Beside the grid (below it on a narrow window) a muted loop plays
+  the two real clips across the cut with the chosen transition and duration,
+  from up to 2 s before it to up to 2 s after, with a play/pause button and a
+  bar marking where the transition sits; under it, what the transition does,
+  what it's best for and when to avoid it. With reduced motion the loop
+  starts paused on the cut. Below them is the **Audio overlap** (see J-cuts
+  and L-cuts). Apply (or Remove) is one undo step for both; the arrow keys
+  move through the grid and Esc cancels. The player pauses while the box is
+  open. As in Premiere and DaVinci Resolve, the transition is centred on
   the cut: clips keep their places and the timeline its length, and over the
   duration the first clip plays half of it past its end and the second half
   of it before its start, using the footage beyond the trimmed range. So the
@@ -370,9 +377,26 @@ Not while the project is exporting, or while that file is being imported.
   crossfades over the same time (equal power). The preview draws pixelate and
   blur as a blurred crossfade and dissolve as a plain crossfade; the export
   draws each exactly.
-- **Linked clips.** Clips joined by transitions move together or not at
-  all. Dragging one away springs it back with a red X and a notice, with
-  **Unlink this clip's transitions** (takes both of its transitions off) and
+- **J-cuts and L-cuts.** In the same box, **Audio overlap** lets the sound
+  run across the cut while the picture cuts where it did: a **J-cut** starts
+  the next clip's sound early (you hear the next scene while still seeing
+  this one), an **L-cut** keeps the previous clip's sound going over the next
+  picture. Pick None, J-cut or L-cut and the overlap in seconds. A J-cut needs
+  the next clip to be a video with sound and footage before its start; an
+  L-cut needs the previous clip to be a video with sound and footage after
+  its end. Either is at most 5 s and half the clip it plays over; otherwise
+  the option is greyed out with the reason. A muted clip keeps the setting
+  but stays silent. Through the overlap both sounds play mixed at full volume
+  (no ducking), with a 0.15 s linear fade at the new edge so it never clicks.
+  With a transition on the same cut the pictures still blend, but the sound
+  follows the J or L instead of crossfading. On the timeline an overlap is a
+  thin teal band along the bottom of the clip it plays over, beside the cut
+  ("J-cut 1 s" on hover), and the cut's circle shows as set. The loop in the
+  box is muted and marks the overlap on its bar (J or L).
+- **Linked clips.** Clips joined by transitions or audio overlaps move
+  together or not at all. Dragging one away springs it back with a red X and
+  a notice, with **Unlink this clip** (takes the transitions and audio
+  overlaps off both of its sides) and
   **Move all linked clips (N)**, which moves the whole chain along its layer
   by the drag you just made (one undo step; not to another layer). Trimming
   the edge at a transition is refused the same way (Unlink only), except on a
@@ -381,7 +405,9 @@ Not while the project is exporting, or while that file is being imported.
   between two linked clips on a snapped layer 1 is refused. Splitting a clip
   keeps its transitions on the outer sides, deleting it takes them away, and
   Edit length refuses a change that would part linked clips (with an Unlink
-  button). The notice stays while you point at it.
+  button). Audio overlaps follow the same rules, and a trim that leaves one
+  too little footage shortens it or takes it off with a notice. The notice
+  stays while you point at it.
 - **Right-click a clip** for its menu: Split at playhead (when the playhead
   is inside that clip), Delete, Mute or Unmute (a video with sound) and, for
   an image or text, Edit length... (text also has Edit text..., Animation...
@@ -425,12 +451,17 @@ characters each, in the preview too.
 Transitions use ffmpeg's xfade: each clip of a chain joined by transitions is
 played half a transition past its cut, put on a transparent frame of its own,
 and joined to the next at the start of their transition.
+A J-cut or L-cut only moves sound: the next clip's sound is read from its
+overlap before its in point and delayed to start that much earlier, or the
+previous clip's is read on past its out point, each with a short fade at the
+new edge, and mixed with the rest.
 
 **Limits in this version**
 - No audio import yet. Text has no size box (use the corner handles) and no
   outline or shadow.
-- Transitions only between clips that touch on one layer, and only with
-  spare footage beyond the cut.
+- Transitions and audio overlaps only between clips that touch on one
+  layer, and only with spare footage beyond the cut. The overlap's sound
+  isn't ducked under the other clip's.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 
