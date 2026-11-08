@@ -1,6 +1,6 @@
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
-import { isTransitionType, MAX_TRANSITION, MIN_TRANSITION, type Transition } from "./transition-types"
+import { isCutAudioMode, isTransitionType, MAX_CUT_AUDIO, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_TRANSITION, type CutAudio, type Transition } from "./transition-types"
 
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
@@ -17,8 +17,12 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
  * like an image (in 0, out its length, up to MAX_IMAGE); it has no sound.
  * `transition` blends the clip before it on its track into this one, centred
  * on the cut (see transitionLimits); only while that clip adjoins this one.
+ * `cutAudio`, at the same cut, lets the sound lead (a J-cut) or trail (an
+ * L-cut) the picture cut (see cutAudioLimits); independent of `transition`.
  */
-export type Clip = { id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition }
+export type Clip = {
+  id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition; cutAudio?: CutAudio
+}
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
  * lower ones. On every track clips sit at their own `start`, sorted by it,
@@ -248,6 +252,42 @@ export function transitionLimits(p: Project, clipId: string): TransitionLimits {
   return max < MIN_TRANSITION - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
 }
 
+/** Why an audio overlap can't be had at a cut, or "ok". */
+export type CutAudioReason = "ok" | "not-adjoining" | "no-audio" | "no-footage"
+export type CutAudioLimits = Record<CutAudio["mode"], { max: number; reason: CutAudioReason }>
+
+/** True for a clip whose sound a cut can lead or trail: a video whose file has sound (a muted one counts; it stays silent). */
+function hasSound(p: Project, c: Clip): boolean {
+  if (isStill(p, c)) return false
+  const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
+  return asset !== undefined && asset.hasAudio
+}
+
+/**
+ * How long an audio overlap at the cut into `clipId` from the clip before it
+ * may be, for each mode. A J-cut plays the incoming clip's sound from before
+ * its in point, so it needs a video with sound and footage there: at most its
+ * in point. An L-cut plays the outgoing clip's sound past its out point: a
+ * video with sound and footage after it. Either is at most MAX_CUT_AUDIO and
+ * half the clip it overlaps (the outgoing one for J, the incoming one for L),
+ * so two cuts' overlaps never meet and a J never reaches before 0; floored to
+ * the millisecond. `max` is 0 with the reason when it can't be had.
+ */
+export function cutAudioLimits(p: Project, clipId: string): CutAudioLimits {
+  const at = find(p, clipId)
+  const prev = at ? p.tracks[at.track].clips[at.index - 1] : undefined
+  if (!at || !prev || !adjoins(prev, at.clip)) return { j: { max: 0, reason: "not-adjoining" }, l: { max: 0, reason: "not-adjoining" } }
+  const limit = (sound: boolean, handle: number, overlapped: Clip): { max: number; reason: CutAudioReason } => {
+    if (!sound) return { max: 0, reason: "no-audio" }
+    const max = Math.floor(Math.min(MAX_CUT_AUDIO, handle, clipLength(overlapped) / 2) * 1000 + 1e-6) / 1000
+    return max < MIN_CUT_AUDIO - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
+  }
+  return { j: limit(hasSound(p, at.clip), headHandle(p, at.clip), prev), l: limit(hasSound(p, prev), tailHandle(p, prev), at.clip) }
+}
+
+/** True when a clip has something at its cut from the clip before it (a transition or an audio overlap) that links the two. */
+export const linksBefore = (c: Clip) => c.transition !== undefined || c.cutAudio !== undefined
+
 /** The clip adjoining `c`'s start on `clips` (sorted by start), if any. */
 function adjoiningBefore(clips: Clip[], index: number): Clip | undefined {
   const prev = clips[index - 1]
@@ -255,15 +295,16 @@ function adjoiningBefore(clips: Clip[], index: number): Clip | undefined {
 }
 
 /**
- * Every transition checked after an edit of `prev` (none: a freshly read
- * project): one whose clip no longer has a clip adjoining it goes, and so does
- * one whose adjoining clip changed (a delete or an insert between them).
- * `alias` maps a split's new piece to the clip it came from, which it stands
- * in for. The rest are shortened to transitionLimits, and dropped when that's
- * below MIN_TRANSITION. The same project when nothing changes.
+ * Every transition and audio overlap checked after an edit of `prev` (none: a
+ * freshly read project): one whose clip no longer has a clip adjoining it
+ * goes, and so does one whose adjoining clip changed (a delete or an insert
+ * between them). `alias` maps a split's new piece to the clip it came from,
+ * which it stands in for. The rest are shortened to transitionLimits (an
+ * overlap to cutAudioLimits for its mode), and dropped when that's below
+ * MIN_TRANSITION (MIN_CUT_AUDIO). The same project when nothing changes.
  */
 export function fixTransitions(p: Project, prev?: Project, alias: Record<string, string> = {}): Project {
-  if (!p.tracks.some((t) => t.clips.some((c) => c.transition))) return p
+  if (!p.tracks.some((t) => t.clips.some(linksBefore))) return p
   const before = new Map<string, string | null>()
   if (prev) {
     for (const t of prev.tracks) t.clips.forEach((c, i) => before.set(c.id, adjoiningBefore(t.clips, i)?.id ?? null))
@@ -272,15 +313,27 @@ export function fixTransitions(p: Project, prev?: Project, alias: Record<string,
   const tracks = p.tracks.map((t) => {
     let touched = false
     const clips = t.clips.map((c, i) => {
-      if (!c.transition) return c
+      if (!linksBefore(c)) return c
       const pred = adjoiningBefore(t.clips, i)
       const was = before.get(c.id)
       const samePred = !prev || was === undefined || (pred !== undefined && (alias[pred.id] ?? pred.id) === was)
-      const limit = pred && samePred ? transitionLimits(p, c.id).max : 0
-      if (limit >= MIN_TRANSITION && c.transition.duration <= limit) return c
-      touched = true
-      const { transition, ...rest } = c
-      return limit >= MIN_TRANSITION ? { ...rest, transition: { ...transition, duration: limit } } : rest
+      let next = c
+      if (c.transition) {
+        const limit = pred && samePred ? transitionLimits(p, c.id).max : 0
+        if (!(limit >= MIN_TRANSITION && c.transition.duration <= limit)) {
+          const { transition, ...rest } = next
+          next = limit >= MIN_TRANSITION ? { ...rest, transition: { ...transition!, duration: limit } } : rest
+        }
+      }
+      if (c.cutAudio) {
+        const limit = pred && samePred ? cutAudioLimits(p, c.id)[c.cutAudio.mode].max : 0
+        if (!(limit >= MIN_CUT_AUDIO && c.cutAudio.duration <= limit)) {
+          const { cutAudio, ...rest } = next
+          next = limit >= MIN_CUT_AUDIO ? { ...rest, cutAudio: { ...cutAudio!, duration: limit } } : rest
+        }
+      }
+      if (next !== c) touched = true
+      return next
     })
     if (!touched) return t
     changed = true
@@ -290,8 +343,9 @@ export function fixTransitions(p: Project, prev?: Project, alias: Record<string,
 }
 
 /**
- * The clips whose transition `next` (an edit of `prev`) would part: both
- * clips of the cut are still there, but no longer side by side on one track.
+ * The clips whose transition or audio overlap `next` (an edit of `prev`)
+ * would part: both clips of the cut are still there, but no longer side by
+ * side on one track.
  */
 export function brokenLinks(prev: Project, next: Project): string[] {
   const where = new Map<string, { track: number; index: number }>()
@@ -299,7 +353,7 @@ export function brokenLinks(prev: Project, next: Project): string[] {
   const broken: string[] = []
   for (const t of prev.tracks) {
     t.clips.forEach((c, i) => {
-      const pred = c.transition ? adjoiningBefore(t.clips, i) : undefined
+      const pred = linksBefore(c) ? adjoiningBefore(t.clips, i) : undefined
       const b = where.get(c.id)
       if (!pred || !b || !where.has(pred.id)) return
       const clips = next.tracks[b.track].clips
@@ -404,6 +458,7 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   if (clip.muted) placed.muted = true
   if (clip.text) placed.text = clip.text
   if (clip.transition) placed.transition = clip.transition
+  if (clip.cutAudio) placed.cutAudio = clip.cutAudio
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -642,8 +697,10 @@ function isInt(v: unknown, max: number): v is number {
  * `muted: true` is read as `muted: true` on every clip of that track. A text
  * clip has asset "" and a valid `text` (lib/video/text), times like an image
  * and is never muted. A `transition` needs a known type and a duration from
- * MIN_TRANSITION to MAX_TRANSITION; one with no clip adjoining it is dropped
- * and one longer than its footage allows is shortened (fixTransitions).
+ * MIN_TRANSITION to MAX_TRANSITION, and a `cutAudio` a mode ("j" or "l") and
+ * a duration from MIN_CUT_AUDIO to MAX_CUT_AUDIO; one with no clip adjoining
+ * it is dropped and one longer than its footage allows is shortened
+ * (fixTransitions).
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -724,6 +781,11 @@ export function parseProject(json: unknown): Project | null {
         if (!isRecord(tr) || !isTransitionType(tr.type) || !isNum(tr.duration) || tr.duration < MIN_TRANSITION - 1e-9 || tr.duration > MAX_TRANSITION + 1e-9) return null
         clip.transition = { type: tr.type, duration: tr.duration }
       }
+      if (c.cutAudio !== undefined) {
+        const ca = c.cutAudio
+        if (!isRecord(ca) || !isCutAudioMode(ca.mode) || !isNum(ca.duration) || ca.duration < MIN_CUT_AUDIO - 1e-9 || ca.duration > MAX_CUT_AUDIO + 1e-9) return null
+        clip.cutAudio = { mode: ca.mode, duration: ca.duration }
+      }
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null
       clips.push(clip)
@@ -741,7 +803,7 @@ export function parseProject(json: unknown): Project | null {
     tracks.push({ id: raw.id, ...(magnetic ? { magnetic: true } : {}), clips })
   }
 
-  // A transition with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
+  // A transition or audio overlap with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
   return fixTransitions({ version: 3, name, width, height, fps, assets: parsedAssets, tracks })
 }
 

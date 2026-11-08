@@ -62,6 +62,18 @@ describe("exportFingerprint", () => {
     expect(exportFingerprint(withTransition("fade", 1.5))).not.toBe(fade)
   })
 
+  it("changes with an audio overlap's mode and length, and not when there is none", () => {
+    const p = project()
+    const base = exportFingerprint(p)
+    const withOverlap = (mode: "j" | "l", duration: number) =>
+      ({ ...p, tracks: [{ ...p.tracks[0], clips: [p.tracks[0].clips[0], { ...p.tracks[0].clips[1], cutAudio: { mode, duration } }] }, p.tracks[1]] })
+    const j = exportFingerprint(withOverlap("j", 1))
+    expect(j).not.toBe(base)
+    expect(exportFingerprint(withOverlap("l", 1))).not.toBe(j)
+    expect(exportFingerprint(withOverlap("j", 1.5))).not.toBe(j)
+    expect(exportFingerprint({ ...p, tracks: [{ ...p.tracks[0], clips: [p.tracks[0].clips[0], { ...p.tracks[0].clips[1], cutAudio: undefined }] }, p.tracks[1]] })).toBe(base)
+  })
+
   it("is unchanged by renaming the project or importing an unused asset", () => {
     const base = exportFingerprint(project())
     const p = project()

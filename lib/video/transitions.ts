@@ -1,9 +1,9 @@
 import {
-  adjoins, baseInsertion, clipEnd, endToEnd, isMagnetic, MAX_TIMELINE, resolveStart, trackClipAt, transitionLimits, type Clip, type Project, type Track,
+  adjoins, baseInsertion, clipEnd, cutAudioLimits, endToEnd, isMagnetic, linksBefore, MAX_TIMELINE, resolveStart, trackClipAt, transitionLimits, type Clip, type Project, type Track,
 } from "./project"
-import { isTransitionType, MIN_TRANSITION, type Transition, type TransitionType } from "./transition-types"
+import { CUT_AUDIO_FADE, isCutAudioMode, isTransitionType, MIN_CUT_AUDIO, MIN_TRANSITION, type CutAudio, type Transition, type TransitionType } from "./transition-types"
 
-export { transitionLimits } from "./project"
+export { cutAudioLimits, transitionLimits } from "./project"
 
 // Transitions between adjoining clips on one track (the model is Clip.transition
 // in project.ts: stored on the later clip, centred on the cut). This holds the
@@ -83,27 +83,56 @@ export function setTransition(p: Project, clipId: string, spec: Transition | nul
   return withClips(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? { ...c, transition } : c)))
 }
 
-/** The clips joined to `clipId` by transitions, in order along their track (the clip alone when it has none). Empty for an unknown id. */
+/**
+ * Sets (or with null, removes) the audio overlap at the cut into `clipId`
+ * from the clip before it: a J-cut or an L-cut, its duration clamped to
+ * MIN_CUT_AUDIO and cutAudioLimits' most for its mode. Independent of the
+ * cut's transition. The same project when no clip adjoins it, the mode can't
+ * be had there (no sound, no footage), the mode is unknown or nothing changes.
+ */
+export function setCutAudio(p: Project, clipId: string, spec: CutAudio | null): Project {
+  const at = locate(p, clipId)
+  if (!at) return p
+  const old = at.clip.cutAudio
+  if (spec === null) {
+    if (!old) return p
+    const rest: Clip = { ...at.clip }
+    delete rest.cutAudio
+    return withClips(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? rest : c)))
+  }
+  if (!isCutAudioMode(spec.mode) || !Number.isFinite(spec.duration)) return p
+  const { max } = cutAudioLimits(p, clipId)[spec.mode]
+  if (max < MIN_CUT_AUDIO) return p
+  const duration = Math.round(Math.max(MIN_CUT_AUDIO, Math.min(max, spec.duration)) * 1000) / 1000
+  if (old && old.mode === spec.mode && old.duration === duration) return p
+  const cutAudio: CutAudio = { mode: spec.mode, duration }
+  return withClips(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? { ...c, cutAudio } : c)))
+}
+
+/** The clips joined to `clipId` by transitions or audio overlaps, in order along their track (the clip alone when it has none). Empty for an unknown id. */
 export function linkedChain(p: Project, clipId: string): string[] {
   const at = locate(p, clipId)
   if (!at) return []
   const clips = p.tracks[at.track].clips
   let first = at.index
-  while (first > 0 && clips[first].transition && adjoins(clips[first - 1], clips[first])) first--
+  while (first > 0 && linksBefore(clips[first]) && adjoins(clips[first - 1], clips[first])) first--
   let last = at.index
-  while (last < clips.length - 1 && clips[last + 1].transition && adjoins(clips[last], clips[last + 1])) last++
+  while (last < clips.length - 1 && linksBefore(clips[last + 1]) && adjoins(clips[last], clips[last + 1])) last++
   return clips.slice(first, last + 1).map((c) => c.id)
 }
 
-/** True when a transition joins the clip to the clip before or after it. */
+/** True when a transition or audio overlap joins the clip to the clip before or after it. */
 export const isLinked = (p: Project, clipId: string) => linkedChain(p, clipId).length > 1
 
-/** Takes away the clip's transitions on both sides (its own, and the next clip's when it comes from this one). */
+/** Takes away a cut's transition and audio overlap (`clipId` holds them). */
+export const unlinkCut = (p: Project, clipId: string) => setCutAudio(setTransition(p, clipId, null), clipId, null)
+
+/** Takes away the clip's transitions and audio overlaps on both sides (its own, and the next clip's when it comes from this one). */
 export function unlinkClip(p: Project, clipId: string): Project {
   const { before, after } = cutsOf(p, clipId)
   let q = p
-  if (before) q = setTransition(q, before, null)
-  if (after) q = setTransition(q, after, null)
+  if (before) q = unlinkCut(q, before)
+  if (after) q = unlinkCut(q, after)
   return q
 }
 
@@ -174,8 +203,75 @@ export const tailSourceTime = (track: Track, w: TransitionWindow, t: number) => 
   return c.in + (t - c.start)
 }
 
-/** The source time a clip's video should be waiting at before it shows: its in point, less half its transition's length when it has one. */
+/**
+ * Where the two clips of a cut both play (the preview's lane runs both
+ * videos): the transition's window, widened to take in an audio overlap (a
+ * J-cut's lead before the cut, an L-cut's tail after it). `transition` is the
+ * picture's blend when it is running at `t` (transitionAt), `audio` the cut's
+ * overlap, if any. Outside the transition's window the pictures don't blend:
+ * the outgoing one shows before the cut and the incoming one after.
+ */
+export type OverlapWindow = { from: number; to: number; cut: number; start: number; end: number; transition: TransitionWindow | null; audio: CutAudio | null }
+
+/** How far a cut's overlap reaches before (`lead`) and after (`trail`) it: half its transition, or its J (lead) or L (trail), the longer. */
+function reach(c: Clip): { lead: number; trail: number } {
+  const half = c.transition ? c.transition.duration / 2 : 0
+  const a = c.cutAudio
+  return { lead: Math.max(half, a?.mode === "j" ? a.duration : 0), trail: Math.max(half, a?.mode === "l" ? a.duration : 0) }
+}
+
+/** The overlap running on `track` at timeline time `t` ([start, end)), or null. */
+export function overlapAt(track: Track, t: number): OverlapWindow | null {
+  for (let i = 1; i < track.clips.length; i++) {
+    const c = track.clips[i]
+    if (!linksBefore(c) || !adjoins(track.clips[i - 1], c)) continue
+    const { lead, trail } = reach(c)
+    const start = c.start - lead
+    if (t >= start && t < c.start + trail) {
+      return { from: i - 1, to: i, cut: c.start, start, end: c.start + trail, transition: transitionAt(track, t), audio: c.cutAudio ?? null }
+    }
+    if (start > t) break
+  }
+  return null
+}
+
+/**
+ * The clip whose video a track's lane plays as its own at `t`: laneClipAt,
+ * except that the incoming clip takes over from the start of its cut's
+ * overlap (overlapAt), a J-cut's lead included, while the outgoing one plays
+ * on as the lane's tail.
+ */
+export function laneElementAt(track: Track, t: number): { index: number; start: number; sourceTime: number } | null {
+  const w = overlapAt(track, t)
+  if (w) {
+    const c = track.clips[w.to]
+    return { index: w.to, start: c.start, sourceTime: c.in + (t - c.start) }
+  }
+  return trackClipAt(track, t)
+}
+
+/** The source time a clip's video should be waiting at before it plays: its in point, less its overlap's lead (half its transition, or its J-cut) when it has one. */
 export function entrySourceTime(track: Track, clip: Clip): number {
   const i = track.clips.indexOf(clip)
-  return clip.transition && i > 0 && adjoins(track.clips[i - 1], clip) ? clip.in - clip.transition.duration / 2 : clip.in
+  return linksBefore(clip) && i > 0 && adjoins(track.clips[i - 1], clip) ? clip.in - reach(clip).lead : clip.in
+}
+
+/**
+ * The volumes (0 to 1) of a cut's two clips at `t` inside its overlap: with
+ * an audio overlap, the outgoing sound runs to the cut (an L-cut: on for its
+ * length, fading out linearly over its last CUT_AUDIO_FADE) and the incoming
+ * one from the cut (a J-cut: from its length before, fading in over its first
+ * CUT_AUDIO_FADE), each at full volume otherwise (no ducking); with only a
+ * transition, an equal-power crossfade over it.
+ */
+export function cutGains(w: OverlapWindow, t: number): { out: number; in: number } {
+  const a = w.audio
+  if (!a) {
+    const g = ((w.transition?.progress ?? (t < w.cut ? 0 : 1)) * Math.PI) / 2
+    return { out: Math.cos(g), in: Math.sin(g) }
+  }
+  const fade = Math.min(CUT_AUDIO_FADE, a.duration)
+  const clamp = (v: number) => Math.min(1, Math.max(0, v))
+  if (a.mode === "j") return { out: t < w.cut ? 1 : 0, in: t < w.cut - a.duration ? 0 : clamp((t - (w.cut - a.duration)) / fade) }
+  return { out: t >= w.cut + a.duration ? 0 : clamp((w.cut + a.duration - t) / fade), in: t >= w.cut ? 1 : 0 }
 }

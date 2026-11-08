@@ -35,8 +35,8 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
  * On a snapped base the start can't change (packing sets it) and a length
  * change ripples the clips after it, whatever the mode. Refused (with a
  * message) when anything would end past MAX_TIMELINE, or (LINKED) when it
- * would part two clips joined by a transition; other transitions are fitted
- * to their footage (fixTransitions). The same project when nothing changes.
+ * would part two clips joined by a transition or an audio overlap; the others
+ * are fitted to their footage (fixTransitions). The same project when nothing changes.
  */
 export function setClipTiming(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
   const r = timingEdit(p, clipId, timing, mode, newId)
@@ -46,8 +46,8 @@ export function setClipTiming(p: Project, clipId: string, timing: { start: numbe
   return { ok: true, project: fixTransitions(r.project, p) }
 }
 
-/** setClipTiming's refusal when the change would part clips joined by a transition. */
-export const LINKED = "This clip is linked by a transition."
+/** setClipTiming's refusal when the change would part clips joined by a transition or an audio overlap. */
+export const LINKED = "This clip is linked by a transition or audio overlap."
 
 function timingEdit(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
   const track = p.tracks.findIndex((t) => t.clips.some((c) => c.id === clipId))
