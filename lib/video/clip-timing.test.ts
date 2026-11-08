@@ -196,3 +196,64 @@ describe("setClipTiming: text clips", () => {
     expect(r.tracks[0].clips[2].text).toEqual(text)
   })
 })
+
+describe("setClipTiming: source in-point", () => {
+  it("slides a video's source window: in and out move together, start and length stay", () => {
+    const p = ok(setClipTiming(sample(), "v", { start: 8, length: 4, in: 3 }, "push", ids))
+    expect(spans(p)).toEqual([["p", 2, 0, 4], ["v", 8, 3, 7], ["q", 14, 0, 2]])
+  })
+
+  it("crops the source's start and end without moving the clip on the timeline", () => {
+    const p = ok(setClipTiming(sample(), "v", { start: 8, length: 2.5, in: 2 }, "push", ids))
+    expect(spans(p)).toEqual([["p", 2, 0, 4], ["v", 8, 2, 4.5], ["q", 14, 0, 2]])
+  })
+
+  it("is the same project when the in-point and timing are unchanged", () => {
+    const p = sample()
+    expect(ok(setClipTiming(p, "v", { start: 8, length: 4, in: 1 }, "push", ids))).toBe(p)
+  })
+
+  it("refuses an in-point before 0, not a number, or a window past the source's end", () => {
+    const p = sample()
+    for (const t of [
+      { start: 8, length: 4, in: -0.1 },
+      { start: 8, length: 4, in: NaN },
+      { start: 8, length: 4, in: 6.5 },
+      { start: 8, length: MIN_CLIP - 0.01, in: 2 },
+    ]) expect(setClipTiming(p, "v", t, "push", ids).ok).toBe(false)
+    // Exactly to the end is fine.
+    expect(ok(setClipTiming(p, "v", { start: 8, length: 4, in: 6 }, "push", ids)).tracks[0].clips[1]).toMatchObject({ in: 6, out: 10 })
+  })
+
+  it("pushes or overwrites what a longer window reaches", () => {
+    const pushed = ok(setClipTiming(sample(), "v", { start: 8, length: 7, in: 0 }, "push", ids))
+    expect(spans(pushed)).toEqual([["p", 2, 0, 4], ["v", 8, 0, 7], ["q", 15, 0, 2]])
+    const cut = ok(setClipTiming(sample(), "v", { start: 8, length: 7, in: 0 }, "overwrite", ids))
+    expect(spans(cut)).toEqual([["p", 2, 0, 4], ["v", 8, 0, 7], ["q", 15, 0, 1]])
+  })
+
+  it("ripples the clips after it on a snapped layer 1", () => {
+    const p = sample()
+    p.tracks[0] = { ...p.tracks[0], magnetic: true, clips: [{ id: "p", asset: "i", in: 0, out: 4, start: 0 }, { id: "v", asset: "a", in: 1, out: 5, start: 4 }, { id: "q", asset: "i", in: 0, out: 2, start: 8 }] }
+    const r = ok(setClipTiming(p, "v", { start: 4, length: 6, in: 0 }, "overwrite", ids))
+    expect(spans(r)).toEqual([["p", 0, 0, 4], ["v", 4, 0, 6], ["q", 10, 0, 2]])
+  })
+
+  it("sets an audio clip's window on the audio layer and leaves the other layers alone", () => {
+    const base = sample()
+    const p: Project = {
+      ...base,
+      assets: { ...base.assets, s: { file: "s.wav", duration: 6, hasAudio: true, kind: "audio" } },
+      audioTrack: { id: "audio", clips: [{ id: "s1", asset: "s", in: 0, out: 6, start: 1 }] },
+    }
+    const r = ok(setClipTiming(p, "s1", { start: 1, length: 2, in: 3.5 }, "push", ids))
+    expect(r.audioTrack!.clips).toEqual([{ id: "s1", asset: "s", in: 3.5, out: 5.5, start: 1 }])
+    expect(r.tracks).toBe(p.tracks)
+    expect(setClipTiming(p, "s1", { start: 1, length: 3, in: 3.5 }, "push", ids).ok).toBe(false)
+  })
+
+  it("ignores an in-point on an image (it has no source window)", () => {
+    const p = ok(setClipTiming(sample(), "p", { start: 2, length: 3, in: 2 }, "push", ids))
+    expect(p.tracks[0].clips[0]).toEqual({ id: "p", asset: "i", in: 0, out: 3, start: 2 })
+  })
+})

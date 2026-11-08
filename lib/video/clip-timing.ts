@@ -22,8 +22,10 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
  * Sets a clip's start and length (seconds on the timeline) as one edit of the
  * tracks, from the Edit length dialog. An image (or text) keeps in 0 and gets out =
  * length (MIN_CLIP to MAX_IMAGE); a video (or an audio clip, on the audio
- * layer) keeps its in and may not run past its source. Only the clip's own
- * layer changes.
+ * layer) keeps its in, or takes `timing.in` (a new source in-point, from the
+ * dialog's source strip: 0 or later, with the window ending inside the
+ * source), and may not run past its source. A still ignores `in`. Only the
+ * clip's own layer changes.
  *
  * - "push": clips that started at or after the clip's old start, and end
  *   after its new start, all move right by the least that clears the new
@@ -40,7 +42,7 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
  * would part two clips joined by a transition or an audio overlap; the others
  * are fitted to their footage (fixTransitions). The same project when nothing changes.
  */
-export function setClipTiming(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
+export function setClipTiming(p: Project, clipId: string, timing: ClipTiming, mode: TimingMode, newId: () => string): TimingResult {
   const r = timingEdit(p, clipId, timing, mode, newId)
   if (!r.ok || r.project === p) return r
   // A transition joins two clips side by side: an edit that parts them is refused, and the rest are fitted to their footage.
@@ -48,10 +50,13 @@ export function setClipTiming(p: Project, clipId: string, timing: { start: numbe
   return { ok: true, project: fixTransitions(r.project, p) }
 }
 
+/** A clip's place on the timeline and length, and optionally a new source in-point (seconds). */
+export type ClipTiming = { start: number; length: number; in?: number }
+
 /** setClipTiming's refusal when the change would part clips joined by a transition or an audio overlap. */
 export const LINKED = "This clip is linked by a transition or audio overlap."
 
-function timingEdit(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
+function timingEdit(p: Project, clipId: string, timing: ClipTiming, mode: TimingMode, newId: () => string): TimingResult {
   const onAudio = p.audioTrack?.clips.some((c) => c.id === clipId) === true
   const track = onAudio ? AUDIO_TRACK : p.tracks.findIndex((t) => t.clips.some((c) => c.id === clipId))
   if (!onAudio && track < 0) return fail("That clip is gone.")
@@ -66,14 +71,17 @@ function timingEdit(p: Project, clipId: string, timing: { start: number; length:
   if (start < 0) return fail("Start can't be before 0.")
   if (length < MIN_CLIP - 1e-9) return fail(`Length must be at least ${MIN_CLIP} s.`)
   if (image && length > MAX_IMAGE) return fail(`An image can be at most ${MAX_IMAGE} s long.`)
-  if (!image && asset && clip.in + length > asset.duration + EPS) {
-    return fail(`This ${assetKind(asset) === "audio" ? "audio file" : "video"} has only ${(asset.duration - clip.in).toFixed(2)} s left from its start.`)
+  const srcIn = image || timing.in === undefined ? clip.in : timing.in
+  if (!Number.isFinite(srcIn)) return fail("Enter numbers.")
+  if (srcIn < -EPS) return fail("The source can't start before 0.")
+  if (!image && asset && srcIn + length > asset.duration + EPS) {
+    return fail(`This ${assetKind(asset) === "audio" ? "audio file" : "video"} has only ${Math.max(0, asset.duration - srcIn).toFixed(2)} s left from its start.`)
   }
   const end = start + length
   if (end > MAX_TIMELINE + EPS) return fail("That would end past the timeline's 6 hour limit.")
-  if (Math.abs(start - clip.start) < EPS && Math.abs(length - clipLength(clip)) < EPS) return { ok: true, project: p }
+  if (Math.abs(start - clip.start) < EPS && Math.abs(length - clipLength(clip)) < EPS && Math.abs(srcIn - clip.in) < EPS) return { ok: true, project: p }
 
-  const next: Clip = image ? { ...clip, in: 0, out: length, start } : { ...clip, out: clip.in + length, start }
+  const next: Clip = image ? { ...clip, in: 0, out: length, start } : { ...clip, in: Math.max(0, srcIn), out: Math.max(0, srcIn) + length, start }
   const withClips = (list: Clip[]): Project => withTrack(p, track, [...list].sort((a, b) => a.start - b.start))
 
 
