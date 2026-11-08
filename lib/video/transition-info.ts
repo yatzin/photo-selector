@@ -1,4 +1,4 @@
-import type { TransitionType } from "./transition-types"
+import type { AudioTransitionType, TransitionType } from "./transition-types"
 
 // What each transition does and when to use it: the guidance the Transition
 // dialog shows under its preview. Plain data, safe on the client.
@@ -160,3 +160,104 @@ export const TRANSITION_GUIDES: Record<TransitionType | "none", TransitionGuide>
 
 /** The guidance for a transition, or for a hard cut ("none"). */
 export const transitionGuide = (t: TransitionType | "none"): TransitionGuide => TRANSITION_GUIDES[t]
+
+/** What each audio transition between two adjoining audio clips does, and when to use it. */
+export const AUDIO_TRANSITION_GUIDES: Record<AudioTransitionType, TransitionGuide> = {
+  "audio-linear": {
+    does: "A constant-gain crossfade: the outgoing sound falls in a straight line while the incoming one rises in a straight line, so the two always add up to full volume in level, not in loudness.",
+    bestFor: "Two takes of the same sound or the same music, where the waveforms line up and a straight blend sounds even; very short crossfades that only smooth a click.",
+    avoid: "Two unrelated sounds, where the middle of the fade dips audibly in loudness; long crossfades between music and speech.",
+  },
+  "audio-equalpower": {
+    does: "A constant-power crossfade (the default): quarter-sine curves keep the overall loudness steady as one sound hands over to the other.",
+    bestFor: "Most cuts between different songs, ambiences or voices; music beds under a montage; anywhere you want no dip and no bump in loudness.",
+    avoid: "Two copies of the same recording in sync, where the extra power in the middle makes a bump; you want an obvious dip between the two.",
+  },
+  "audio-scurve": {
+    does: "An S-shaped crossfade: each sound changes slowly at the start and end of the fade and quickly through its middle, so the hand-over feels smooth and deliberate.",
+    bestFor: "Musical changes on a phrase or a bar; podcasts moving between segments; smoothing a change where both ends should sound settled.",
+    avoid: "Very short fades, where the fast middle sounds like a cut; sounds that need to overlap evenly for the whole fade.",
+  },
+  "audio-log": {
+    does: "A logarithmic crossfade: the incoming sound comes up quickly and the outgoing one falls away fast at first, so the new sound takes over early.",
+    bestFor: "Bringing in a voice or a hit that has to be heard right away; cutting from loud music to something quieter without a hole.",
+    avoid: "Quiet outgoing sounds that vanish too soon; swells and builds that should take their time.",
+  },
+  "audio-exp": {
+    does: "An exponential crossfade: the outgoing sound holds on for most of the fade and the incoming one stays low until late, so the old sound lingers.",
+    bestFor: "Letting a musical ending or a reverb tail finish; a slow, dreamy change where the new sound creeps in.",
+    avoid: "Dialogue that must start clearly; fast edits, where the new sound arrives too late.",
+  },
+  "audio-dip": {
+    does: "The outgoing sound fades down to silence, a short pause of silence follows, then the incoming sound fades up from silence.",
+    bestFor: "A clear break between scenes or chapters; a beat of silence before a punchline or a reveal; separating two songs in different keys.",
+    avoid: "Continuous ambience or music, where the hole sounds like a mistake; fast-paced edits that rely on momentum.",
+  },
+  "audio-lowpass": {
+    does: "The outgoing sound gets muffled, its high frequencies swept away as if it were heard through a wall, while the incoming sound fades up clean.",
+    bestFor: "Club and EDM style changes; moving from one room or place to another; pushing music into the background as a new scene starts.",
+    avoid: "Speech in the outgoing clip, which becomes hard to follow; short fades, where the sweep sounds like a glitch.",
+  },
+  "audio-tapestop": {
+    does: "The outgoing sound slows down and drops in pitch until it winds to a stop, like a tape machine switched off, while the incoming sound fades up.",
+    bestFor: "Comedic or dramatic interruptions; hip-hop and electronic edits; a record-scratch moment before something unexpected.",
+    avoid: "Calm or serious pieces; using it more than once or twice in a video; dialogue, which turns into a growl.",
+  },
+  "audio-echo": {
+    does: "The outgoing sound trails off into a fading echo, its last moments repeating and dying away, while the incoming sound comes in under the echoes.",
+    bestFor: "Ending a song or a line with a flourish; dreamy or nostalgic changes; leaving a phrase hanging as the next scene starts.",
+    avoid: "Busy outgoing sound, where the echoes pile up into mush; quick dialogue exchanges.",
+  },
+  "audio-telephone": {
+    does: "The outgoing sound narrows to a thin, telephone-like band as it fades, and the incoming sound starts in that same narrow band before opening up to full sound.",
+    bestFor: "Phone calls, radio and flashback effects; handing over between two voices; a stylised, lo-fi change in a vlog or a podcast.",
+    avoid: "Music where the lost bass and treble are missed; long fades, where the thin sound gets tiring.",
+  },
+}
+
+/** The audio fades a clip's free edge offers (lib/video/transition-types EDGE_AUDIO_TYPES). */
+export type AudioEdgeType = Exclude<AudioTransitionType, "audio-dip" | "audio-telephone">
+
+/** What each audio fade at a clip's free edge does, and when to use it. */
+export const AUDIO_EDGE_GUIDES: Record<AudioEdgeType, TransitionGuide> = {
+  "audio-linear": {
+    does: "The sound fades in from silence (or out to it) in a straight line of gain over the fade's length.",
+    bestFor: "Short fades that just stop a click at a hard start or end; sound effects and room tone.",
+    avoid: "Long fades on music, where a straight gain line sounds like it rushes at the quiet end.",
+  },
+  "audio-equalpower": {
+    does: "The sound fades in or out on a quarter-sine curve, the smooth, natural-sounding fade most editors reach for first.",
+    bestFor: "Fading music in at the start of a video or out at the end; easing ambience in and out under pictures.",
+    avoid: "A fade you want to feel sudden or dramatic; very long fades, where it can feel slow to get going or to go.",
+  },
+  "audio-scurve": {
+    does: "The sound fades on an S-shaped curve: it changes slowly at first, quickly in the middle and settles slowly at the end.",
+    bestFor: "Polished fade-ins and fade-outs on music beds; endings that should feel deliberate and finished.",
+    avoid: "Very short fades, where the slow ends make it sound abrupt in the middle.",
+  },
+  "audio-log": {
+    does: "A logarithmic fade: the sound comes up quickly at the start of a fade-in, or drops quickly at the start of a fade-out, then eases.",
+    bestFor: "Voices and hits that should be heard at once; quick tidy endings where the sound should get out of the way early.",
+    avoid: "Slow atmospheric swells; fade-outs on music that should linger.",
+  },
+  "audio-exp": {
+    does: "An exponential fade: the sound stays quiet for most of a fade-in and rises late, or holds on for most of a fade-out and falls away at the end.",
+    bestFor: "Slow builds into a scene; endings that let the music breathe before it goes.",
+    avoid: "Dialogue that must start clearly; short fades, where the late change sounds like a jump.",
+  },
+  "audio-lowpass": {
+    does: "The sound starts muffled and opens up to full brightness as it fades in, or loses its high frequencies and muffles away as it fades out.",
+    bestFor: "Music coming in as if from another room; DJ-style intros and outros; pushing a scene's sound away at the end.",
+    avoid: "Speech, which goes unclear while muffled; very short fades.",
+  },
+  "audio-tapestop": {
+    does: "At an out edge the sound slows down and drops in pitch to a stop like a tape machine; at an in edge it starts from a standstill and speeds up to normal (a tape start).",
+    bestFor: "Comedic stops and starts; hip-hop and electronic intros and outros; a dramatic halt at the end of a scene.",
+    avoid: "Serious or calm pieces; dialogue, which turns into a growl; using it often.",
+  },
+  "audio-echo": {
+    does: "The sound's last moments trail off into echoes that die away as the clip ends.",
+    bestFor: "A flourish at the end of a song or a line; dreamy, nostalgic endings; leaving a moment hanging.",
+    avoid: "Busy sound, where echoes turn to mush; endings that should stop cleanly.",
+  },
+}

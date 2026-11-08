@@ -1,9 +1,11 @@
 import {
-  addTrack, adjoins, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixTransitions, hasSound, headHandle, isMagnetic, isStill, linksBefore, MAX_TIMELINE, MIN_CLIP, resolveStart, tailHandle, trackClipAt,
+  addTrack, adjoins, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixEdges, fixTransitions, hasSound, headHandle, isAudioClip, isMagnetic, isStill, isTextClip, linksBefore, MAX_TIMELINE, MIN_CLIP,
+  resolveStart, tailHandle, trackAt, trackClipAt, transitionFits, withTrack,
   type Clip, type Project, type Track,
 } from "./project"
 import {
-  CUT_AUDIO_FADE, isCutAudioMode, isTransitionType, MAX_CUT_AUDIO, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_TRANSITION, type CutAudio, type Transition, type TransitionType,
+  CUT_AUDIO_FADE, isCutAudioMode, isEdgeType, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
+  type AnyTransitionType, type AudioTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition, type TransitionType,
 } from "./transition-types"
 
 export { cutAudioLimits, transitionLimits } from "./project"
@@ -48,17 +50,50 @@ export const TRANSITION_INFO: Record<TransitionType, { name: string; group: Tran
 
 export const TRANSITION_GROUPS: TransitionGroup[] = ["Fade", "Wipe", "Slide", "Shape", "Effect", "Creative", "Glitch and whip"]
 
-export const transitionName = (t: TransitionType) => TRANSITION_INFO[t].name
+/** The audio layer's transitions, as the dialog groups them. */
+export type AudioTransitionGroup = "Crossfade curves" | "Creative"
 
+export const AUDIO_TRANSITION_INFO: Record<AudioTransitionType, { name: string; group: AudioTransitionGroup }> = {
+  "audio-linear": { name: "Linear", group: "Crossfade curves" },
+  "audio-equalpower": { name: "Equal power", group: "Crossfade curves" },
+  "audio-scurve": { name: "S-curve", group: "Crossfade curves" },
+  "audio-log": { name: "Logarithmic", group: "Crossfade curves" },
+  "audio-exp": { name: "Exponential", group: "Crossfade curves" },
+  "audio-dip": { name: "Dip to silence", group: "Crossfade curves" },
+  "audio-lowpass": { name: "Low-pass sweep", group: "Creative" },
+  "audio-tapestop": { name: "Tape stop", group: "Creative" },
+  "audio-echo": { name: "Echo out", group: "Creative" },
+  "audio-telephone": { name: "Telephone swap", group: "Creative" },
+}
+
+export const AUDIO_TRANSITION_GROUPS: AudioTransitionGroup[] = ["Crossfade curves", "Creative"]
+
+/** The audio transition a new cut between audio clips gets. */
+export const DEFAULT_AUDIO_TRANSITION: AudioTransitionType = "audio-equalpower"
+
+/** A transition's name, picture or audio. */
+export const transitionName = (t: AnyTransitionType) => (t in TRANSITION_INFO ? TRANSITION_INFO[t as TransitionType].name : AUDIO_TRANSITION_INFO[t as AudioTransitionType].name)
+
+/** A transition's name at a free edge: an audio tape stop starts the sound at an in edge, a fade is a fade. */
+export function edgeTransitionName(t: AnyTransitionType, edge: Edge): string {
+  if (t === "audio-tapestop") return edge === "in" ? "Tape start" : "Tape stop"
+  if (t === "audio-echo") return "Echo tail"
+  if (t === "audio-lowpass") return edge === "in" ? "Low-pass sweep in" : "Low-pass sweep out"
+  if (t in AUDIO_TRANSITION_INFO) return `Fade ${edge}, ${transitionName(t).toLowerCase()}`
+  return transitionName(t)
+}
+
+/** Where clip `id` is: its track (AUDIO_TRACK for the audio layer), index and the clip. */
 function locate(p: Project, id: string): { track: number; index: number; clip: Clip } | null {
   for (let track = 0; track < p.tracks.length; track++) {
     const index = p.tracks[track].clips.findIndex((c) => c.id === id)
     if (index >= 0) return { track, index, clip: p.tracks[track].clips[index] }
   }
-  return null
+  const index = p.audioTrack ? p.audioTrack.clips.findIndex((c) => c.id === id) : -1
+  return index >= 0 ? { track: AUDIO_TRACK, index, clip: p.audioTrack!.clips[index] } : null
 }
 
-const withClips = (p: Project, track: number, clips: Clip[]): Project => ({ ...p, tracks: p.tracks.map((t, i) => (i === track ? { ...t, clips } : t)) })
+const withClips = withTrack
 
 /**
  * The two cuts of a clip: `before`, the id of the clip whose transition joins
@@ -68,7 +103,7 @@ const withClips = (p: Project, track: number, clips: Clip[]): Project => ({ ...p
 export function cutsOf(p: Project, clipId: string): { before: string | null; after: string | null } {
   const at = locate(p, clipId)
   if (!at) return { before: null, after: null }
-  const clips = p.tracks[at.track].clips
+  const clips = trackAt(p, at.track)!.clips
   const next = clips[at.index + 1]
   return { before: adjoins(clips[at.index - 1], at.clip) ? at.clip.id : null, after: adjoins(at.clip, next) ? next.id : null }
 }
@@ -103,7 +138,7 @@ type CutContext = {
 function cutContext(p: Project, clipId: string): CutContext | null {
   const at = locate(p, clipId)
   if (!at) return null
-  const clips = p.tracks[at.track].clips
+  const clips = trackAt(p, at.track)!.clips
   const prev = clips[at.index - 1]
   if (!prev || !adjoins(prev, at.clip)) return null
   const has = (c: Clip) => isStill(p, c) || Object.hasOwn(p.assets, c.asset)
@@ -187,7 +222,8 @@ export function transitionRange(p: Project, clipId: string): CutRange {
 /** How long a J-cut or an L-cut at the cut into `clipId` may be (with its transition as it is), trimming the clips as it needs. */
 export function cutAudioRange(p: Project, clipId: string): Record<CutAudio["mode"], CutRange> {
   const x = cutContext(p, clipId)
-  if (!x) return { j: noRange("not-adjoining", null), l: noRange("not-adjoining", null) }
+  // The audio layer's clips have no picture for the sound to lead or trail.
+  if (!x || x.track === AUDIO_TRACK) return { j: noRange("not-adjoining", null), l: noRange("not-adjoining", null) }
   const half = x.clip.transition ? x.clip.transition.duration / 2 : 0
   const range = (mode: CutAudio["mode"]): CutRange => {
     if (!hasSound(p, mode === "j" ? x.clip : x.prev)) return noRange("no-audio", x)
@@ -236,7 +272,8 @@ export function cutAudioPlan(p: Project, clipId: string, spec: CutAudio): CutPla
  * before it (transitionPlan: the duration clamped to MIN_TRANSITION and
  * transitionRange's most, the clips trimmed where they lack the footage and
  * the layer rippled). The same project when no clip adjoins it, the type is
- * unknown or nothing changes.
+ * unknown or of the other family (lib/video/project transitionFits) or
+ * nothing changes.
  */
 export function setTransition(p: Project, clipId: string, spec: Transition | null): Project {
   const at = locate(p, clipId)
@@ -246,9 +283,10 @@ export function setTransition(p: Project, clipId: string, spec: Transition | nul
     if (!old) return p
     const rest: Clip = { ...at.clip }
     delete rest.transition
-    return withClips(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? rest : c)))
+    return withClips(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? rest : c)))
   }
-  if (!isTransitionType(spec.type) || !Number.isFinite(spec.duration)) return p
+  // The family must suit the clip: an audio type between audio clips, a picture type between any others.
+  if (!transitionFits(p, at.clip, spec.type) || !Number.isFinite(spec.duration)) return p
   const plan = transitionPlan(p, clipId, spec)
   if (!plan.ok) return p
   if (old && old.type === spec.type && old.duration === plan.duration && plan.trims.ripple === 0) return p
@@ -271,7 +309,7 @@ export function setCutAudio(p: Project, clipId: string, spec: CutAudio | null): 
     if (!old) return p
     const rest: Clip = { ...at.clip }
     delete rest.cutAudio
-    return withClips(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? rest : c)))
+    return withClips(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? rest : c)))
   }
   if (!isCutAudioMode(spec.mode) || !Number.isFinite(spec.duration)) return p
   const plan = cutAudioPlan(p, clipId, spec)
@@ -303,7 +341,7 @@ export function cutTrims(before: Project, after: Project, clipId: string): CutTr
 export function linkedChain(p: Project, clipId: string): string[] {
   const at = locate(p, clipId)
   if (!at) return []
-  const clips = p.tracks[at.track].clips
+  const clips = trackAt(p, at.track)!.clips
   let first = at.index
   while (first > 0 && linksBefore(clips[first]) && adjoins(clips[first - 1], clips[first])) first--
   let last = at.index
@@ -339,30 +377,33 @@ export function unlinkClip(p: Project, clipId: string): Project {
  * one span, or on a snapped base inserted at the slot `start` picks and
  * packed. A snapped base it leaves packs behind it. The same project for the
  * audio layer, a layer that doesn't exist, or a slot between two linked
- * clips on a snapped base.
+ * clips on a snapped base. A chain on the audio layer (audio transitions)
+ * moves along it whatever `toTrack` says.
  */
 export function moveGroup(p: Project, clipId: string, start: number, toTrack?: number): Project {
   const ids = new Set(linkedChain(p, clipId))
   const at = locate(p, clipId)
   if (!at || !Number.isFinite(start)) return p
-  const clips = p.tracks[at.track].clips
+  const clips = trackAt(p, at.track)!.clips
   const group = clips.filter((c) => ids.has(c.id))
   const others = clips.filter((c) => !ids.has(c.id))
   const first = group[0]
   const length = clipEnd(group[group.length - 1]) - first.start
-  if (toTrack !== undefined && toTrack !== at.track) return moveGroupAcross(p, at.track, group, others, start, toTrack)
+  // An audio chain stays on the audio layer (it moves in time only).
+  if (toTrack !== undefined && toTrack !== at.track && at.track !== AUDIO_TRACK) return moveGroupAcross(p, at.track, group, others, start, toTrack)
   if (at.track === 0 && isMagnetic(p)) {
     const slot = baseInsertion(others, start).index
     const packed = endToEnd([...others.slice(0, slot), ...group, ...others.slice(slot)])
     if (packed.length > 0 && clipEnd(packed[packed.length - 1]) > MAX_TIMELINE + 1e-6) return p
-    return packed.every((c, i) => c.id === clips[i].id && c.start === clips[i].start) ? p : withClips(p, at.track, packed)
+    return packed.every((c, i) => c.id === clips[i].id && c.start === clips[i].start) ? p : fixEdges(withClips(p, at.track, packed))
   }
   const to = resolveStart(others, length, start)
   if (to + length > MAX_TIMELINE + 1e-6) return p
   const delta = to - first.start
   if (Math.abs(delta) < 1e-9) return p
   const moved = group.map((c) => ({ ...c, start: c.start + delta }))
-  return withClips(p, at.track, [...others, ...moved].sort((a, b) => a.start - b.start))
+  // Landing against a clip with an edge transition there takes it away (fixEdges).
+  return fixEdges(withClips(p, at.track, [...others, ...moved].sort((a, b) => a.start - b.start)))
 }
 
 /** moveGroup onto another layer: `group` (end to end) leaves track `from`, where `others` stay. */
@@ -394,7 +435,7 @@ function moveGroupAcross(p: Project, from: number, group: Clip[], others: Clip[]
 }
 
 /** A transition running on a track at some time: the outgoing clip's index (`from`), the incoming one's (`to`), the cut and how far through it is (0 to 1). */
-export type TransitionWindow = { from: number; to: number; cut: number; duration: number; type: TransitionType; progress: number }
+export type TransitionWindow = { from: number; to: number; cut: number; duration: number; type: AnyTransitionType; progress: number }
 
 /** The transition running on `track` at timeline time `t` ([cut - d/2, cut + d/2)), or null. */
 export function transitionAt(track: Track, t: number): TransitionWindow | null {
@@ -501,4 +542,66 @@ export function cutGains(w: OverlapWindow, t: number): { out: number; in: number
   const clamp = (v: number) => Math.min(1, Math.max(0, v))
   if (a.mode === "j") return { out: t < w.cut ? 1 : 0, in: t < w.cut - a.duration ? 0 : clamp((t - (w.cut - a.duration)) / fade) }
   return { out: t >= w.cut + a.duration ? 0 : clamp((w.cut + a.duration - t) / fade), in: t >= w.cut ? 1 : 0 }
+}
+
+/**
+ * How long a clip's edge transition at `edge` may be: up to MAX_EDGE and what
+ * the clip's length leaves beside its other edge's transition, floored to the
+ * millisecond. 0 with the reason when it can't be had: the clip is gone, a
+ * clip adjoins that edge ("adjoining": a transition between the two goes
+ * there instead), it's a text clip ("text": its In and Out animations do
+ * this), or the clip is too short ("too-short").
+ */
+export type EdgeRange = { max: number; reason: "ok" | "not-found" | "adjoining" | "text" | "too-short" }
+
+export function edgeLimits(p: Project, clipId: string, edge: Edge): EdgeRange {
+  const at = locate(p, clipId)
+  if (!at) return { max: 0, reason: "not-found" }
+  if (isTextClip(at.clip)) return { max: 0, reason: "text" }
+  const clips = trackAt(p, at.track)!.clips
+  if (edge === "in" ? adjoins(clips[at.index - 1], at.clip) : adjoins(at.clip, clips[at.index + 1])) return { max: 0, reason: "adjoining" }
+  const other = (edge === "in" ? at.clip.edgeOut : at.clip.edgeIn)?.duration ?? 0
+  const max = Math.floor(Math.min(MAX_EDGE, clipLength(at.clip) - other) * 1000 + 1e-6) / 1000
+  return max < MIN_EDGE - 1e-9 ? { max: 0, reason: "too-short" } : { max, reason: "ok" }
+}
+
+/**
+ * Sets (or with null, removes) a clip's "in" or "out" transition at a free
+ * edge, its duration clamped to MIN_EDGE and edgeLimits' most. It runs inside
+ * the clip, so nothing is trimmed or moved, and it doesn't link the clip to
+ * anything. The same project when the edge isn't free, the type isn't one
+ * that edge of this clip offers (lib/video/transition-types isEdgeType: an
+ * audio fade on an audio clip, a picture transition on any other), or
+ * nothing changes.
+ */
+export function setEdgeTransition(p: Project, clipId: string, edge: Edge, spec: EdgeTransition | null): Project {
+  const at = locate(p, clipId)
+  if (!at) return p
+  const key = edge === "in" ? "edgeIn" : "edgeOut"
+  const old = at.clip[key]
+  const replace = (c: Clip) => withClips(p, at.track, trackAt(p, at.track)!.clips.map((x) => (x.id === clipId ? c : x)))
+  if (spec === null) {
+    if (!old) return p
+    const rest: Clip = { ...at.clip }
+    delete rest[key]
+    return replace(rest)
+  }
+  const range = edgeLimits(p, clipId, edge)
+  if (range.reason !== "ok" || !isEdgeType(spec.type, edge, isAudioClip(p, at.clip)) || !Number.isFinite(spec.duration)) return p
+  const duration = Math.round(Math.max(MIN_EDGE, Math.min(range.max, spec.duration)) * 1000) / 1000
+  if (old && old.type === spec.type && old.duration === duration) return p
+  return replace({ ...at.clip, [key]: { type: spec.type, duration } })
+}
+
+/** An edge transition running at timeline time `t`: which edge, its type and length, and how far through it is (0 to 1). */
+export type EdgeWindow = { edge: Edge; type: AnyTransitionType; duration: number; progress: number }
+
+/** The edge transition of `clip` running at `t` (the in one over [start, start + d), the out one over [end - d, end)), or null. */
+export function edgeAt(clip: Clip, t: number): EdgeWindow | null {
+  const a = clip.edgeIn
+  if (a && t >= clip.start && t < clip.start + a.duration) return { edge: "in", type: a.type, duration: a.duration, progress: Math.min(1, Math.max(0, (t - clip.start) / a.duration)) }
+  const b = clip.edgeOut
+  const end = clipEnd(clip)
+  if (b && t >= end - b.duration && t < end) return { edge: "out", type: b.type, duration: b.duration, progress: Math.min(1, Math.max(0, (t - (end - b.duration)) / b.duration)) }
+  return null
 }

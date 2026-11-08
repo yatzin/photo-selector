@@ -1,6 +1,9 @@
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
-import { isCutAudioMode, isTransitionType, MAX_CUT_AUDIO, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_TRANSITION, type CutAudio, type Transition } from "./transition-types"
+import {
+  isAnyTransitionType, isAudioTransitionType, isCutAudioMode, isEdgeType, isTransitionType, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
+  type AnyTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition,
+} from "./transition-types"
 
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
@@ -21,9 +24,14 @@ export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: 
  * on the cut (see transitionLimits); only while that clip adjoins this one.
  * `cutAudio`, at the same cut, lets the sound lead (a J-cut) or trail (an
  * L-cut) the picture cut (see cutAudioLimits); independent of `transition`.
+ * Audio clips link the same way with an audio transition type (no cutAudio).
+ * `edgeIn` and `edgeOut` bring the clip in from nothing at its start and take
+ * it out to nothing at its end, inside its own span (see fixEdges); only at
+ * an edge no clip adjoins, and never on a text clip (its animations do that).
  */
 export type Clip = {
   id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition; cutAudio?: CutAudio
+  edgeIn?: EdgeTransition; edgeOut?: EdgeTransition
 }
 /**
  * A layer. Track 0 is the base, the lowest layer; higher tracks draw over
@@ -37,8 +45,9 @@ export type Track = { id: string; magnetic?: boolean; clips: Clip[] }
 /**
  * `audioTrack` is the audio layer ("layer 0", drawn below layer 1): audio
  * clips only, and audio clips only there. It times like an overlay layer
- * (own starts, gaps, no overlaps, no Snap), has no transitions or audio
- * overlaps and no picture, and isn't counted in MAX_TRACKS. Absent while it
+ * (own starts, gaps, no overlaps, no Snap), links adjoining clips only with
+ * audio transitions (no audio overlaps), has no picture, and isn't counted
+ * in MAX_TRACKS. Absent while it
  * has no clips, so a project without audio is stored as it always was.
  *
  * Version 3: every clip has a `start`. Version 2 laid the base track end to
@@ -298,15 +307,14 @@ export function cutReach(clips: Clip[], i: number): { lead: number; trail: numbe
  * Each half also has to fit in its clip beside what the clip's other cut
  * takes of it (cutReach), so two cuts' windows never meet, and the whole is
  * at most MAX_TRANSITION, floored to the millisecond. `max` is 0 with
- * "not-adjoining" when nothing adjoins it (or the clip is gone or on the
- * audio layer, whose clips never link), and
- * "no-footage" when that leaves less than MIN_TRANSITION.
+ * "not-adjoining" when nothing adjoins it (or the clip is gone), and
+ * "no-footage" when that leaves less than MIN_TRANSITION. The audio layer's
+ * clips have the same limits (their transitions are audio ones).
  */
 export function transitionLimits(p: Project, clipId: string): TransitionLimits {
-  // The audio layer's clips never link.
-  const found = find(p, clipId)
-  const at = found && found.track !== AUDIO_TRACK ? found : null
-  const clips = at ? p.tracks[at.track].clips : []
+  // The audio layer's clips link with audio transitions, under the same limits.
+  const at = find(p, clipId)
+  const clips = at ? trackAt(p, at.track)!.clips : []
   const prev = at ? clips[at.index - 1] : undefined
   if (!at || !adjoins(prev, at.clip)) return { max: 0, reason: "not-adjoining" }
   const roomOut = clipLength(prev!) - cutReach(clips, at.index - 1).trail
@@ -360,6 +368,73 @@ export function cutAudioLimits(p: Project, clipId: string): CutAudioLimits {
 /** True when a clip has something at its cut from the clip before it (a transition or an audio overlap) that links the two. */
 export const linksBefore = (c: Clip) => c.transition !== undefined || c.cutAudio !== undefined
 
+/** Whether a transition of `type` suits the clip: an audio type for an audio clip, a picture type for any other. */
+export const transitionFits = (p: Project, c: Clip, type: unknown): type is AnyTransitionType => (isAudioClip(p, c) ? isAudioTransitionType(type) : isTransitionType(type))
+
+/** A clip's in and out edge transitions fitted to `length`, as a text's animations are (lib/video/text fitAnims): together they fit in it, shrunk in proportion to the millisecond, neither below MIN_EDGE. */
+function fitEdgePair(a: number, b: number, length: number): [number, number] {
+  if (a + b <= length + 1e-9) return [a, b]
+  const floorMs = (s: number) => Math.floor(s * 1000 + 1e-6) / 1000
+  if (a > 0 && b > 0) {
+    const k = length / (a + b)
+    let da = Math.max(MIN_EDGE, floorMs(a * k))
+    let db = Math.max(MIN_EDGE, floorMs(b * k))
+    if (da + db > length + 1e-9) {
+      if (da > db) da = floorMs(length - db)
+      else db = floorMs(length - da)
+    }
+    return [da, db]
+  }
+  return [a > 0 ? Math.max(MIN_EDGE, floorMs(length)) : 0, b > 0 ? Math.max(MIN_EDGE, floorMs(length)) : 0]
+}
+
+/** The clip with its edge transitions fitted to its length (fitEdgePair); the same clip when they fit. */
+export function fitEdges(c: Clip): Clip {
+  if (!c.edgeIn && !c.edgeOut) return c
+  const [a, b] = fitEdgePair(c.edgeIn?.duration ?? 0, c.edgeOut?.duration ?? 0, clipLength(c))
+  if (a === (c.edgeIn?.duration ?? 0) && b === (c.edgeOut?.duration ?? 0)) return c
+  const next: Clip = { ...c }
+  if (c.edgeIn) next.edgeIn = { ...c.edgeIn, duration: a }
+  if (c.edgeOut) next.edgeOut = { ...c.edgeOut, duration: b }
+  return next
+}
+
+/** The clip without its edge transition at `edge`. */
+export function withoutEdge(c: Clip, edge: Edge): Clip {
+  const key = edge === "in" ? "edgeIn" : "edgeOut"
+  if (!c[key]) return c
+  const next: Clip = { ...c }
+  delete next[key]
+  return next
+}
+
+/**
+ * Every edge transition checked after an edit: one at an edge a clip now
+ * adjoins goes (the edge isn't free any more), and the rest are fitted to
+ * their clip's length (fitEdges). The same project when nothing changes.
+ */
+export function fixEdges(p: Project): Project {
+  const has = (t: Track) => t.clips.some((c) => c.edgeIn || c.edgeOut)
+  if (!p.tracks.some(has) && !(p.audioTrack && has(p.audioTrack))) return p
+  const fix = (t: Track): Track => {
+    let touched = false
+    const clips = t.clips.map((c, i) => {
+      if (!c.edgeIn && !c.edgeOut) return c
+      let next = c
+      if (next.edgeIn && adjoins(t.clips[i - 1], c)) next = withoutEdge(next, "in")
+      if (next.edgeOut && adjoins(c, t.clips[i + 1])) next = withoutEdge(next, "out")
+      next = fitEdges(next)
+      if (next !== c) touched = true
+      return next
+    })
+    return touched ? { ...t, clips } : t
+  }
+  const tracks = p.tracks.map(fix)
+  const audio = p.audioTrack ? fix(p.audioTrack) : undefined
+  if (tracks.every((t, i) => t === p.tracks[i]) && audio === p.audioTrack) return p
+  return { ...p, tracks, ...(audio ? { audioTrack: audio } : {}) }
+}
+
 /** The clip adjoining `c`'s start on `clips` (sorted by start), if any. */
 function adjoiningBefore(clips: Clip[], index: number): Clip | undefined {
   const prev = clips[index - 1]
@@ -376,13 +451,20 @@ function adjoiningBefore(clips: Clip[], index: number): Clip | undefined {
  * MIN_TRANSITION (MIN_CUT_AUDIO). The same project when nothing changes.
  */
 export function fixTransitions(p: Project, prev?: Project, alias: Record<string, string> = {}): Project {
-  if (!p.tracks.some((t) => t.clips.some(linksBefore))) return p
+  // Edge transitions are checked too (fixEdges): an edge a clip now adjoins isn't free.
+  return fixEdges(fixLinks(p, prev, alias))
+}
+
+/** fixTransitions' check of the transitions and audio overlaps, on every layer (the audio layer's too). */
+function fixLinks(p: Project, prev: Project | undefined, alias: Record<string, string>): Project {
+  const layers = (q: Project) => (q.audioTrack ? [...q.tracks, q.audioTrack] : q.tracks)
+  if (!layers(p).some((t) => t.clips.some(linksBefore))) return p
   const before = new Map<string, string | null>()
   if (prev) {
-    for (const t of prev.tracks) t.clips.forEach((c, i) => before.set(c.id, adjoiningBefore(t.clips, i)?.id ?? null))
+    for (const t of layers(prev)) t.clips.forEach((c, i) => before.set(c.id, adjoiningBefore(t.clips, i)?.id ?? null))
   }
   let changed = false
-  const tracks = p.tracks.map((t) => {
+  const fixed = layers(p).map((t) => {
     let touched = false
     const clips = t.clips.map((c, i) => {
       if (!linksBefore(c)) return c
@@ -411,7 +493,9 @@ export function fixTransitions(p: Project, prev?: Project, alias: Record<string,
     changed = true
     return { ...t, clips }
   })
-  return changed ? { ...p, tracks } : p
+  if (!changed) return p
+  const tracks = fixed.slice(0, p.tracks.length)
+  return p.audioTrack ? { ...p, tracks, audioTrack: fixed[p.tracks.length] } : { ...p, tracks }
 }
 
 /**
@@ -422,13 +506,14 @@ export function fixTransitions(p: Project, prev?: Project, alias: Record<string,
 export function brokenLinks(prev: Project, next: Project): string[] {
   const where = new Map<string, { track: number; index: number }>()
   next.tracks.forEach((t, track) => t.clips.forEach((c, index) => where.set(c.id, { track, index })))
+  next.audioTrack?.clips.forEach((c, index) => where.set(c.id, { track: AUDIO_TRACK, index }))
   const broken: string[] = []
-  for (const t of prev.tracks) {
+  for (const t of prev.audioTrack ? [...prev.tracks, prev.audioTrack] : prev.tracks) {
     t.clips.forEach((c, i) => {
       const pred = linksBefore(c) ? adjoiningBefore(t.clips, i) : undefined
       const b = where.get(c.id)
       if (!pred || !b || !where.has(pred.id)) return
-      const clips = next.tracks[b.track].clips
+      const clips = trackAt(next, b.track)!.clips
       if (adjoiningBefore(clips, b.index)?.id !== pred.id) broken.push(c.id)
     })
   }
@@ -538,6 +623,8 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
   if (clip.text) placed.text = clip.text
   if (clip.transition) placed.transition = clip.transition
   if (clip.cutAudio) placed.cutAudio = clip.cutAudio
+  if (clip.edgeIn) placed.edgeIn = clip.edgeIn
+  if (clip.edgeOut) placed.edgeOut = clip.edgeOut
   return withTrack(q, trackIndex, sortByStart([...clips.filter((c) => c.id !== clip.id), placed]))
 }
 
@@ -553,10 +640,11 @@ export function addClip(p: Project, assetId: string, trackIndex: number, at: { s
   const asset = Object.hasOwn(p.assets, assetId) ? p.assets[assetId] : undefined
   if (!asset || asset.duration < MIN_CLIP || hasClip(p, id)) return p
   const clip: Clip = { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, start: 0 }
-  if (assetKind(asset) === "audio") return place(p, clip, AUDIO_TRACK, at.start ?? 0)
+  // A clip that now adjoins one with an edge transition there takes it away (fixEdges).
+  if (assetKind(asset) === "audio") return fixEdges(place(p, clip, AUDIO_TRACK, at.start ?? 0))
   // Going in between two clips there parts them: a transition between them goes.
   if (trackIndex === 0 && isMagnetic(p)) return fixTransitions(insertBase(p, clip, at.start ?? 0), p)
-  return place(p, clip, trackIndex, at.start ?? 0)
+  return fixEdges(place(p, clip, trackIndex, at.start ?? 0))
 }
 
 /**
@@ -570,7 +658,7 @@ export function addTextClip(p: Project, text: ClipText, trackIndex: number, at: 
   if (!t || hasClip(p, id)) return p
   const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: fitAnims(t, DEFAULT_IMAGE) }
   if (trackIndex === 0 && isMagnetic(p)) return fixTransitions(insertBase(p, clip, at.start ?? 0), p)
-  return place(p, clip, trackIndex, at.start ?? 0)
+  return fixEdges(place(p, clip, trackIndex, at.start ?? 0))
 }
 
 /**
@@ -693,15 +781,18 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
   // Both halves keep the picture where it was, the mute and the text; the first half keeps a text's in animation, the second its out one.
+  // So with edge transitions: the first keeps the in edge, the second the out edge (each fitted to its piece by settle).
   const texts = clip.text ? splitAnims(clip.text, local, clipLength(clip) - local) : null
   const second = {
     start: timelineTime, ...(clip.transform ? { transform: clip.transform } : {}), ...(clip.muted ? { muted: true } : {}), ...(texts ? { text: texts[1] } : {}),
+    ...(clip.edgeOut ? { edgeOut: clip.edgeOut } : {}),
   }
+  const first = withoutEdge(clip, "out")
   if (isStill(p, clip)) {
-    next.splice(index, 1, { ...clip, in: 0, out: local, ...(texts ? { text: texts[0] } : {}) }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
+    next.splice(index, 1, { ...first, in: 0, out: local, ...(texts ? { text: texts[0] } : {}) }, { id: newId, asset: clip.asset, in: 0, out: clipLength(clip) - local, ...second })
   } else {
     const cut = clip.in + local
-    next.splice(index, 1, { ...clip, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
+    next.splice(index, 1, { ...first, out: cut }, { id: newId, asset: clip.asset, in: cut, out: clip.out, ...second })
   }
   // The second piece takes over the clip's place before the next clip, and with it that clip's transition.
   return settle(p, withTrack(p, track, next), { [newId]: id })
@@ -791,7 +882,12 @@ function isInt(v: unknown, max: number): v is number {
  * MIN_TRANSITION to MAX_TRANSITION, and a `cutAudio` a mode ("j" or "l") and
  * a duration from MIN_CUT_AUDIO to MAX_CUT_AUDIO; one with no clip adjoining
  * it is dropped and one longer than its footage allows is shortened
- * (fixTransitions).
+ * (fixTransitions). A transition of the other family (a picture type on the
+ * audio layer, an audio one elsewhere) and any audio overlap on the audio
+ * layer are dropped. `edgeIn` and `edgeOut` need a known type and a duration
+ * from MIN_EDGE to MAX_EDGE; one the clip can't have at that edge
+ * (isEdgeType, or any on a text clip) is dropped, as is one at an edge a clip
+ * adjoins, and the two are fitted to the clip's length (fixEdges).
  */
 export function parseProject(json: unknown): Project | null {
   if (!isRecord(json) || (json.version !== 1 && json.version !== 2 && json.version !== 3)) return null
@@ -857,7 +953,7 @@ export function parseProject(json: unknown): Project | null {
         start = c.start
       }
       const clip: Clip = { id: c.id, asset: c.asset, in: c.in, out: c.out, start }
-      // An audio clip has no picture to transform and never links to its neighbours: those fields are dropped.
+      // An audio clip has no picture to transform: the field is dropped.
       if (c.transform !== undefined && !audioOnly) {
         if (!isValidTransform(c.transform)) return null
         // Only the transform's own fields; a zero left or right crop or rotation and a false flip are left out.
@@ -874,15 +970,23 @@ export function parseProject(json: unknown): Project | null {
       if (text) clip.text = fitAnims(text, clip.out - clip.in)
       // A text clip has no sound to mute.
       else if (c.muted === true || raw.muted === true) clip.muted = true
-      if (c.transition !== undefined && !audioOnly) {
+      if (c.transition !== undefined) {
         const tr = c.transition
-        if (!isRecord(tr) || !isTransitionType(tr.type) || !isNum(tr.duration) || tr.duration < MIN_TRANSITION - 1e-9 || tr.duration > MAX_TRANSITION + 1e-9) return null
-        clip.transition = { type: tr.type, duration: tr.duration }
+        if (!isRecord(tr) || !isAnyTransitionType(tr.type) || !isNum(tr.duration) || tr.duration < MIN_TRANSITION - 1e-9 || tr.duration > MAX_TRANSITION + 1e-9) return null
+        // An audio type on the audio layer, a picture one anywhere else; the other family is dropped.
+        if (audioOnly ? isAudioTransitionType(tr.type) : isTransitionType(tr.type)) clip.transition = { type: tr.type, duration: tr.duration }
       }
       if (c.cutAudio !== undefined && !audioOnly) {
         const ca = c.cutAudio
         if (!isRecord(ca) || !isCutAudioMode(ca.mode) || !isNum(ca.duration) || ca.duration < MIN_CUT_AUDIO - 1e-9 || ca.duration > MAX_CUT_AUDIO + 1e-9) return null
         clip.cutAudio = { mode: ca.mode, duration: ca.duration }
+      }
+      for (const [key, edge] of [["edgeIn", "in"], ["edgeOut", "out"]] as const) {
+        const e = c[key]
+        if (e === undefined) continue
+        if (!isRecord(e) || !isAnyTransitionType(e.type) || !isNum(e.duration) || e.duration < MIN_EDGE - 1e-9 || e.duration > MAX_EDGE + 1e-9) return null
+        // A type that edge of this clip can't have (a picture one on an audio clip, or any on a text, whose animations do this) is dropped.
+        if (!text && isEdgeType(e.type, edge, audioOnly)) clip[key] = { type: e.type, duration: e.duration }
       }
       // Nothing may end past MAX_TIMELINE (a forged start would make a huge timeline and export).
       if (clipEnd(clip) > MAX_TIMELINE + EPS) return null

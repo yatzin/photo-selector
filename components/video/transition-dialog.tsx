@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { isTextClip, type Clip, type Project } from "@/lib/video/project"
 import {
-  DEFAULT_CUT_AUDIO, DEFAULT_TRANSITION, MIN_CUT_AUDIO, MIN_TRANSITION, TRANSITION_TYPES, type CutAudio, type Transition, type TransitionType,
+  DEFAULT_CUT_AUDIO, DEFAULT_TRANSITION, isTransitionType, MIN_CUT_AUDIO, MIN_TRANSITION, TRANSITION_TYPES, type CutAudio, type Transition, type TransitionType,
 } from "@/lib/video/transition-types"
 import { lookParts, transitionKeyframes } from "@/lib/video/transition-preview"
 import { transitionGuide } from "@/lib/video/transition-info"
@@ -143,7 +143,7 @@ export function TransitionDialog({ project, clipId, thumbUrl, videoUrl, imageUrl
   const bare = setCutAudio(project, clipId, null)
   const range = transitionRange(bare, clipId)
   const { max } = range
-  const [choice, setChoice] = useState<Choice>(current?.type ?? "fade")
+  const [choice, setChoice] = useState<Choice>(current && isTransitionType(current.type) ? current.type : "fade")
   const [text, setText] = useState(fmt(current?.duration ?? Math.min(DEFAULT_TRANSITION, Math.max(MIN_TRANSITION, max))))
   const [audioMode, setAudioMode] = useState<AudioChoice>(currentAudio?.mode ?? "none")
   const [audioText, setAudioText] = useState(fmt(currentAudio?.duration ?? DEFAULT_CUT_AUDIO))

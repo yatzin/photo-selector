@@ -85,14 +85,15 @@ describe("the audio layer", () => {
     expect(setTransform(p, "a1", { ...IDENTITY, x: 0.2 })).toBe(p)
   })
 
-  it("offers no transition or audio overlap between adjoining audio clips", () => {
+  it("offers audio transitions (no picture ones, no audio overlap) between adjoining audio clips", () => {
     let p = addClip(sample(), "w", AUDIO_TRACK, { start: 0 }, "a1")
     p = addClip(p, "w", AUDIO_TRACK, { start: 4 }, "a2")
-    expect(transitionLimits(p, "a2").reason).toBe("not-adjoining")
+    expect(transitionLimits(p, "a2").reason).toBe("no-footage")
     expect(cutAudioLimits(p, "a2").j.reason).toBe("not-adjoining")
-    expect(cutsOf(p, "a2")).toEqual({ before: null, after: null })
+    expect(cutsOf(p, "a2")).toEqual({ before: "a2", after: null })
     expect(setTransition(p, "a2", { type: "fade", duration: 1 })).toBe(p)
     expect(setCutAudio(p, "a2", { mode: "j", duration: 1 })).toBe(p)
+    expect(audio(setTransition(p, "a2", { type: "audio-equalpower", duration: 1 }))[1].transition).toEqual({ type: "audio-equalpower", duration: 1 })
   })
 
   it("goes with its asset", () => {

@@ -7,7 +7,7 @@ import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
 import { customExpr, stepsFor, whipBlurFilters } from "./transition-expr"
-import { CUT_AUDIO_FADE, isCustomTransition } from "./transition-types"
+import { CUT_AUDIO_FADE, isCustomTransition, type TransitionType } from "./transition-types"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -359,7 +359,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
         joined = `[ts${s.i}]`
         return
       }
-      const type = c.transition!.type
+      const type = c.transition!.type as TransitionType
       const timing = `duration=${num(c.transition!.duration)}:offset=${num(from - first.start)}`
       if (isCustomTransition(type)) {
         // The app's own transitions: xfade's custom expression on planar RGB (lib/video/transition-expr), a whip's blur after it.

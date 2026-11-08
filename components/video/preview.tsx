@@ -5,6 +5,7 @@ import { TriangleAlert } from "lucide-react"
 import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
 import { transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
 import { laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
+import { isTransitionType } from "@/lib/video/transition-types"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
@@ -421,7 +422,7 @@ export function Preview({
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w ? transitionLook(w.type, w.progress, W / H) : null
+              const fx = w && isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
               // What the player's slots hold: the lane's own video (through an overlap, the incoming one from its
               // start, a J-cut's lead too) and the overlap's outgoing video as the tail, in the other slot or under a still.
               const own = laneElementAt(track, look)
@@ -471,7 +472,7 @@ export function Preview({
               const clip = hits[lane]?.clip
               const w = windows[lane]
               const from = w ? track.clips[w.from] : undefined
-              const fx = w ? transitionLook(w.type, w.progress, W / H) : null
+              const fx = w && isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
               return (
                 <Fragment key={`stills-${lane}`}>
                   {from && stillLayer(from, outgoingZ(lane, fx), fx?.from, fx?.fromCopies)}
