@@ -197,13 +197,15 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, onEditAudio, transitionFor = null,
+  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
   folder: string
   /** Thumbnail URL for an asset id. */
   thumbUrl: (assetId: string) => string
+  /** A video or sound file's URL for an asset id, for the Edit length preview. */
+  mediaUrl: (assetId: string) => string
   selectedId: string | null
   playhead: number
   /** Pixels per second. */
@@ -228,6 +230,8 @@ export function Timeline({
   onEdgeTransition: (id: string, edge: Edge) => void
   /** Open the Audio levels dialog for clip `id` (a clip with sound). */
   onEditAudio: (id: string) => void
+  /** The Edit length dialog is opening (the player pauses, so only its preview plays). */
+  onEditLength: () => void
   /** The clip whose Transition dialog is open (the cut before it), if any: opening it locks an unlocked group around that cut. */
   transitionFor?: string | null
 }) {
@@ -1018,7 +1022,13 @@ export function Timeline({
       items.push({ label: "Edit Audio Levels...", dot: clip.audio !== undefined, onSelect: () => onEditAudio(id) })
     }
     // Every clip: a video's also crops and slides its source there, as an audio clip's does.
-    items.push({ label: "Edit length...", onSelect: () => setLengthFor(id) })
+    items.push({
+      label: "Edit length...",
+      onSelect: () => {
+        onEditLength()
+        setLengthFor(id)
+      },
+    })
     if (isTextClip(clip)) {
       const text = clip.text
       items.push(
@@ -1599,6 +1609,7 @@ export function Timeline({
           folder={folder}
           clip={lengthClip}
           track={lengthTrack}
+          mediaUrl={isTextClip(lengthClip) ? "" : mediaUrl(lengthClip.asset)}
           onUnlink={() => {
             const id = lengthClip.id
             onChange((p) => unlinkClip(p, id))

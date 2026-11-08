@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { useTheme } from "next-themes"
 import { cn } from "@/lib/utils"
 import { waveformBars } from "@/lib/video/peaks"
-import { dragSelection, sourceTicks, stepSelection, timeToX, type SourceDragMode, type SourceSelection } from "@/lib/video/source-window"
+import { dragSelection, sourceTicks, stepSelection, timeToX, xToTime, type SourceDragMode, type SourceSelection } from "@/lib/video/source-window"
 import { formatTimecode } from "@/lib/video/time"
 import { useAssetPeaksState } from "./use-asset-peaks"
 
@@ -14,16 +14,20 @@ import { useAssetPeaksState } from "./use-asset-peaks"
 // left or right handle to crop, the window to slide it (same length); edges
 // snap to the tick marks and the file's ends within SNAP_PX unless Alt is
 // held. The handles and the window are sliders for the keyboard (arrows 0.01
-// s, Shift 0.1 s, Home/End). Double-click resets to the whole file.
+// s, Shift 0.1 s, Home/End). Double-click resets to the whole file. With
+// `onSeek`, a ruler row above the waveform scrubs the dialog's preview (click
+// or drag; the dialog keeps it inside the selection) and `playhead` draws its
+// position as a line across the strip.
 
 const HEIGHT = 100 // css px
 const STEP = 2 // css px per bar, gap included
 const SNAP_PX = 6
 const HANDLE = 10 // css px; the handles sit outside the window so a short one stays reachable
+const RULER = 14 // css px; the scrub row above the waveform
 
 const secs = (t: number) => `${t.toFixed(2)} s`
 
-export function SourceStrip({ folder, assetId, duration, selection, minLength, muted, onChange }: {
+export function SourceStrip({ folder, assetId, duration, selection, minLength, muted, onChange, playhead = null, onSeek }: {
   folder: string
   assetId: string
   /** The media file's length (s). */
@@ -32,6 +36,10 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
   minLength: number
   muted: boolean
   onChange: (selection: SourceSelection) => void
+  /** The preview's position in the source (s), drawn as a line; null for none. */
+  playhead?: number | null
+  /** Scrubbing on the ruler row: the source time under the pointer. */
+  onSeek?: (t: number) => void
 }) {
   const { status, peaks } = useAssetPeaksState(folder, assetId, true)
   const { resolvedTheme } = useTheme()
@@ -39,6 +47,7 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
   const canvas = useRef<HTMLCanvasElement>(null)
   const [width, setWidth] = useState(0)
   const [drag, setDrag] = useState<{ mode: SourceDragMode; x: number; from: SourceSelection; snapping: boolean } | null>(null)
+  const [scrubbing, setScrubbing] = useState(false)
 
   useEffect(() => {
     const el = wrap.current
@@ -108,6 +117,10 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
     onChange(next)
   }
 
+  function scrub(e: PointerEvent<HTMLDivElement>) {
+    onSeek?.(xToTime(e.clientX - e.currentTarget.getBoundingClientRect().left, duration, width))
+  }
+
   const pointer = (mode: SourceDragMode) => ({
     onPointerDown: (e: PointerEvent<HTMLDivElement>) => down(mode, e),
     onPointerMove: move,
@@ -134,8 +147,34 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
     </div>
   )
 
+  const line = playhead !== null && Number.isFinite(playhead) ? x(playhead) : null
+
   return (
     <div className="grid gap-1">
+      {onSeek && (
+        <div
+          aria-hidden
+          data-scrub
+          className="relative cursor-pointer touch-none select-none rounded-sm bg-muted/50 hover:bg-muted"
+          style={{ height: RULER, marginLeft: HANDLE, marginRight: HANDLE }}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || !(width > 0)) return
+            e.preventDefault()
+            e.currentTarget.setPointerCapture(e.pointerId)
+            setScrubbing(true)
+            scrub(e)
+          }}
+          onPointerMove={(e) => scrubbing && scrub(e)}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+            setScrubbing(false)
+          }}
+          onPointerCancel={() => setScrubbing(false)}
+        >
+          <div className="pointer-events-none absolute inset-y-0 bg-editor-accent/30" style={{ left: x(view.in), width: Math.max(1, x(view.out) - x(view.in)) }} />
+          {line !== null && <div className="pointer-events-none absolute -bottom-0.5 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-foreground" style={{ left: line }} />}
+        </div>
+      )}
       <div
         className="relative select-none"
         style={{ height: HEIGHT, paddingLeft: HANDLE, paddingRight: HANDLE }}
@@ -155,6 +194,7 @@ export function SourceStrip({ folder, assetId, duration, selection, minLength, m
           {/* Outside the window: dimmed. */}
           <div aria-hidden className="pointer-events-none absolute inset-y-0 left-0 bg-background/70" style={{ width: x(view.in) }} />
           <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 bg-background/70" style={{ left: x(view.out) }} />
+          {line !== null && <div aria-hidden data-playhead className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-foreground" style={{ left: line }} />}
         </div>
         <div
           role="slider"

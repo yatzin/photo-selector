@@ -207,6 +207,8 @@ export function Editor({
     },
     [project.assets, userFolder, folder]
   )
+  /** A video's or a sound file's URL, for the Edit length dialog's preview. */
+  const lengthMediaUrl = useCallback((assetId: string) => videoUrl(assetId) || audioUrl(assetId), [videoUrl, audioUrl])
   const player = usePreviewPlayer(project, videoUrl, audioUrl)
   // Import: files from the computer land in Project media as each one finishes (the server owns assets: take the new one from its reply).
   const importer = useMediaImport(folder, (id, asset) => setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [id]: asset } } })))
@@ -722,7 +724,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} />
           </div>
         </div>
       </div>
