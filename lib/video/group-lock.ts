@@ -19,6 +19,9 @@ export type LockState = { windowMs: number; unlocked: Readonly<Record<string, En
 /** A chain's key: its clip ids, sorted. */
 export const chainKey = (ids: readonly string[]) => [...ids].sort().join("|")
 
+/** The clip ids in a chain's key. */
+export const chainIds = (key: string) => key.split("|")
+
 /** Every chain locked; `windowMs` overrides the window (the browser test's hook). */
 export const createLockState = (windowMs = UNLOCK_WINDOW_MS): LockState => ({ windowMs, unlocked: {} })
 

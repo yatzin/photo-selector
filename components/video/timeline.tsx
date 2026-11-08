@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Blend, Film, Image as ImageIcon, Magnet, Music, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
+import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
@@ -9,6 +9,7 @@ import {
   MIN_CLIP, moveClip, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setClipText, splitClip, totalLength, trackAt, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
+import { beginMove, chainIds, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS, type LockState } from "@/lib/video/group-lock"
 import { linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
 import {
@@ -48,10 +49,14 @@ import { Thumb } from "./thumb"
 // block straddling its cut (click: the Transition dialog); the selected clip
 // has a white circle at each cut with an adjoining clip for adding one (or an
 // audio overlap: the same dialog). A J-cut or L-cut is a thin teal band along
-// the bottom of the clip its sound overlaps, beside the cut. A clip linked by
-// a transition or an audio overlap can't be dragged off or trimmed apart at
-// that cut: it shows a red X and a notice offers to unlink it or move its
-// whole chain.
+// the bottom of the clip its sound overlaps, beside the cut. Clips linked by
+// transitions or audio overlaps (a chain) are locked: dragging one shows a red
+// X from the start of the drag, the clip stays put and a notice offers to
+// unlink it or to move the group. Move group unlocks that chain; its first
+// drag starts a 5 minute window (a countdown badge on the group) in which all
+// its clips move together, as often as wanted. At the deadline, or when the
+// chain's Transition dialog opens, it locks again (the X then covers every
+// block of an expired group). Its edges at a linked cut can't be trimmed apart.
 //
 // The audio layer ("0", below layer 1) holds the sound files' clips, and only
 // them: a sound file dropped anywhere lands there at the pointer's time, an
@@ -82,17 +87,25 @@ const DRAG_THRESHOLD = 4 // px before a press on a clip becomes a drag
 const SNAP_PX = 8 // px within which a dragged clip or edge snaps to the playhead, 0 or another clip's edge
 const ROW_ZOOM_KEY = "ps.video.rowZoom"
 const NOTICE_MS = 6000 // how long a notice stays (longer while hovered or focused)
-const REJECT_MS = 800 // how long a refused clip shows its red X
+const LINKED_NOTICE_MS = 8000 // the same for a drag on a locked group, acted on during or after the drag
+const REJECT_MS = 800 // how long a refused clip shows its red X (after release, for a drag)
+// The unlock window; the browser test sets window.__GROUP_LOCK_WINDOW_MS before the page loads to shorten it.
+const LOCK_WINDOW_MS = (() => {
+  const w = typeof window === "undefined" ? undefined : (window as { __GROUP_LOCK_WINDOW_MS?: unknown }).__GROUP_LOCK_WINDOW_MS
+  return typeof w === "number" && w > 0 ? w : UNLOCK_WINDOW_MS
+})()
 
 /**
  * A message over the timeline (where the Alt hint goes) after an edit was
  * refused or changed something: `unlink` offers to take a clip's transitions
- * off (or one cut's, `cut`), `group` to move its whole linked chain instead.
+ * off (or one cut's, `cut`), `group` to unlock its whole linked chain for moving.
  */
 type Notice = {
   text: string
   unlink?: { id: string; cut?: boolean }
-  group?: { id: string; count: number; run: () => void }
+  group?: { key: string; count: number }
+  /** How long it stays (ms; NOTICE_MS when absent). */
+  ms?: number
   /** Where it sits in the view (px from its left): centred there, or its left or right edge there. */
   anchor?: { x: number; side: "center" | "left" | "right" }
 }
@@ -118,8 +131,56 @@ function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: n
   return points
 }
 
+/** The keys of every chain of linked clips in the project. */
+function chainKeys(p: Project): Set<string> {
+  const keys = new Set<string>()
+  for (const t of p.tracks) {
+    for (const c of t.clips) {
+      const ids = linkedChain(p, c.id)
+      if (ids.length > 1) keys.add(chainKey(ids))
+    }
+  }
+  return keys
+}
+
+/** "1 minute", "12 seconds". */
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`
+
+/**
+ * An unlocked group's countdown (lock-open icon and m:ss), amber in its last
+ * 30 s. It re-renders itself once a second, on the second, not the timeline.
+ */
+function UnlockBadge({ deadline, left, shift }: { deadline: number; left: number; shift: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const ms = deadline - now
+    if (ms <= 0) return
+    const timer = setTimeout(() => setNow(Date.now()), ms % 1000 || 1000)
+    return () => clearTimeout(timer)
+  }, [deadline, now])
+  const rest = Math.max(0, Math.ceil((deadline - now) / 1000))
+  const m = Math.floor(rest / 60)
+  const s = rest % 60
+  const warn = rest <= 30
+  return (
+    <div
+      role="timer"
+      aria-label={`Group unlocked, ${m > 0 ? `${plural(m, "minute")} ` : ""}${plural(s, "second")} left`}
+      data-unlock-badge={warn ? "warn" : "on"}
+      className={cn(
+        "pointer-events-none absolute top-0.5 z-30 flex h-4 items-center gap-0.5 rounded-full px-1.5 text-[10px] font-medium tabular-nums shadow",
+        warn ? "bg-amber-400 text-amber-950 dark:bg-amber-300" : "bg-neutral-900/85 text-white dark:bg-neutral-100/90 dark:text-neutral-900"
+      )}
+      style={{ left: left + 16, transform: shift ? `translateX(${shift}px)` : undefined }}
+    >
+      <LockOpen aria-hidden className="h-2.5 w-2.5" />
+      {m}:{String(s).padStart(2, "0")}
+    </div>
+  )
+}
+
 export function Timeline({
-  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition,
+  project, folder, thumbUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, transitionFor = null,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -146,15 +207,18 @@ export function Timeline({
   onEditText: (id: string, section?: "text" | "animation") => void
   /** Open the Transition dialog for the cut before clip `id`. */
   onTransition: (id: string) => void
+  /** The clip whose Transition dialog is open (the cut before it), if any: opening it locks an unlocked group around that cut. */
+  transitionFor?: string | null
 }) {
   // While a trim is being dragged the edit lives here; it's committed on release.
   const [trim, setTrim] = useState<{ id: string; edge: "in" | "out"; seconds: number } | null>(null)
   // A drag that snaps: whether Alt has snapping off, and the time it's snapped to (null: none), for the hint and the guide line.
   const [snap, setSnap] = useState<{ off: boolean; at: number | null } | null>(null)
   // A clip being dragged: how far it has moved (content px, scrolling included), where it would land and where its end is.
-  const [drag, setDrag] = useState<{ id: string; length: number; dx: number; dy: number; target: DropTarget | null; end: number } | null>(null)
-  // The clip last dropped by a drag: it lands where its ghost was, without sliding there from where it started (until the next press).
-  const [landed, setLanded] = useState<string | null>(null)
+  // A dragged unlocked group: `group` its clip ids (they all move by dx) and `length` its span.
+  const [drag, setDrag] = useState<{ id: string; group?: string[]; length: number; dx: number; dy: number; target: DropTarget | null; end: number } | null>(null)
+  // The clips last dropped by a drag: they land where the ghost was, without sliding there from where they started (until the next press).
+  const [landed, setLanded] = useState<string[] | null>(null)
   // A file from the left panel being dragged (anywhere): its clip length, when known, for the ghost, and whether it's a sound file.
   const [outside, setOutside] = useState<{ length: number; audio: boolean } | null>(null)
   const [drop, setDrop] = useState<DropTarget | null>(null)
@@ -184,22 +248,84 @@ export function Timeline({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   // The clip whose Edit length dialog is open.
   const [lengthFor, setLengthFor] = useState<string | null>(null)
-  // A refused edit's message (and the hover or focus that keeps it up), and the clip flashing its red X.
+  // A refused edit's message (and the hover or focus that keeps it up), and the clips showing a red X (`held` while a refused drag lasts).
   const [notice, setNotice] = useState<Notice | null>(null)
   const [noticeHeld, setNoticeHeld] = useState(false)
-  const [rejected, setRejected] = useState<string | null>(null)
+  const [rejected, setRejected] = useState<{ ids: string[]; held: boolean } | null>(null)
+  // Which linked chains may be dragged as a group (group-lock): here only, never saved; a ref for the handlers.
+  const [locks, setLocksState] = useState(() => createLockState(LOCK_WINDOW_MS))
+  const locksRef = useRef(locks)
+  const setLocks = (change: (s: LockState) => LockState) => {
+    const next = change(locksRef.current)
+    if (next === locksRef.current) return
+    locksRef.current = next
+    setLocksState(next)
+  }
+  // The group drag in progress (its chain's key), and how to call it off when the window ends under it.
+  const groupDrag = useRef<{ key: string; cancel: () => void } | null>(null)
+  // Chains locked again by their window running out: their red X covers every block.
+  const expiredKeys = useRef(new Set<string>())
+  // The edit (tracks and audio layer) the lock state last checked against.
+  const lastEdit = useRef({ tracks: project.tracks, audio: project.audioTrack })
 
   useEffect(() => {
-    if (!notice || noticeHeld) return
-    const timer = setTimeout(() => setNotice(null), NOTICE_MS)
+    if (!notice || noticeHeld || rejected?.held) return
+    const timer = setTimeout(() => setNotice(null), notice.ms ?? NOTICE_MS)
     return () => clearTimeout(timer)
-  }, [notice, noticeHeld])
+  }, [notice, noticeHeld, rejected?.held])
 
   useEffect(() => {
-    if (!rejected) return
+    if (!rejected || rejected.held) return
     const timer = setTimeout(() => setRejected(null), REJECT_MS)
     return () => clearTimeout(timer)
   }, [rejected])
+
+  // One timer to the next deadline (or a pending unlock's lapse): the group locks then, a drag of it in progress is called off.
+  useEffect(() => {
+    const ends = Object.values(locks.unlocked).map((e) => e.deadline ?? e.from + locks.windowMs)
+    if (ends.length === 0) return
+    const timer = setTimeout(() => {
+      const now = Date.now()
+      const s = locksRef.current
+      const open = Object.keys(s.unlocked).filter((k) => isUnlocked(s, k, now))
+      for (const k of Object.keys(s.unlocked)) {
+        if (open.includes(k) || s.unlocked[k].deadline === null) continue
+        expiredKeys.current.add(k)
+        if (groupDrag.current?.key === k) groupDrag.current.cancel()
+      }
+      setLocks((cur) => reconcile(cur, open))
+    }, Math.max(0, Math.min(...ends) - Date.now()) + 5)
+    return () => clearTimeout(timer)
+  }, [locks])
+
+  // An edit, undo or redo: chains whose clips changed lock (and forget an expiry), and a pending unlock not yet used locks.
+  useEffect(() => {
+    const prev = lastEdit.current
+    if (prev.tracks === project.tracks && prev.audio === project.audioTrack) return
+    lastEdit.current = { tracks: project.tracks, audio: project.audioTrack }
+    if (Object.keys(locksRef.current.unlocked).length === 0 && expiredKeys.current.size === 0) return
+    const valid = chainKeys(project)
+    for (const k of [...expiredKeys.current]) if (!valid.has(k)) expiredKeys.current.delete(k)
+    const now = Date.now()
+    setLocks((s) => reconcile(s, Object.keys(s.unlocked).filter((k) => valid.has(k) && remainingMs(s, k, now) !== null)))
+  }, [project])
+
+  // Selecting a clip outside a pending (not yet moved) group locks it again.
+  useEffect(() => {
+    if (!selectedId) return
+    const now = Date.now()
+    setLocks((s) => reconcile(s, Object.keys(s.unlocked).filter((k) => remainingMs(s, k, now) !== null || chainIds(k).includes(selectedId))))
+  }, [selectedId])
+
+  // The Transition dialog opened for a cut inside a group: the group is locked in place, its clock stopped.
+  useEffect(() => {
+    if (!transitionFor) return
+    const p = live.current.project
+    const ids = linkedChain(p, transitionFor)
+    const clips = p.tracks.find((t) => t.clips.some((c) => c.id === transitionFor))?.clips ?? []
+    const before = clips[clips.findIndex((c) => c.id === transitionFor) - 1]
+    if (before && ids.includes(before.id)) setLocks((s) => lock(s, chainKey(ids)))
+  }, [transitionFor])
 
   /**
    * A refused edit on a clip: its red X, and a notice. The notice goes at the
@@ -207,7 +333,7 @@ export function Timeline({
    * is near the centre, so it never covers it.
    */
   function refuse(id: string | null, n: Notice) {
-    if (id) setRejected(id)
+    if (id) setRejected({ ids: [id], held: false })
     const { header: h, zoom: z, playhead: t } = live.current
     const view = scroller.current?.clientWidth ?? 600
     const centre = h + (view - h) / 2
@@ -618,8 +744,9 @@ export function Timeline({
     const audio = isAudioClip(live.current.project, clip)
     let moved = false
     let to: DropTarget | null = null
-    // The last pointer position as a time, the clip's unsnapped start there, and whether snapping was on: what Move all linked clips replays.
-    let last = { at: 0, left, snapOn: true }
+    // A linked chain: locked (the drag is refused at its start), or unlocked and dragged as one group.
+    let locked = false
+    let group: { key: string; ids: string[]; start: number; length: number; at: number } | null = null
     altHeld.current = e.altKey
     setLanded(null)
     follow(
@@ -627,15 +754,51 @@ export function Timeline({
         const cdx = ev.clientX - startX
         const cdy = ev.clientY - startY
         if (!moved && Math.hypot(cdx, cdy) < DRAG_THRESHOLD) return false
-        moved = true
+        if (!moved) {
+          moved = true
+          const p = live.current.project
+          const chain = audio ? [] : linkedChain(p, clip.id)
+          if (chain.length > 1) {
+            const key = chainKey(chain)
+            const now = Date.now()
+            if (isUnlocked(locksRef.current, key, now)) {
+              setLocks((s) => beginMove(s, key, now))
+              const clips = p.tracks[track].clips.filter((c) => chain.includes(c.id))
+              group = { key, ids: chain, start: clips[0].start, length: clipEnd(clips[clips.length - 1]) - clips[0].start, at: 0 }
+              groupDrag.current = {
+                key,
+                cancel: () => {
+                  stopFollowing.current?.()
+                  groupDrag.current = null
+                  setDrag(null)
+                  setSnap(null)
+                  refuseLocked(clip.id, chain, true)
+                },
+              }
+            } else {
+              locked = true
+              refuseLocked(clip.id, chain, expiredKeys.current.has(key))
+            }
+          }
+        }
+        // A locked chain stays where it is (and the view doesn't pan).
+        if (locked) return false
         // Travel along the timeline: the pointer's, plus whatever scrolled under it since the press.
         const scrolled = scrolledSince(scroll0)
         const dx = cdx + scrolled.x
         const dy = cdy + scrolled.y
-        const newLeft = Math.max(0, left + dx / live.current.zoom)
         const off = altHeld.current
-        last = { at: timeAt(ev.clientX), left: newLeft, snapOn: !off }
-        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, last.at, !off, audio)
+        if (group) {
+          // The group moves along its own layer only.
+          group.at = timeAt(ev.clientX)
+          const r = groupTarget(new Set(group.ids), track, Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off)
+          to = r.to
+          setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy: 0, target: r.to, end: r.to.start + group.length })
+          setSnap(snapState(track, off, r.guide))
+          return
+        }
+        const newLeft = Math.max(0, left + dx / live.current.zoom)
+        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX), !off, audio)
         to = r.to
         setDrag({ id: clip.id, length, dx, dy, target: r.to, end: Math.max(newLeft, r.to.start) + length })
         setSnap(snapState(r.to.track, off, r.guide))
@@ -643,20 +806,25 @@ export function Timeline({
       () => {
         setDrag(null)
         if (!moved) return onSelect(clip.id)
+        // The X stays a moment after a refused drag; the notice keeps its own time.
+        if (locked) return setRejected((r) => r && { ...r, held: false })
         const t = to
+        if (group) {
+          const g = group
+          groupDrag.current = null
+          setLanded(g.ids)
+          if (!t) return
+          const magnetic = track === 0 && isMagnetic(live.current.project)
+          if (!magnetic && Math.abs(t.start - g.start) < 1e-9) return
+          return onChange((p) => moveGroup(p, clip.id, magnetic ? g.at : t.start))
+        }
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
-        if (stays) return setLanded(clip.id)
+        if (stays) return setLanded([clip.id])
         if (t.refused) return refuse(clip.id, { text: AUDIO_ONLY })
-        // A clip linked by a transition or audio overlap doesn't come apart: it springs back, and the notice offers to unlink it or move its whole chain.
-        const chain = linkedChain(live.current.project, clip.id)
-        if (chain.length > 1) {
-          const replay = last
-          return refuse(clip.id, linkedNotice(clip.id, { group: { id: clip.id, count: chain.length, run: () => moveChain(clip.id, replay.left - left, replay.at, replay.snapOn) } }))
-        }
         const cut = linkedCutAt(t.track, t.start, clip.id)
         if (cut) return refuse(clip.id, linkedNotice(cut, {}, true))
-        setLanded(clip.id)
+        setLanded([clip.id])
         onChange((p) => moveClip(p, clip.id, t.track, t))
       },
       true
@@ -664,27 +832,31 @@ export function Timeline({
   }
 
   /**
-   * Moves the chain of clips linked to `id` along its layer by `delta` seconds
-   * (the drag Move all linked clips replays), its leading edge (or its end)
-   * snapping as a dragged clip does; on a snapped V1 into the slot the pointer
-   * time `at` picks. One undo step.
+   * A drag on a locked chain: the red X on the dragged block (on every block
+   * of the chain when `all`), held until release, and the notice offering to
+   * unlink the clip or to unlock the group.
    */
-  function moveChain(id: string, delta: number, at: number, snapOn: boolean) {
+  function refuseLocked(id: string, chain: string[], all: boolean) {
+    refuse(null, linkedNotice(id, { group: { key: chainKey(chain), count: chain.length }, ms: LINKED_NOTICE_MS }))
+    setRejected({ ids: all ? chain : [id], held: stopFollowing.current !== null })
+  }
+
+  /**
+   * Where a dragged group of clips (`ids`, `length` long) on `track` lands
+   * with its leading edge at `left`: snapped (unless `snapOn` is false) to the
+   * same points a dragged clip's edges snap to, slid clear of the layer's
+   * other clips (moveGroup does the same), and the time it snapped to. On a
+   * snapped V1, the boundary of the slot the pointer time `at` picks.
+   */
+  function groupTarget(ids: Set<string>, track: number, left: number, length: number, at: number, snapOn: boolean): { to: DropTarget; guide: number | null } {
     const { project: p, playhead: t, zoom: z } = live.current
-    const ids = new Set(linkedChain(p, id))
-    const track = p.tracks.findIndex((tr) => tr.clips.some((c) => c.id === id))
-    const group = p.tracks[track]?.clips.filter((c) => ids.has(c.id)) ?? []
-    if (group.length === 0) return
-    const length = clipEnd(group[group.length - 1]) - group[0].start
-    const magnetic = track === 0 && isMagnetic(p)
-    let start = Math.max(0, group[0].start + delta)
-    if (!magnetic && snapOn) {
-      const points = [0, t, ...allClips(p).filter((c) => !ids.has(c.id)).flatMap((c) => [c.start, clipEnd(c)])]
-      const s = snapEdges([start, start + length], points, SNAP_PX, z)
-      if (s) start = Math.max(0, s.edge === 0 ? s.at : s.at - length)
-    }
-    setNotice(null)
-    onChange((q) => moveGroup(q, id, magnetic ? at : start))
+    const others = p.tracks[track]?.clips.filter((c) => !ids.has(c.id)) ?? []
+    if (track === 0 && isMagnetic(p)) return { to: { track, start: baseInsertion(others, at).start }, guide: null }
+    const points = [0, t, ...allClips(p).filter((c) => !ids.has(c.id)).flatMap((c) => [c.start, clipEnd(c)])]
+    const s = snapOn ? snapEdges([left, left + length], points, SNAP_PX, z) : null
+    const snapped = Math.max(0, !s ? left : s.edge === 0 ? s.at : s.at - length)
+    const start = resolveStart(others, length, snapped)
+    return { to: { track, start }, guide: s && Math.abs(start - snapped) < 1e-9 ? s.at : null }
   }
 
   /** The ghost of a file dragged over `track` with the pointer at `clientX` (Alt held: no snapping). */
@@ -839,8 +1011,8 @@ export function Timeline({
   // A sound file's ghost is teal like its clips; a refused one (something else over the audio layer) red, with a no-entry hint.
   const dragClip = drag ? allClips(project).find((c) => c.id === drag.id) : undefined
   const audioGhost = outside?.audio === true || (dragClip !== undefined && isAudioClip(project, dragClip))
-  // A sound file or an audio clip being dragged can't make a new layer: the zone isn't offered for it.
-  const layerDrag = dragging && !audioGhost
+  // A sound file, an audio clip or a linked group being dragged can't make a new layer: the zone isn't offered for it.
+  const layerDrag = dragging && !audioGhost && !drag?.group
   const ghost = (start: number, shift = 0, refused = false) => (
     <div
       data-ghost={refused ? "refused" : audioGhost ? "audio" : "clip"}
@@ -863,6 +1035,10 @@ export function Timeline({
     <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: start * zoom }} />
   )
   const magnetic = isMagnetic(project)
+  // A group being dragged takes its transitions, audio overlap bands and badge along.
+  const groupShift = (id: string) => (drag?.group?.includes(id) ? `translateX(${drag.dx}px)` : undefined)
+  // The unlocked groups whose window is running, each with its countdown badge.
+  const badges = Object.entries(locks.unlocked).flatMap(([key, e]) => (e.deadline === null ? [] : [{ key, deadline: e.deadline, ids: chainIds(key) }]))
   // A drag that snaps shows the Alt hint, and the guide line while it's snapped.
   const snapHint = snap && (drag || trim || drop) ? snap : null
   const guide = snapHint && !snapHint.off ? snapHint.at : null
@@ -995,7 +1171,7 @@ export function Timeline({
                     </div>
                   )}
                   {track.clips.map((clip, k) => {
-                    const moving = drag?.id === clip.id
+                    const moving = drag !== null && (drag.id === clip.id || drag.group?.includes(clip.id) === true)
                     const text = isTextClip(clip) ? clip.text : null
                     const asset = text ? undefined : project.assets[clip.asset]
                     const file = asset?.file
@@ -1023,7 +1199,7 @@ export function Timeline({
                           "group absolute touch-none select-none overflow-hidden rounded-lg border outline-none",
                           inset,
                           text ? "bg-violet-500/25 dark:bg-violet-400/25" : audio ? "bg-teal-500/30 dark:bg-teal-400/25" : isBase ? "bg-muted" : "bg-sky-500/15",
-                          !moving && !trim && landed !== clip.id && "transition-[left] duration-150 motion-reduce:transition-none",
+                          !moving && !trim && !landed?.includes(clip.id) && "transition-[left] duration-150 motion-reduce:transition-none",
                           selectedId === clip.id
                             ? "z-10 border-editor-accent ring-2 ring-editor-accent"
                             : text
@@ -1038,7 +1214,7 @@ export function Timeline({
                         style={{
                           left: left * zoom,
                           width: clipWidth,
-                          transform: moving ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+                          transform: moving && drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
                         }}
                         title={text ? `${text.content} (double-click to edit)` : file}
                       >
@@ -1117,7 +1293,7 @@ export function Timeline({
                             {muted ? <VolumeX className={cn("text-red-300", tight ? "h-2.5 w-2.5" : "h-3 w-3")} /> : <Volume2 className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />}
                           </button>
                         )}
-                        {rejected === clip.id && (
+                        {rejected?.ids.includes(clip.id) && (
                           // A refused move or trim: a red X across the block for a moment.
                           <svg aria-hidden className="pointer-events-none absolute inset-0 z-20 h-full w-full bg-red-500/15" preserveAspectRatio="none" viewBox="0 0 100 100">
                             <path d="M4 6 L96 94 M96 6 L4 94" stroke="#ef4444" strokeWidth={4} strokeLinecap="round" vectorEffect="non-scaling-stroke" fill="none" />
@@ -1158,7 +1334,7 @@ export function Timeline({
                           "border-amber-600/80 bg-amber-300/90 text-amber-950 hover:bg-amber-200 dark:border-amber-300/80 dark:bg-amber-500/85 dark:text-amber-950 dark:hover:bg-amber-400",
                           tight ? "h-4" : "h-5"
                         )}
-                        style={{ left: clip.start * zoom - w / 2, width: w }}
+                        style={{ left: clip.start * zoom - w / 2, width: w, transform: groupShift(clip.id) }}
                       >
                         <Blend aria-hidden className="h-3 w-3 shrink-0" />
                         {w >= 70 && <span className="truncate">{name}</span>}
@@ -1177,10 +1353,17 @@ export function Timeline({
                         title={label}
                         data-cut-audio={a.mode}
                         className="absolute bottom-0.5 z-[14] h-1 rounded-full bg-teal-500 ring-1 ring-teal-900/40 dark:bg-teal-300 dark:ring-teal-950/60"
-                        style={{ left: (a.mode === "j" ? clip.start - a.duration : clip.start) * zoom, width: Math.max(2, a.duration * zoom) }}
+                        style={{ left: (a.mode === "j" ? clip.start - a.duration : clip.start) * zoom, width: Math.max(2, a.duration * zoom), transform: groupShift(clip.id) }}
                       />
                     )
                   })}
+                  {!isAudio &&
+                    badges.map((b) => {
+                      // An unlocked group's countdown, on its first block.
+                      const k = track.clips.findIndex((c) => b.ids.includes(c.id))
+                      if (k < 0) return null
+                      return <UnlockBadge key={b.key} deadline={b.deadline} left={starts[k] * zoom} shift={drag?.group?.includes(track.clips[k].id) ? drag.dx : 0} />
+                    })}
                   {(() => {
                     // The selected clip's cuts with a neighbour: a white circle on each opens its Transition / audio overlap dialog.
                     // The audio layer's clips never link: no circles there.
@@ -1269,9 +1452,15 @@ export function Timeline({
             <button
               type="button"
               className="rounded-full bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:bg-black/10 dark:hover:bg-black/20"
-              onClick={notice.group.run}
+              onClick={() => {
+                // Unlocks that chain only; its window starts with its first drag.
+                const { key } = notice.group!
+                setNotice(null)
+                setRejected(null)
+                setLocks((s) => requestUnlock(s, key, Date.now()))
+              }}
             >
-              Move all linked clips ({notice.group.count})
+              Move group ({notice.group.count})
             </button>
           )}
           <button type="button" aria-label="Dismiss" className="rounded-full p-0.5 hover:bg-white/20 dark:hover:bg-black/10" onClick={() => setNotice(null)}>

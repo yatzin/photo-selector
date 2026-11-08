@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { beginMove, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS } from "./group-lock"
+import { beginMove, chainIds, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS } from "./group-lock"
 
 const A = chainKey(["b", "a"])
 const B = chainKey(["c", "d"])
@@ -8,6 +8,7 @@ describe("group lock", () => {
   it("keys a chain by its sorted clip ids", () => {
     expect(chainKey(["b", "a", "c"])).toBe(chainKey(["c", "b", "a"]))
     expect(chainKey(["a", "b"])).not.toBe(chainKey(["a", "b", "c"]))
+    expect(chainIds(chainKey(["b", "a"]))).toEqual(["a", "b"])
   })
 
   it("is locked by default", () => {
