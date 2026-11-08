@@ -182,8 +182,9 @@ instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
 under the same name reuses the existing copy (delete that copy from Project
 media to import the new one).
 
-**Importing from your computer.** **Import** at the left of the editor's top
-bar (beside the project name; Export stays at the right) opens the file
+**Importing from your computer.** **Import** in the editor's top bar, right
+after the back arrow, the project name and the saved status (Export stays at
+the far right), opens the file
 picker: choose any number of videos, images and sound files. You can also drop
 files from your computer onto Project media. They upload straight into the
 project's `assets/` (not through the Inbox), two at a time, each listed under
@@ -461,10 +462,17 @@ Not while the project is exporting, or while that file is being imported.
   the clip stays where it is, and a notice offers **Unlink this clip** (takes
   the transitions and audio overlaps off both of its sides) and **Move group
   (N)**. Move group unlocks that group only: drag any of its clips and they
-  all move together along their layer (snapping as one block, one undo step
-  per drag; not to another layer). The first drag starts a 5 minute window,
-  shown as a countdown on the group (amber in the last 30 seconds), in which
-  you can move it as often as you like. When the time runs out the group
+  all move together, along their layer or onto another one, snapping as one
+  block (one undo step per drag). The group lands whole, its clips still
+  end to end, so its transitions and audio overlaps stay. On a free layer it
+  slides clear of the clips there as one block; on a snapped layer 1 it goes
+  in at the slot under the pointer (not between two linked clips), and a
+  snapped layer 1 it leaves closes up behind it. The add-a-layer row makes a
+  new layer for it (up to four); the audio layer refuses it. The first drag
+  starts a 5 minute window, shown as a countdown on the group's first clip
+  (amber in the last 30 seconds; it slides to the clip's bottom left while
+  you point at the clip, so the mute button stays free), in which you can
+  move it as often as you like. When the time runs out the group
   locks again (a drag in progress springs back), and a drag then shows the
   red X across every clip of the group. Opening the Transition dialog for a
   cut inside the group locks it at once. An unlock you don't use lapses when
