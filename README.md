@@ -243,6 +243,12 @@ Not while the project is exporting, or while that file is being imported.
   the Zoom slider; **Ctrl/Cmd** + wheel does the same over the clips. Over the
   clips the wheel scrolls the timeline sideways (a trackpad's sideways swipe
   too), and **Shift** + wheel scrolls up and down when the layers don't fit.
+- **Drag to pan.** Press and drag empty timeline space (a layer's background,
+  the lines between layers, below them) to move the timeline with the mouse,
+  sideways and up and down, until it stops at either end. The cursor is a
+  hand there. A click without moving still clears the selection, and Esc
+  ends a pan where it is. Clips, edges, the ruler and the layer numbers keep
+  what they do. On touch screens the timeline already scrolls with a finger.
 - **Timeline length.** The timeline is as long as its content plus a little
   room, never narrower than the view. Dragging a clip, an edge or a file
   towards the end makes it longer as you go, and dragging near the left or
