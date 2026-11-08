@@ -6,7 +6,7 @@ import {
 } from "./project"
 import { MAX_TRANSITION, TRANSITION_TYPES } from "./transition-types"
 import {
-  cutsOf, entrySourceTime, isLinked, laneClipAt, linkedChain, moveGroup, setTransition, TRANSITION_GROUPS, TRANSITION_INFO, transitionAt, transitionLimits, unlinkClip,
+  cutsOf, entrySourceTime, isLinked, laneClipAt, linkedChain, moveGroup, setCutAudio, setTransition, TRANSITION_GROUPS, TRANSITION_INFO, transitionAt, transitionLimits, unlinkClip,
 } from "./transitions"
 
 /**
@@ -161,6 +161,91 @@ describe("moveGroup", () => {
     expect(q.tracks[0].clips.map((c) => c.id)).toEqual(["d", "a", "b", "c"])
     expect(q.tracks[0].clips.map((c) => c.start)).toEqual([0, 5, 9, 13])
     expect(linkedChain(q, "a")).toEqual(["a", "b", "c"])
+  })
+})
+
+describe("moveGroup to another layer", () => {
+  /** The chain with an empty layer 2 and a layer 3 holding one image at 10-15. */
+  const layered = (): Project => {
+    const p = chain()
+    return { ...p, tracks: [...p.tracks, { id: "t2", clips: [] }, { id: "t3", clips: [{ id: "o", asset: "i", in: 0, out: 5, start: 10 }] }] }
+  }
+  const ids = (p: Project, t: number) => p.tracks[t].clips.map((c) => c.id)
+  const starts = (p: Project, t: number) => p.tracks[t].clips.map((c) => c.start)
+
+  it("from a snapped layer 1 to layer 2: the group keeps its spacing and links, layer 1 ripples", () => {
+    const p = moveGroup(setBaseMagnetic(layered(), true), "b", 6, 1)
+    expect(ids(p, 1)).toEqual(["a", "b", "c"])
+    expect(starts(p, 1)).toEqual([6, 10, 14])
+    expect(clip(p, "b")?.transition).toEqual(fade())
+    expect(clip(p, "c")?.transition).toEqual(fade())
+    expect(linkedChain(p, "a")).toEqual(["a", "b", "c"])
+    // The image packs to 0 behind it.
+    expect(ids(p, 0)).toEqual(["d"])
+    expect(starts(p, 0)).toEqual([0])
+  })
+
+  it("from layer 2 into a snapped layer 1: inserted as a block at the slot, packed", () => {
+    const off = moveGroup(layered(), "a", 0, 1)
+    const base = setBaseMagnetic(off, true)
+    expect(ids(base, 0)).toEqual(["d"])
+    // After the image's middle (2.5 s): the block goes after it.
+    const after = moveGroup(base, "a", 3, 0)
+    expect(ids(after, 0)).toEqual(["d", "a", "b", "c"])
+    expect(starts(after, 0)).toEqual([0, 5, 9, 13])
+    expect(ids(after, 1)).toEqual([])
+    expect(linkedChain(after, "c")).toEqual(["a", "b", "c"])
+    // Before it.
+    expect(ids(moveGroup(base, "a", 1, 0), 0)).toEqual(["a", "b", "c", "d"])
+  })
+
+  it("a snapped layer 1 refuses a block that would part two linked clips there", () => {
+    const base = setBaseMagnetic(layered(), true)
+    // Two linked images on layer 2.
+    const two = setTransition({ ...base, tracks: [base.tracks[0], { id: "t2", clips: [{ id: "p1", asset: "i", in: 0, out: 2, start: 30 }, { id: "p2", asset: "i", in: 0, out: 2, start: 32 }] }] }, "p2", fade())
+    // 4 s is the a|b cut (a's middle is 2, b's 6): the slot between them.
+    expect(moveGroup(two, "p1", 4.5, 0)).toBe(two)
+  })
+
+  it("from layer 2 to layer 3: slides clear of an occupied span as a block", () => {
+    const two = moveGroup(layered(), "a", 0, 1)
+    // 8 lands on the image at 10-15 (span 8-20 overlaps): it slides past to 15.
+    const p = moveGroup(two, "a", 8, 2)
+    expect(ids(p, 2)).toEqual(["o", "a", "b", "c"])
+    expect(starts(p, 2)).toEqual([10, 15, 19, 23])
+    expect(ids(p, 1)).toEqual([])
+    expect(clip(p, "c")?.transition).toEqual(fade())
+  })
+
+  it("onto a new layer, up to the cap", () => {
+    const p = moveGroup(layered(), "a", 2, 3)
+    expect(p.tracks).toHaveLength(4)
+    expect(ids(p, 3)).toEqual(["a", "b", "c"])
+    expect(starts(p, 3)).toEqual([2, 6, 10])
+    // At MAX_TRACKS there is no new layer.
+    expect(moveGroup(p, "a", 2, 4)).toBe(p)
+  })
+
+  it("never onto the audio layer, nor a layer that doesn't exist", () => {
+    const p = layered()
+    expect(moveGroup(p, "a", 2, -1)).toBe(p)
+    expect(moveGroup(p, "a", 2, 9)).toBe(p)
+    expect(moveGroup(p, "a", 2, 1.5)).toBe(p)
+  })
+
+  it("keeps J/L cuts in the chain", () => {
+    const p0 = setCutAudio(layered(), "b", { mode: "j", duration: 1 })
+    const p = moveGroup(p0, "a", 0, 1)
+    expect(clip(p, "b")?.cutAudio).toEqual({ mode: "j", duration: 1 })
+    expect(linkedChain(p, "b")).toEqual(["a", "b", "c"])
+  })
+
+  it("is one undo step", () => {
+    const p = layered()
+    let h = commit(createHistory(p), moveGroup(p, "b", 0, 1), undefined, 0)
+    expect(ids(h.present as Project, 1)).toEqual(["a", "b", "c"])
+    h = undo(h)
+    expect(h.present).toBe(p)
   })
 })
 

@@ -1,5 +1,5 @@
 import {
-  adjoins, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixTransitions, hasSound, headHandle, isMagnetic, isStill, linksBefore, MAX_TIMELINE, MIN_CLIP, resolveStart, tailHandle, trackClipAt,
+  addTrack, adjoins, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixTransitions, hasSound, headHandle, isMagnetic, isStill, linksBefore, MAX_TIMELINE, MIN_CLIP, resolveStart, tailHandle, trackClipAt,
   type Clip, type Project, type Track,
 } from "./project"
 import {
@@ -332,8 +332,16 @@ export function unlinkClip(p: Project, clipId: string): Project {
  * as a moved clip is). On a snapped base the block goes in at the slot
  * `start` picks (baseInsertion) and the base packs again. The same project
  * when it can't (past MAX_TIMELINE) or nothing moves.
+ *
+ * With `toTrack` (another layer; one past the top adds a layer, up to
+ * MAX_TRACKS) the block lands there whole, its clips still end to end, so
+ * its transitions and audio overlaps stay: slid clear of the clips there as
+ * one span, or on a snapped base inserted at the slot `start` picks and
+ * packed. A snapped base it leaves packs behind it. The same project for the
+ * audio layer, a layer that doesn't exist, or a slot between two linked
+ * clips on a snapped base.
  */
-export function moveGroup(p: Project, clipId: string, start: number): Project {
+export function moveGroup(p: Project, clipId: string, start: number, toTrack?: number): Project {
   const ids = new Set(linkedChain(p, clipId))
   const at = locate(p, clipId)
   if (!at || !Number.isFinite(start)) return p
@@ -342,6 +350,7 @@ export function moveGroup(p: Project, clipId: string, start: number): Project {
   const others = clips.filter((c) => !ids.has(c.id))
   const first = group[0]
   const length = clipEnd(group[group.length - 1]) - first.start
+  if (toTrack !== undefined && toTrack !== at.track) return moveGroupAcross(p, at.track, group, others, start, toTrack)
   if (at.track === 0 && isMagnetic(p)) {
     const slot = baseInsertion(others, start).index
     const packed = endToEnd([...others.slice(0, slot), ...group, ...others.slice(slot)])
@@ -354,6 +363,34 @@ export function moveGroup(p: Project, clipId: string, start: number): Project {
   if (Math.abs(delta) < 1e-9) return p
   const moved = group.map((c) => ({ ...c, start: c.start + delta }))
   return withClips(p, at.track, [...others, ...moved].sort((a, b) => a.start - b.start))
+}
+
+/** moveGroup onto another layer: `group` (end to end) leaves track `from`, where `others` stay. */
+function moveGroupAcross(p: Project, from: number, group: Clip[], others: Clip[], start: number, toTrack: number): Project {
+  if (!Number.isInteger(toTrack) || toTrack < 0 || toTrack > p.tracks.length) return p
+  let q = p
+  if (toTrack === p.tracks.length) {
+    q = addTrack(p)
+    if (q === p) return p
+  }
+  // The layer it leaves: a snapped base closes the gap.
+  q = withClips(q, from, from === 0 && isMagnetic(p) ? endToEnd(others) : others)
+  const target = q.tracks[toTrack].clips
+  let landed: Clip[]
+  if (toTrack === 0 && isMagnetic(q)) {
+    const sorted = [...target].sort((a, b) => a.start - b.start)
+    const slot = baseInsertion(sorted, start).index
+    // Not in between two clips a transition or audio overlap links.
+    if (slot > 0 && slot < sorted.length && linksBefore(sorted[slot]) && adjoins(sorted[slot - 1], sorted[slot])) return p
+    landed = endToEnd([...sorted.slice(0, slot), ...group, ...sorted.slice(slot)])
+  } else {
+    const length = clipEnd(group[group.length - 1]) - group[0].start
+    const to = resolveStart(target, length, start)
+    const delta = to - group[0].start
+    landed = [...target, ...group.map((c) => ({ ...c, start: c.start + delta }))].sort((a, b) => a.start - b.start)
+  }
+  if (landed.length > 0 && clipEnd(landed[landed.length - 1]) > MAX_TIMELINE + 1e-6) return p
+  return fixTransitions(withClips(q, toTrack, landed), p)
 }
 
 /** A transition running on a track at some time: the outgoing clip's index (`from`), the incoming one's (`to`), the cut and how far through it is (0 to 1). */
