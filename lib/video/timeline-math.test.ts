@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { Clip } from "./project"
 import {
-  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, pxToTime, rowHeight, snapEdges, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, panScroll, pannedPast, pxToTime, rowHeight, snapEdges, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "./timeline-math"
 
 const clip = (id: string, a: number, b: number): Clip => ({ id, asset: "a", in: a, out: b, start: 0 })
@@ -177,5 +177,35 @@ describe("wheelZoomFactor", () => {
     expect(wheelZoomFactor(-4)).toBeGreaterThan(1)
     expect(wheelZoomFactor(-4)).toBeLessThan(1.01)
     expect(wheelZoomFactor(-5000)).toBeCloseTo(1.08 ** 3)
+  })
+})
+
+describe("panScroll", () => {
+  it("moves the scroll against the pointer, 1:1 (drag left scrolls right)", () => {
+    expect(panScroll(100, 500, 440, 1000)).toBe(160)
+    expect(panScroll(100, 500, 530, 1000)).toBe(70)
+    expect(panScroll(100, 500, 500, 1000)).toBe(100)
+  })
+
+  it("clamps at 0 and at the scrollable end", () => {
+    expect(panScroll(20, 500, 600, 1000)).toBe(0)
+    expect(panScroll(950, 500, 300, 1000)).toBe(1000)
+    expect(panScroll(0, 0, -50, 0)).toBe(0)
+  })
+
+  it("pans each axis on its own, free in both (no dominant axis lock)", () => {
+    const start = { x: 100, y: 40 }
+    const from = { x: 500, y: 300 }
+    const to = { x: 470, y: 260 }
+    expect([panScroll(start.x, from.x, to.x, 900), panScroll(start.y, from.y, to.y, 60)]).toEqual([130, 60])
+  })
+})
+
+describe("pannedPast", () => {
+  it("is a pan once the pointer has gone the threshold in any direction", () => {
+    expect(pannedPast(3, 0, 4)).toBe(false)
+    expect(pannedPast(2, 2, 4)).toBe(false)
+    expect(pannedPast(0, -4, 4)).toBe(true)
+    expect(pannedPast(3, 3, 4)).toBe(true)
   })
 })

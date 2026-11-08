@@ -114,3 +114,11 @@ export function wheelZoomFactor(deltaY: number): number {
   const notches = Math.max(-3, Math.min(3, deltaY / NOTCH))
   return notches === 0 ? 1 : ZOOM_STEP ** -notches
 }
+
+/** A drag on empty timeline space: the scroll (one axis) that keeps the content under the pointer, from `startScroll` at the press, clamped to 0..`max`. */
+export function panScroll(startScroll: number, startPointer: number, pointer: number, max: number): number {
+  return Math.max(0, Math.min(Math.max(0, max), startScroll - (pointer - startPointer)))
+}
+
+/** Whether a press has moved far enough (`threshold` px, any direction) to be a pan rather than a click. */
+export const pannedPast = (dx: number, dy: number, threshold: number): boolean => Math.hypot(dx, dy) >= threshold
