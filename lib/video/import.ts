@@ -51,7 +51,7 @@ const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i
 export function sanitizeImportName(raw: string): string {
   const last = raw.split(/[\\/]/).pop() ?? ""
   const name = last.replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "_").replace(/^[.\s]+/, "").replace(/[.\s]+$/, "")
-  const ext = extensionOf(name)
+  const ext = name.slice(name.length - extensionOf(name).length)
   let stem = name.slice(0, name.length - ext.length).trim()
   if (!stem) stem = "media"
   if (RESERVED.test(stem)) stem = `_${stem}`
@@ -104,4 +104,19 @@ export function kindFromProbe(name: string, s: ProbedStreams): ImportKind | { er
   if (s.duration === null) return { error: `${name}: couldn't read its length.` }
   if (s.duration < MIN_CLIP) return { error: `${name} is too short to edit.` }
   return { kind, duration: s.duration, hasAudio: s.hasAudio }
+}
+
+/**
+ * True when a request's Origin header names the host it was sent to (as
+ * Next.js checks for server actions): a page on another site can't make the
+ * signed-in user's browser upload into a project. A request without an
+ * Origin is refused (browsers send one with every POST).
+ */
+export function isSameOrigin(origin: string | null, host: string | null): boolean {
+  if (!origin || !host) return false
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase()
+  } catch {
+    return false
+  }
 }

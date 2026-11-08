@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { importCategory, importRejection, isUploadId, kindFromProbe, MAX_IMPORT_BYTES, parseStreams, sanitizeImportName } from "./import"
+import { importCategory, importRejection, isSameOrigin, isUploadId, kindFromProbe, MAX_IMPORT_BYTES, parseStreams, sanitizeImportName } from "./import"
 
 describe("importCategory", () => {
   it("takes pictures, videos and sound by extension, any case", () => {
@@ -106,5 +106,15 @@ describe("kindFromProbe", () => {
     expect(kindFromProbe("a.wav", { duration: 0.1, hasVideo: false, hasAudio: true })).toEqual({ error: "a.wav is too short to edit." })
     expect(kindFromProbe("a.wav", { duration: null, hasVideo: false, hasAudio: true })).toEqual({ error: "a.wav: couldn't read its length." })
     expect("error" in kindFromProbe("a.txt", { duration: 3, hasVideo: true, hasAudio: true })).toBe(true)
+  })
+})
+
+describe("isSameOrigin", () => {
+  it("takes only a request from the app's own host", () => {
+    expect(isSameOrigin("http://localhost:3200", "localhost:3200")).toBe(true)
+    expect(isSameOrigin("https://nas.local", "NAS.local")).toBe(true)
+    expect(isSameOrigin("https://evil.example", "nas.local")).toBe(false)
+    expect(isSameOrigin(null, "nas.local")).toBe(false)
+    expect(isSameOrigin("null", "nas.local")).toBe(false)
   })
 })

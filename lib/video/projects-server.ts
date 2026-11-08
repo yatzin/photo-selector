@@ -21,7 +21,8 @@ function userDir(userFolder: string): string | null {
   return resolveInside(rootPath("video-projects"), [userFolder])
 }
 
-function projectDir(userFolder: string, folder: string): string | null {
+/** The project's folder (inside the user's), or null for a name that isn't plain. */
+export function projectDir(userFolder: string, folder: string): string | null {
   if (!isPlainName(userFolder) || !isPlainName(folder)) return null
   return resolveInside(rootPath("video-projects"), [userFolder, folder])
 }
@@ -178,6 +179,36 @@ export async function deleteProject(userFolder: string, folder: string): Promise
 }
 
 /**
+ * Puts a file into `assets` as `fileName`, or the first free numbered name
+ * ("clip (1).mp4", lib/media numberedName) when that's taken, never replacing
+ * a file: `put(target)` writes it there and must fail with EEXIST when the
+ * target exists. The name it got and its path, or `{ error }`.
+ */
+export async function placeInAssets(assets: string, fileName: string, put: (target: string) => Promise<void>): Promise<{ file: string; dest: string } | { error: string }> {
+  try {
+    for (let n = 0; n < MAX_NAME_ATTEMPTS; n++) {
+      const file = numberedName(fileName, n)
+      const target = path.join(assets, file)
+      try {
+        await put(target)
+        return { file, dest: target }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          await fs.rm(target, { force: true })
+          throw error
+        }
+      }
+    }
+  } catch (error) {
+    return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : errorText(error) }
+  }
+  return { error: "Too many files with that name." }
+}
+
+/** A new asset id. It doubles as the media URL's cache key, so it must not repeat. */
+export const newAssetId = () => `a${randomBytes(8).toString("hex")}`
+
+/**
  * Copies a video or image from the Video Editing Inbox into the project's
  * assets/ (never replacing a file); a video is probed, an image gets the
  * default length. The Inbox original stays; its path is kept as `source`.
@@ -207,29 +238,12 @@ export async function importAsset(
     return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : errorText(error) }
   }
 
-  let dest: string | null = null
-  let file = ""
-  try {
-    for (let n = 0; n < MAX_NAME_ATTEMPTS && !dest; n++) {
-      file = numberedName(fileName, n)
-      const target = path.join(assets, file)
-      try {
-        await fs.copyFile(src, target, constants.COPYFILE_EXCL)
-        dest = target
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          await fs.rm(target, { force: true })
-          throw error
-        }
-      }
-    }
-  } catch (error) {
-    return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : error instanceof Error ? error.message : String(error) }
-  }
-  if (!dest) return { error: "Too many files with that name." }
+  const placed = await placeInAssets(assets, fileName, (target) => fs.copyFile(src, target, constants.COPYFILE_EXCL))
+  if ("error" in placed) return placed
+  const { file, dest } = placed
   const source = [...inboxFolder, fileName].join("/")
-  // The id doubles as the media URL's cache key, so it must not repeat.
-  const id = `a${randomBytes(8).toString("hex")}`
+  const id = newAssetId()
+
   if (kind === "image") return { id, asset: { file, duration: DEFAULT_IMAGE, hasAudio: false, kind: "image", source } }
 
   try {
