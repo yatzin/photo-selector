@@ -426,3 +426,63 @@
     .shimmer::after { animation: none; display: none; }
   }
 }
+
+/* The video editor's dialogs (components/video/ui/editor-dialog): layered
+   surfaces, a soft shadow in light and a hairline glow in dark, and a short
+   scale-and-fade in and out (a slide up for the bottom sheet on narrow
+   screens), still for people who ask for reduced motion. */
+@layer components {
+  .editor-dialog {
+    box-shadow: 0 0 0 1px oklch(0 0 0 / 7%), 0 2px 6px -1px oklch(0 0 0 / 8%), 0 28px 64px -16px oklch(0 0 0 / 30%);
+    transition: opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1), scale 180ms cubic-bezier(0.2, 0.8, 0.2, 1), translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .dark .editor-dialog {
+    box-shadow: 0 0 0 1px oklch(1 0 0 / 10%), inset 0 1px 0 oklch(1 0 0 / 6%), 0 28px 72px -12px oklch(0 0 0 / 70%);
+  }
+  .editor-dialog[data-starting-style],
+  .editor-dialog[data-ending-style] {
+    opacity: 0;
+    scale: 0.97;
+  }
+  @media (max-width: 639.98px) {
+    .editor-dialog[data-starting-style],
+    .editor-dialog[data-ending-style] {
+      scale: 1;
+      translate: 0 2.5rem;
+    }
+  }
+  .editor-dialog-backdrop {
+    transition: opacity 180ms ease-out;
+  }
+  .editor-dialog-backdrop[data-starting-style],
+  .editor-dialog-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .editor-dialog,
+    .editor-dialog-backdrop {
+      transition: none;
+    }
+  }
+  @media (forced-colors: active) {
+    .editor-dialog {
+      border: 1px solid CanvasText;
+    }
+  }
+  /* A section's name: small caps, quiet. */
+  .section-label {
+    font-size: 13px;
+    line-height: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    font-variant-caps: all-small-caps;
+    color: var(--muted-foreground);
+  }
+  /* A field's name over its control. */
+  .field-label {
+    font-size: 12px;
+    line-height: 1.25rem;
+    font-weight: 500;
+    color: var(--foreground);
+  }
+}
