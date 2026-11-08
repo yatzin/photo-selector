@@ -396,6 +396,19 @@
   html {
     @apply font-sans;
   }
+  /* The timeline's empty space pans when dragged: a grab cursor there only
+     (its other parts keep their own), grabbing everywhere while it pans. */
+  [data-pan] {
+    cursor: grab;
+  }
+  [data-pan] > :not([data-pan]) {
+    cursor: auto;
+  }
+  [data-panning],
+  [data-panning] * {
+    cursor: grabbing !important;
+    user-select: none;
+  }
 }
 
 /* Loading placeholder for photos: a soft highlight sweeping across the tile

@@ -16,7 +16,7 @@ import { isAudioTransitionType, type Edge } from "@/lib/video/transition-types"
 import { edgeTransitionName, linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
 import {
-  autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+  autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, panScroll, pannedPast, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "@/lib/video/timeline-math"
 import { formatTimecode } from "@/lib/video/time"
 import { ClipMenu, type ClipMenuItem } from "./clip-menu"
@@ -277,6 +277,8 @@ export function Timeline({
   const [notice, setNotice] = useState<Notice | null>(null)
   const [noticeHeld, setNoticeHeld] = useState(false)
   const [rejected, setRejected] = useState<{ ids: string[]; held: boolean } | null>(null)
+  // A drag on empty space is panning the view (the grabbing cursor).
+  const [panning, setPanning] = useState(false)
   // Which linked chains may be dragged as a group (group-lock): here only, never saved; a ref for the handlers.
   const [locks, setLocksState] = useState(() => createLockState(LOCK_WINDOW_MS))
   const locksRef = useRef(locks)
@@ -759,6 +761,63 @@ export function Timeline({
     follow((ev) => seekTo(ev.clientX), () => onScrub(false))
   }
 
+  /**
+   * Press on empty timeline space (a row's background, the lines between rows,
+   * below them): a drag pans the view with the hand, both ways, 1:1 and
+   * clamped at the ends; a click on a row's background clears the selection.
+   * Mouse only: touch and pen already scroll the view natively, with momentum.
+   * Esc ends a pan where it is. Not while another drag runs.
+   */
+  function startPanDrag(e: React.PointerEvent<HTMLDivElement>) {
+    const el = e.currentTarget
+    if (e.button !== 0 || e.pointerType !== "mouse" || stopFollowing.current) return
+    if (!(e.target instanceof Element) || !e.target.hasAttribute("data-pan")) return
+    // No text selection or native drag from the press.
+    e.preventDefault()
+    const onRow = e.target.hasAttribute("data-track")
+    const id = e.pointerId
+    const start = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop }
+    let moved = false
+    el.setPointerCapture(id)
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return
+      if (!moved && !pannedPast(ev.clientX - start.x, ev.clientY - start.y, DRAG_THRESHOLD)) return
+      if (!moved) {
+        moved = true
+        setPanning(true)
+      }
+      ev.preventDefault()
+      el.scrollLeft = panScroll(start.left, start.x, ev.clientX, el.scrollWidth - el.clientWidth)
+      el.scrollTop = panScroll(start.top, start.y, ev.clientY, el.scrollHeight - el.clientHeight)
+    }
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return
+      stop()
+      if (!moved && onRow && ev.type === "pointerup") onSelect(null)
+    }
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return
+      // Esc only ends the pan (it doesn't also clear the selection).
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      stop()
+    }
+    const stop = () => {
+      el.removeEventListener("pointermove", move)
+      el.removeEventListener("pointerup", up)
+      el.removeEventListener("pointercancel", up)
+      window.removeEventListener("keydown", key, true)
+      if (el.hasPointerCapture(id)) el.releasePointerCapture(id)
+      setPanning(false)
+      if (stopFollowing.current === stop) stopFollowing.current = null
+    }
+    el.addEventListener("pointermove", move)
+    el.addEventListener("pointerup", up)
+    el.addEventListener("pointercancel", up)
+    window.addEventListener("keydown", key, true)
+    stopFollowing.current = stop
+  }
+
   /** Press on a clip: a click selects it, a drag moves it along its track or onto another one. */
   function startMove(e: React.PointerEvent, clip: Clip, track: number, left: number) {
     if (e.button !== 0) return
@@ -1095,8 +1154,16 @@ export function Timeline({
 
   return (
     <div className="relative flex min-h-0 flex-1">
-      <div ref={scroller} className="relative min-h-0 min-w-0 flex-1 overflow-auto" onDragOver={panDragOver} onDragLeave={panDragLeave}>
-        <div className="relative" style={{ width: header + width }}>
+      <div
+        ref={scroller}
+        data-pan=""
+        data-panning={panning ? "" : undefined}
+        className="relative min-h-0 min-w-0 flex-1 overflow-auto"
+        onPointerDown={startPanDrag}
+        onDragOver={panDragOver}
+        onDragLeave={panDragLeave}
+      >
+        <div data-pan="" className="relative" style={{ width: header + width }}>
           <div className="sticky top-0 z-40 flex h-6 border-b border-border/60 bg-card">
             <div data-wheel="layers" className="sticky left-0 z-50 flex shrink-0 items-center justify-center border-r border-border/60 bg-card" style={{ width: header }}>
               <button
@@ -1152,7 +1219,7 @@ export function Timeline({
             const starts = trackStarts(track)
             const label = isAudio ? "Audio layer" : isBase ? "Layer 1 (base)" : `Layer ${i + 1}`
             return (
-              <div key={isAudio ? "audio-layer" : track.id} className="flex border-b border-border/60" style={{ height: row }}>
+              <div key={isAudio ? "audio-layer" : track.id} data-pan="" className="flex border-b border-border/60" style={{ height: row }}>
                 <div
                   data-wheel="layers"
                   className={cn(
@@ -1203,8 +1270,8 @@ export function Timeline({
                   role="group"
                   aria-label={label}
                   data-track={isAudio ? "audio" : i}
+                  data-pan=""
                   className={cn("relative flex-1", isAudio ? "bg-teal-500/5 dark:bg-teal-400/5" : !isBase && "bg-muted/20")}
-                  onPointerDown={(e) => e.target === e.currentTarget && onSelect(null)}
                   onDragOver={(e) => dragOver(e, i)}
                   onDragLeave={dragLeave}
                   onDrop={(e) => dropOn(e, i)}
