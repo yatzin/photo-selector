@@ -316,7 +316,9 @@ Not while the project is exporting, or while that file is being imported.
   on the other layers) and snap to every layer's clip edges. Each is teal with
   its name, length, waveform (the waveform button applies) and mute button;
   the menu has Split, Delete, Mute and Edit length (up to the rest of the
-  file). Audio clips have no transitions, audio overlaps, picture or Reset.
+  file). Audio clips have audio transitions between them and audio fades at
+  their free ends (see Audio transitions and In and out transitions), but no
+  audio overlaps, picture or Reset.
   They play in the preview with the picture and mix into the export like a
   video clip's sound (a muted one is silent); where only audio plays the
   picture is black.
@@ -327,8 +329,9 @@ Not while the project is exporting, or while that file is being imported.
   first request, and keeps the result next to it in `assets/` as
   `.<file>.peaks`; deleting the media item deletes it too.
 - The toolbar above the timeline shows the time, then Undo, Redo, Split and
-  Delete (each button's tooltip names its shortcut), Add text, Transition /
-  audio overlap before and after while a clip is selected, and Reset when the
+  Delete (each button's tooltip names its shortcut), Add text, two transition
+  buttons while a clip is selected (**Transition before** / **after** where a
+  clip touches that side, **Transition in** / **out** where none does), and Reset when the
   selected clip is moved, scaled, cropped, turned or flipped; Play/Pause in
   the middle; the waveform button and the zoom slider at the right.
 - In the dark theme the editor's accent (playhead, selection, trim handles,
@@ -390,9 +393,10 @@ Not while the project is exporting, or while that file is being imported.
 - **Transitions.** Two clips on the same layer that touch (one ends where
   the next starts) can blend into each other. Select a clip: a white circle
   with the transition icon sits on its top edge at each side where another
-  clip touches it, and the toolbar shows **Transition / audio overlap
-  before** and **after** (greyed out on a side with no clip touching). Either
-  opens the **Transition / audio overlap** box: the two clips, a grid of
+  clip touches it, and the toolbar shows **Transition before** and
+  **after** (on a side with no clip touching, **Transition in** or **out**
+  instead; see below). Either opens the **Transition** box ("Between a.mp4
+  and b.mp4"): the two clips, a grid of
   transitions, each playing a small sample (Fade: Crossfade, Fade through
   black, Fade through white; Wipe left, right, up and down; Slide left, right,
   up and down; Shape: Circle open, Circle close, Radial; Effect: Pixelate,
@@ -457,6 +461,49 @@ Not while the project is exporting, or while that file is being imported.
   ("J-cut 1 s" on hover), and the cut's circle shows as set. The loop in the
   box plays the overlap's sound and marks it on its bar, labelled under it
   ("Audio starts early (J-cut, 1 s)").
+- **Audio transitions.** Two audio clips that touch on the audio layer get
+  the same circles, toolbar buttons, amber block and **Transition** box, with
+  sound transitions instead of pictures: **Crossfade curves** (Linear, Equal
+  power, the default, S-curve, Logarithmic, Exponential, Dip to silence) and
+  **Creative** (Low-pass sweep: the outgoing sound muffles away as it fades;
+  Tape stop: it slows down and drops in pitch to a stop; Echo out: it trails
+  off into echoes; Telephone swap: it narrows to a phone-like band as it
+  fades and the next sound starts in that band before opening up). Each tile
+  draws the two sounds' levels across the transition. The rules are a picture
+  cut's: centred on the cut, trimmed automatically for a clip without the
+  sound beyond it (later clips on the audio layer move back), at most 10 s,
+  one undo step, and the clips are linked (locked, Unlink, Move group along
+  the audio layer only). There is no audio overlap there. The box's loop
+  plays the two real sounds across the cut, shaped as the export shapes them,
+  over a bar with the transition's band and each sound's level; the editor's
+  preview plays them the same way (the creative ones through the browser's
+  audio filters, a feedback echo and a slowed-down player for the tape).
+- **In and out transitions.** A clip's end with no clip touching it can come
+  in from nothing or go out to nothing (the layers below, or black; silence
+  for sound). Select the clip: a white circle sits just inside each free end
+  (the toolbar's **Transition in** and **Transition out** do the same), and
+  opens the **Transition** box for it ("In: start of a.mp4", "Out: end of
+  a.mp4"). A video or image offers the picture transitions worked on its own
+  transparency, its loop playing the clip over a checkerboard with 2 s of
+  nothing before an in or after an out: every type at an out end but the dips
+  to black and white (meaningless against nothing); at an in end also not
+  Zoom in (it only zooms the outgoing picture) and Collage (its squares are
+  the outgoing picture's). A video with sound fades its own sound with the
+  picture (equal power). An audio clip offers sound fades: the five curves,
+  a low-pass sweep (opening as it fades in, muffling as it fades out), a tape
+  start or stop, and an echo tail (out only), with the sound loop. A text
+  clip's circles and buttons open its Edit text box on the Animation tab
+  instead (its In and Out animations already do this; Animation... in its
+  menu too). The transition runs inside the clip (its first or last seconds,
+  0.1 to 10 s, in and out together no longer than the clip), so nothing is
+  trimmed or moved, and it doesn't link the clip to anything. On the timeline
+  it's an amber ramp at that end, as long as it runs ("Wipe left in 1.5 s" on
+  hover); on an audio clip a line draws the fade's level over the waveform.
+  Trimming, splitting (the first piece keeps the in, the second the out) and
+  Edit length shrink both in proportion, as a text's animations do. A clip
+  that comes to touch that end (a move, a trim, a drop) takes it away, with
+  the notice "Edge transition removed: the clip now has a neighbour"; undo
+  brings it back.
 - **Linked clips.** Clips joined by transitions or audio overlaps (a group)
   are locked in place. As soon as you start dragging one, a red X covers it,
   the clip stays where it is, and a notice offers **Unlink this clip** (takes
@@ -468,7 +515,8 @@ Not while the project is exporting, or while that file is being imported.
   slides clear of the clips there as one block; on a snapped layer 1 it goes
   in at the slot under the pointer (not between two linked clips), and a
   snapped layer 1 it leaves closes up behind it. The add-a-layer row makes a
-  new layer for it (up to four); the audio layer refuses it. The first drag
+  new layer for it (up to four); the audio layer refuses it (a group of audio
+  clips moves along the audio layer only). The first drag
   starts a 5 minute window, shown as a countdown on the group's first clip
   (amber in the last 30 seconds; it slides to the clip's bottom left while
   you point at the clip, so the mute button stays free), in which you can
@@ -540,14 +588,34 @@ A J-cut or L-cut only moves sound: the next clip's sound is read from its
 overlap before its in point and delayed to start that much earlier, or the
 previous clip's is read on past its out point, each with a short fade at the
 new edge, and mixed with the rest.
+Audio transitions shape the two sounds with ffmpeg's afade curves (tri, qsin,
+hsin, log and exp for the five curves; Dip to silence fades out over the
+first 40% and in over the last 40%) and, for the creative ones, filters on
+the outgoing sound's last stretch: a low-pass sweep in eight steps from 12
+kHz down to 300 Hz, the 300 Hz to 3.4 kHz telephone band (on the incoming
+sound too for its first three quarters), a tape stop as eight ever slower
+stretches of the source (half the transition's worth, played over all of
+it, pitch dropping with the speed), and an echo trail (aecho at 200, 400 and
+600 ms) after the dry sound ends at the cut. An in or out transition xfades
+the clip with a copy of itself made transparent (its alpha set to 0), so the
+effect uncovers or covers whatever is below; an audio clip's edge is an afade
+curve, a low-pass sweep, a tape start or stop, or an echo tail inside the
+clip.
 
 **Limits in this version**
-- No volume control or fades on audio clips yet. Text has no size box
+- No volume control on audio clips yet (only the fades at their ends and
+  the transitions between them). Text has no size box
  (use the corner handles) and no
   outline or shadow.
 - Transitions and audio overlaps only between clips that touch on one
   layer; a clip short of footage is trimmed for them (no "hold the last
   frame" fallback). The overlap's sound isn't ducked under the other clip's.
+- Preview and export of audio transitions match in shape, not sample for
+  sample: the preview's low-pass sweep and tape speed glide where the export
+  steps (eight steps each), its echo is one feedback delay where the export
+  has three taps, and a browser plays a tape no slower than 1/16 speed. A
+  dissolve or pixelate at an in or out end previews as a fade or a blur, as
+  at a cut.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 
