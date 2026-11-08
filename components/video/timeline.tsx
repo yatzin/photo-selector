@@ -54,9 +54,11 @@ import { Thumb } from "./thumb"
 // X from the start of the drag, the clip stays put and a notice offers to
 // unlink it or to move the group. Move group unlocks that chain; its first
 // drag starts a 5 minute window (a countdown badge on the group) in which all
-// its clips move together, as often as wanted. At the deadline, or when the
-// chain's Transition dialog opens, it locks again (the X then covers every
-// block of an expired group). Its edges at a linked cut can't be trimmed apart.
+// its clips move together, along their layer or onto another one (a new
+// layer too, never the audio layer), as often as wanted. At the deadline, or
+// when the chain's Transition dialog opens, it locks again (the X then covers
+// every block of an expired group). Its edges at a linked cut can't be
+// trimmed apart.
 //
 // The audio layer ("0", below layer 1) holds the sound files' clips, and only
 // them: a sound file dropped anywhere lands there at the pointer's time, an
@@ -148,9 +150,12 @@ const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`
 
 /**
  * An unlocked group's countdown (lock-open icon and m:ss), amber in its last
- * 30 s. It re-renders itself once a second, on the second, not the timeline.
+ * 30 s, inside the group's first block near its top left. While the pointer
+ * is over that block it slides to the bottom left, out of the way of the
+ * mute button; it never takes the pointer, and sits under the mute button.
+ * It re-renders itself once a second, on the second, not the timeline.
  */
-function UnlockBadge({ deadline, left, shift }: { deadline: number; left: number; shift: number }) {
+function UnlockBadge({ deadline }: { deadline: number }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const ms = deadline - now
@@ -168,10 +173,10 @@ function UnlockBadge({ deadline, left, shift }: { deadline: number; left: number
       aria-label={`Group unlocked, ${m > 0 ? `${plural(m, "minute")} ` : ""}${plural(s, "second")} left`}
       data-unlock-badge={warn ? "warn" : "on"}
       className={cn(
-        "pointer-events-none absolute top-0.5 z-30 flex h-4 items-center gap-0.5 rounded-full px-1.5 text-[10px] font-medium tabular-nums shadow",
+        "pointer-events-none absolute top-0.5 left-4 z-[5] flex h-4 items-center gap-0.5 rounded-full px-1.5 text-[10px] font-medium tabular-nums shadow",
+        "transition-[top] duration-150 group-hover:top-[calc(100%-1.125rem)] motion-reduce:transition-none",
         warn ? "bg-amber-400 text-amber-950 dark:bg-amber-300" : "bg-neutral-900/85 text-white dark:bg-neutral-100/90 dark:text-neutral-900"
       )}
-      style={{ left: left + 16, transform: shift ? `translateX(${shift}px)` : undefined }}
     >
       <LockOpen aria-hidden className="h-2.5 w-2.5" />
       {m}:{String(s).padStart(2, "0")}
@@ -789,12 +794,12 @@ export function Timeline({
         const dy = cdy + scrolled.y
         const off = altHeld.current
         if (group) {
-          // The group moves along its own layer only.
+          // The group moves as one block, along its layer or onto another one.
           group.at = timeAt(ev.clientX)
-          const r = groupTarget(new Set(group.ids), track, Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off)
+          const r = groupTarget(new Set(group.ids), rowAt(ev.clientY), Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off)
           to = r.to
-          setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy: 0, target: r.to, end: r.to.start + group.length })
-          setSnap(snapState(track, off, r.guide))
+          setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy, target: r.to, end: r.to.start + group.length })
+          setSnap(snapState(r.to.track, off, r.guide))
           return
         }
         const newLeft = Math.max(0, left + dx / live.current.zoom)
@@ -814,9 +819,13 @@ export function Timeline({
           groupDrag.current = null
           setLanded(g.ids)
           if (!t) return
-          const magnetic = track === 0 && isMagnetic(live.current.project)
-          if (!magnetic && Math.abs(t.start - g.start) < 1e-9) return
-          return onChange((p) => moveGroup(p, clip.id, magnetic ? g.at : t.start))
+          if (t.refused) return refuse(clip.id, { text: "A linked group can't go on the audio layer." })
+          const magnetic = t.track === 0 && isMagnetic(live.current.project)
+          if (t.track === track && !magnetic && Math.abs(t.start - g.start) < 1e-9) return
+          // Onto a snapped layer 1 from another layer: not in between two linked clips there.
+          const cut = t.track !== track ? linkedCutAt(t.track, g.at) : null
+          if (cut) return refuse(clip.id, linkedNotice(cut, {}, true))
+          return onChange((p) => moveGroup(p, clip.id, magnetic ? g.at : t.start, t.track))
         }
         if (!t) return
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
@@ -846,10 +855,12 @@ export function Timeline({
    * with its leading edge at `left`: snapped (unless `snapOn` is false) to the
    * same points a dragged clip's edges snap to, slid clear of the layer's
    * other clips (moveGroup does the same), and the time it snapped to. On a
-   * snapped V1, the boundary of the slot the pointer time `at` picks.
+   * snapped V1, the boundary of the slot the pointer time `at` picks. One
+   * past the top is a new layer; the audio layer is `refused`.
    */
   function groupTarget(ids: Set<string>, track: number, left: number, length: number, at: number, snapOn: boolean): { to: DropTarget; guide: number | null } {
     const { project: p, playhead: t, zoom: z } = live.current
+    if (track === AUDIO_TRACK) return { to: { track, start: left, refused: true }, guide: null }
     const others = p.tracks[track]?.clips.filter((c) => !ids.has(c.id)) ?? []
     if (track === 0 && isMagnetic(p)) return { to: { track, start: baseInsertion(others, at).start }, guide: null }
     const points = [0, t, ...allClips(p).filter((c) => !ids.has(c.id)).flatMap((c) => [c.start, clipEnd(c)])]
@@ -1011,8 +1022,8 @@ export function Timeline({
   // A sound file's ghost is teal like its clips; a refused one (something else over the audio layer) red, with a no-entry hint.
   const dragClip = drag ? allClips(project).find((c) => c.id === drag.id) : undefined
   const audioGhost = outside?.audio === true || (dragClip !== undefined && isAudioClip(project, dragClip))
-  // A sound file, an audio clip or a linked group being dragged can't make a new layer: the zone isn't offered for it.
-  const layerDrag = dragging && !audioGhost && !drag?.group
+  // A sound file or an audio clip being dragged can't make a new layer: the zone isn't offered for it.
+  const layerDrag = dragging && !audioGhost
   const ghost = (start: number, shift = 0, refused = false) => (
     <div
       data-ghost={refused ? "refused" : audioGhost ? "audio" : "clip"}
@@ -1035,8 +1046,8 @@ export function Timeline({
     <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: start * zoom }} />
   )
   const magnetic = isMagnetic(project)
-  // A group being dragged takes its transitions, audio overlap bands and badge along.
-  const groupShift = (id: string) => (drag?.group?.includes(id) ? `translateX(${drag.dx}px)` : undefined)
+  // A group being dragged takes its transitions and audio overlap bands along.
+  const groupShift = (id: string) => (drag?.group?.includes(id) ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined)
   // The unlocked groups whose window is running, each with its countdown badge.
   const badges = Object.entries(locks.unlocked).flatMap(([key, e]) => (e.deadline === null ? [] : [{ key, deadline: e.deadline, ids: chainIds(key) }]))
   // A drag that snaps shows the Alt hint, and the guide line while it's snapped.
@@ -1293,6 +1304,10 @@ export function Timeline({
                             {muted ? <VolumeX className={cn("text-red-300", tight ? "h-2.5 w-2.5" : "h-3 w-3")} /> : <Volume2 className={tight ? "h-2.5 w-2.5" : "h-3 w-3"} />}
                           </button>
                         )}
+                        {badges.map((b) =>
+                          // An unlocked group's countdown, on its first block on this layer.
+                          track.clips.findIndex((c) => b.ids.includes(c.id)) === k ? <UnlockBadge key={b.key} deadline={b.deadline} /> : null
+                        )}
                         {rejected?.ids.includes(clip.id) && (
                           // A refused move or trim: a red X across the block for a moment.
                           <svg aria-hidden className="pointer-events-none absolute inset-0 z-20 h-full w-full bg-red-500/15" preserveAspectRatio="none" viewBox="0 0 100 100">
@@ -1357,13 +1372,6 @@ export function Timeline({
                       />
                     )
                   })}
-                  {!isAudio &&
-                    badges.map((b) => {
-                      // An unlocked group's countdown, on its first block.
-                      const k = track.clips.findIndex((c) => b.ids.includes(c.id))
-                      if (k < 0) return null
-                      return <UnlockBadge key={b.key} deadline={b.deadline} left={starts[k] * zoom} shift={drag?.group?.includes(track.clips[k].id) ? drag.dx : 0} />
-                    })}
                   {(() => {
                     // The selected clip's cuts with a neighbour: a white circle on each opens its Transition / audio overlap dialog.
                     // The audio layer's clips never link: no circles there.
