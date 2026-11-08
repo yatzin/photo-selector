@@ -1,6 +1,7 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
+import { parseStreams, type ProbedStreams } from "./import"
 import { adjoins, allClips, clipLength, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
@@ -18,17 +19,32 @@ export function parseProbe(stderr: string): { duration: number; hasAudio: boolea
   return { duration, hasAudio: /Stream #[^\n]*Audio:/.test(stderr) }
 }
 
-/** Length and whether there is sound. `ffmpeg -i` with no output exits non-zero but prints what we need on stderr. */
-export function probeMedia(file: string): Promise<{ duration: number; hasAudio: boolean }> {
+/** `ffmpeg -i <file>` run with no output: it exits non-zero but prints the file's streams on stderr, which `read` parses. */
+function probeWith<T>(file: string, read: (stderr: string) => T): Promise<T> {
   return new Promise((resolve, reject) => {
     execFile(ffmpeg(), ["-hide_banner", "-i", file], { timeout: 30_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, _stdout, stderr) => {
       try {
-        resolve(parseProbe(String(stderr ?? "")))
+        resolve(read(String(stderr ?? "")))
       } catch (parseError) {
         reject(err && (err as NodeJS.ErrnoException).code === "ENOENT" ? err : parseError)
       }
     })
   })
+}
+
+/** Length and whether there is sound. */
+export function probeMedia(file: string): Promise<{ duration: number; hasAudio: boolean }> {
+  return probeWith(file, parseProbe)
+}
+
+/**
+ * What a file holds (lib/video/import parseStreams): its length (null when
+ * ffmpeg gives none, as for a still), and whether it has a picture (cover art
+ * doesn't count) and sound. Rejects only when ffmpeg can't run; a file it
+ * can't read comes back with neither.
+ */
+export function probeStreams(file: string): Promise<ProbedStreams> {
+  return probeWith(file, parseStreams)
 }
 
 const num = (n: number) => String(Number(n.toFixed(3)))
@@ -235,6 +251,10 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
  * Audio overlaps (J- and L-cuts) move only the sound (soundSpan): the
  * incoming clip's starts early or the outgoing clip's runs on, mixed with
  * the other clip's as it is (no ducking); the pictures are unchanged.
+ *
+ * The audio layer's clips (inputs after every picture's) add only their
+ * sound, trimmed and delayed to their start like a video clip's (silent when
+ * muted); with no picture clip at all the canvas stays black.
  */
 function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, isImage: (c: Clip) => boolean): { graph: string; inputs: string[][] } {
   const { width: W, height: H, fps } = p
@@ -245,6 +265,21 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const mix = ["[asil]"]
   const sounds = new Map<string, SoundSpan>()
   for (const track of p.tracks) track.clips.forEach((c, k) => sounds.set(c.id, soundSpan(p, track.clips, k)))
+  const audioClips = p.audioTrack?.clips ?? []
+  audioClips.forEach((c, k) => sounds.set(c.id, soundSpan(p, audioClips, k)))
+  /** Input `i`'s sound for clip `c` into the mix, as soundSpan says (nothing when it's muted or its file has none). */
+  const sound = (c: Clip, i: number) => {
+    if (c.muted || p.assets[c.asset]?.hasAudio === false) return
+    const a = sounds.get(c.id)!
+    const fades = [
+      ...(a.fadeIn > 0 ? [`afade=t=in:st=0:d=${num(a.fadeIn)}:curve=${a.inCurve}`] : []),
+      ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(clipLength(c) + a.pre + a.post - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
+    ].map((f) => `${f},`).join("")
+    parts.push(
+      `[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
+    )
+    mix.push(`[a${i}]`)
+  }
   /**
    * A clip's picture as stream [v<i>] on the timeline's time, and its sound
    * into the mix; the overlay's x, y options for it. `pre` and `post` extend the
@@ -281,17 +316,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
-      if (!c.muted && p.assets[c.asset]?.hasAudio !== false) {
-        const a = sounds.get(c.id)!
-        const fades = [
-          ...(a.fadeIn > 0 ? [`afade=t=in:st=0:d=${num(a.fadeIn)}:curve=${a.inCurve}`] : []),
-          ...(a.fadeOut > 0 ? [`afade=t=out:st=${num(clipLength(c) + a.pre + a.post - a.fadeOut)}:d=${num(a.fadeOut)}:curve=${a.outCurve}`] : []),
-        ].map((f) => `${f},`).join("")
-        parts.push(
-          `[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${fades}adelay=delays=${Math.round((c.start - a.pre) * 48000)}S:all=1[a${i}]`
-        )
-        mix.push(`[a${i}]`)
-      }
+      sound(c, i)
     }
     const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
     // A text that moves or changes size is placed afresh every frame.
@@ -350,6 +375,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     parts.push(`${under}[u${n}]overlay=x=0:y=0:enable='between(t,${num(first.start)},${num(end)})':eof_action=pass${out}`)
     under = out
   })
+  // Nothing but audio clips: the picture is the black canvas.
+  if (runs.length === 0) parts.push("[bg]null[v]")
+  // The audio layer's clips: sound only, mixed like a video clip's.
+  for (const c of audioClips) {
+    const i = inputs.length
+    inputs.push(["-i", fileFor(c)])
+    sound(c, i)
+  }
   parts.push(`anullsrc=r=48000:cl=stereo,atrim=0:${total}[asil]`)
   parts.push(`${mix.join("")}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0[a]`)
   return { graph: parts.join(";"), inputs }
@@ -368,7 +401,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * clip has a transform, or the base track isn't one run of clips from 0 (a
  * gap), every clip is placed on the canvas instead (uniformGraph); otherwise
  * the graph is the same as it always was. A text clip (its PNG in `files`
- * under textFileKey), a transition or an audio overlap always takes the uniform graph.
+ * under textFileKey), a transition, an audio overlap or a clip on the audio
+ * layer always takes the uniform graph.
  */
 export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   if (allClips(p).length === 0) throw new Error("Nothing to export")
@@ -383,7 +417,12 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   }
   // A still: an image's clip or a text clip's PNG.
   const isImage = (c: Clip) => isStill(p, c)
-  if (allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio) || !isContiguousFromZero(p.tracks[0].clips)) return uniformGraph(p, frame, fileFor, isImage)
+  if (
+    (p.audioTrack?.clips.length ?? 0) > 0 ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio) ||
+    !isContiguousFromZero(p.tracks[0].clips)
+  ) return uniformGraph(p, frame, fileFor, isImage)
+
 
   // The base track: one concatenated stream, with silence where a clip has no sound (or is muted).
   const [baseTrack, ...overlays] = p.tracks

@@ -7,7 +7,7 @@ import { assetKind } from "./project"
 import { createPeakBinner, decodePeaks, encodePeaks, PEAKS_RATE, peaksFileName } from "./peaks"
 import { assetPath, readProject } from "./projects-server"
 
-// The waveform peaks of a project's video assets: decoded with ffmpeg on the
+// The waveform peaks of a project's video and audio assets: decoded with ffmpeg on the
 // first request, cached beside the asset as `.<file>.peaks` and reused after
 // (an asset's file never changes). One decode per file at a time, and at most
 // MAX_DECODES at once over all of them.
@@ -95,13 +95,13 @@ function cachedPeaks(media: string): Promise<Uint8Array> {
 
 /**
  * The peaks file's bytes (see lib/video/peaks) for an asset of the stored
- * project: null when the project or asset isn't there, isn't a video with
- * sound, or its file is gone. Throws when ffmpeg can't read it.
+ * project: null when the project or asset isn't there, isn't a video or
+ * audio file with sound, or its file is gone. Throws when ffmpeg can't read it.
  */
 export async function assetPeaks(userFolder: string, folder: string, assetId: string): Promise<Uint8Array | null> {
   const p = await readProject(userFolder, folder)
   const asset = p && Object.hasOwn(p.assets, assetId) ? p.assets[assetId] : undefined
-  if (!asset || assetKind(asset) !== "video" || !asset.hasAudio) return null
+  if (!asset || assetKind(asset) === "image" || !asset.hasAudio) return null
   const media = assetPath(userFolder, folder, asset.file)
   if (!media) return null
   try {

@@ -1,5 +1,6 @@
 import {
-  brokenLinks, clipEnd, clipLength, fixTransitions, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, type Clip, type Project,
+  assetKind, AUDIO_TRACK, brokenLinks, clipEnd, clipLength, fixTransitions, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, trackAt, withTrack,
+  type Clip, type Project,
 } from "./project"
 
 /** What happens to other media on the clip's layer that the new range reaches. */
@@ -20,8 +21,9 @@ function cutHead(clip: Clip, delta: number, image: boolean): Clip {
 /**
  * Sets a clip's start and length (seconds on the timeline) as one edit of the
  * tracks, from the Edit length dialog. An image (or text) keeps in 0 and gets out =
- * length (MIN_CLIP to MAX_IMAGE); a video keeps its in and may not run past
- * its source. Only the clip's own layer changes.
+ * length (MIN_CLIP to MAX_IMAGE); a video (or an audio clip, on the audio
+ * layer) keeps its in and may not run past its source. Only the clip's own
+ * layer changes.
  *
  * - "push": clips that started at or after the clip's old start, and end
  *   after its new start, all move right by the least that clears the new
@@ -50,9 +52,10 @@ export function setClipTiming(p: Project, clipId: string, timing: { start: numbe
 export const LINKED = "This clip is linked by a transition or audio overlap."
 
 function timingEdit(p: Project, clipId: string, timing: { start: number; length: number }, mode: TimingMode, newId: () => string): TimingResult {
-  const track = p.tracks.findIndex((t) => t.clips.some((c) => c.id === clipId))
-  if (track < 0) return fail("That clip is gone.")
-  const clips = p.tracks[track].clips
+  const onAudio = p.audioTrack?.clips.some((c) => c.id === clipId) === true
+  const track = onAudio ? AUDIO_TRACK : p.tracks.findIndex((t) => t.clips.some((c) => c.id === clipId))
+  if (!onAudio && track < 0) return fail("That clip is gone.")
+  const clips = trackAt(p, track)!.clips
   const clip = clips.find((c) => c.id === clipId)!
   const asset = isTextClip(clip) ? undefined : p.assets[clip.asset]
   if (!asset && !isTextClip(clip)) return fail("That clip's media is gone.")
@@ -63,13 +66,16 @@ function timingEdit(p: Project, clipId: string, timing: { start: number; length:
   if (start < 0) return fail("Start can't be before 0.")
   if (length < MIN_CLIP - 1e-9) return fail(`Length must be at least ${MIN_CLIP} s.`)
   if (image && length > MAX_IMAGE) return fail(`An image can be at most ${MAX_IMAGE} s long.`)
-  if (!image && asset && clip.in + length > asset.duration + EPS) return fail(`This video has only ${(asset.duration - clip.in).toFixed(2)} s left from its start.`)
+  if (!image && asset && clip.in + length > asset.duration + EPS) {
+    return fail(`This ${assetKind(asset) === "audio" ? "audio file" : "video"} has only ${(asset.duration - clip.in).toFixed(2)} s left from its start.`)
+  }
   const end = start + length
   if (end > MAX_TIMELINE + EPS) return fail("That would end past the timeline's 6 hour limit.")
   if (Math.abs(start - clip.start) < EPS && Math.abs(length - clipLength(clip)) < EPS) return { ok: true, project: p }
 
   const next: Clip = image ? { ...clip, in: 0, out: length, start } : { ...clip, out: clip.in + length, start }
-  const withClips = (list: Clip[]): Project => ({ ...p, tracks: p.tracks.map((t, i) => (i === track ? { ...t, clips: [...list].sort((a, b) => a.start - b.start) } : t)) })
+  const withClips = (list: Clip[]): Project => withTrack(p, track, [...list].sort((a, b) => a.start - b.start))
+
 
   if (track === 0 && isMagnetic(p)) {
     if (Math.abs(start - clip.start) > EPS) return fail("On a snapped layer 1 the start follows the clips before it.")

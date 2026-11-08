@@ -5,7 +5,7 @@ import { PEAKS_RATE } from "@/lib/video/peaks"
 import { assetPeaks } from "@/lib/video/peaks-server"
 
 // GET /api/video-projects/<project>/peaks/<asset>
-// The waveform peaks of a video asset with sound (lib/video/peaks: a small
+// The waveform peaks of a video or audio asset with sound (lib/video/peaks: a small
 // header, then 100 peaks a second), made on the first request and cached
 // beside the asset. The user's folder comes from the session, never from the
 // URL. An asset id is never reused, so the browser may keep the answer.

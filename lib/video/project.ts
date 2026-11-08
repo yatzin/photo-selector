@@ -4,10 +4,12 @@ import { isCutAudioMode, isTransitionType, MAX_CUT_AUDIO, MAX_TRANSITION, MIN_CU
 
 /**
  * An imported file. `kind` is absent for videos (older projects have no kind).
- * For an image, `duration` is its default clip length. `source` is the Inbox
- * path it was copied from ("<folder>/<name>"), so a second import reuses it.
+ * For an image, `duration` is its default clip length. An audio file
+ * ("audio") has sound and no picture; its clips live on the audio layer only.
+ * `source` is the Inbox path it was copied from ("<folder>/<name>"), so a
+ * second import reuses it, or the original name of a file uploaded with Import.
  */
-export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video"; source?: string }
+export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string }
 /**
  * `start` is where the clip begins on the timeline (seconds), on every track.
  * `transform` moves, scales and crops the picture on the canvas
@@ -33,6 +35,12 @@ export type Clip = {
  */
 export type Track = { id: string; magnetic?: boolean; clips: Clip[] }
 /**
+ * `audioTrack` is the audio layer ("layer 0", drawn below layer 1): audio
+ * clips only, and audio clips only there. It times like an overlay layer
+ * (own starts, gaps, no overlaps, no Snap), has no transitions or audio
+ * overlaps and no picture, and isn't counted in MAX_TRACKS. Absent while it
+ * has no clips, so a project without audio is stored as it always was.
+ *
  * Version 3: every clip has a `start`. Version 2 laid the base track end to
  * end (no starts there) and version 1 had one flat `clips` list; parseProject
  * reads both as version 3 with the same layout.
@@ -45,10 +53,15 @@ export type Project = {
   fps: number
   assets: Record<string, Asset>
   tracks: Track[]
+  audioTrack?: Track
 }
 
 /** The part of a project that undo/redo covers; assets, name and settings are server-owned and never undone. */
-export type Edit = { tracks: Track[] }
+export type Edit = { tracks: Track[]; audioTrack?: Track }
+
+/** The audio layer's index wherever a track index is asked for (it isn't in `tracks`). */
+export const AUDIO_TRACK = -1
+const AUDIO_TRACK_ID = "audio"
 
 export const MIN_CLIP = 0.2
 /** Default and longest length of an image clip, in seconds. */
@@ -63,8 +76,24 @@ export const MAX_TIMELINE = 21600
 /** Clips closer than this count as touching, not overlapping (float rounding). */
 const EPS = 1e-6
 
-export function assetKind(a: Asset): "image" | "video" {
-  return a.kind === "image" ? "image" : "video"
+export function assetKind(a: Asset): "image" | "video" | "audio" {
+  return a.kind === "image" || a.kind === "audio" ? a.kind : "video"
+}
+
+/** True for a clip of an audio file (it belongs on the audio layer). */
+export function isAudioClip(p: Project, c: Clip): boolean {
+  const asset = c.text === undefined && Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
+  return asset !== undefined && assetKind(asset) === "audio"
+}
+
+/** The track at `index` (AUDIO_TRACK: the audio layer, empty when absent). */
+export function trackAt(p: Project, index: number): Track | undefined {
+  return index === AUDIO_TRACK ? (p.audioTrack ?? { id: AUDIO_TRACK_ID, clips: [] }) : p.tracks[index]
+}
+
+/** The edit part of a project: its tracks, and its audio layer when it has one. */
+export function editOf(p: Project): Edit {
+  return p.audioTrack ? { tracks: p.tracks, audioTrack: p.audioTrack } : { tracks: p.tracks }
 }
 
 /** True for a text clip (no media). */
@@ -113,9 +142,10 @@ export function endToEnd(clips: Omit<Clip, "start">[]): Clip[] {
   })
 }
 
-/** Every clip on every track, base track first. */
+/** Every clip on every track, base track first, the audio layer's last. */
 export function allClips(p: Project): Clip[] {
-  return p.tracks.flatMap((t) => t.clips)
+  const clips = p.tracks.flatMap((t) => t.clips)
+  return p.audioTrack ? [...clips, ...p.audioTrack.clips] : clips
 }
 
 /** Each clip's start on the timeline. */
@@ -128,9 +158,9 @@ export function trackEnd(track: Track): number {
   return track.clips.reduce((end, c) => Math.max(end, clipEnd(c)), 0)
 }
 
-/** The timeline's length: the latest clip end over all tracks; 0 for an empty project. */
+/** The timeline's length: the latest clip end over all tracks (the audio layer too); 0 for an empty project. */
 export function totalLength(p: Project): number {
-  return p.tracks.reduce((end, t) => Math.max(end, trackEnd(t)), 0)
+  return p.tracks.reduce((end, t) => Math.max(end, trackEnd(t)), p.audioTrack ? trackEnd(p.audioTrack) : 0)
 }
 
 /** True when `clips` (sorted by start) run back to back from 0 with no gap; true for none. */
@@ -202,17 +232,27 @@ export function freeTrackFor(p: Project, start: number, length: number, options:
 
 const sortByStart = (clips: Clip[]) => [...clips].sort((a, b) => a.start - b.start)
 
+/** Where clip `id` is: its track (AUDIO_TRACK for the audio layer), index and the clip. */
 function find(p: Project, id: string): { track: number; index: number; clip: Clip } | null {
   for (let track = 0; track < p.tracks.length; track++) {
     const index = p.tracks[track].clips.findIndex((c) => c.id === id)
     if (index >= 0) return { track, index, clip: p.tracks[track].clips[index] }
   }
-  return null
+  const index = p.audioTrack ? p.audioTrack.clips.findIndex((c) => c.id === id) : -1
+  return index >= 0 ? { track: AUDIO_TRACK, index, clip: p.audioTrack!.clips[index] } : null
 }
 
 const hasClip = (p: Project, id: string) => find(p, id) !== null
 
-function withTrack(p: Project, index: number, clips: Clip[]): Project {
+/** `p` with track `index`'s clips replaced; the audio layer (AUDIO_TRACK) goes when it's left with none. */
+export function withTrack(p: Project, index: number, clips: Clip[]): Project {
+  if (index === AUDIO_TRACK) {
+    if (clips.length > 0) return { ...p, audioTrack: { id: p.audioTrack?.id ?? AUDIO_TRACK_ID, clips } }
+    if (!p.audioTrack) return p
+    const rest = { ...p }
+    delete rest.audioTrack
+    return rest
+  }
   return { ...p, tracks: p.tracks.map((t, i) => (i === index ? { ...t, clips } : t)) }
 }
 
@@ -258,11 +298,14 @@ export function cutReach(clips: Clip[], i: number): { lead: number; trail: numbe
  * Each half also has to fit in its clip beside what the clip's other cut
  * takes of it (cutReach), so two cuts' windows never meet, and the whole is
  * at most MAX_TRANSITION, floored to the millisecond. `max` is 0 with
- * "not-adjoining" when nothing adjoins it (or the clip is gone), and
+ * "not-adjoining" when nothing adjoins it (or the clip is gone or on the
+ * audio layer, whose clips never link), and
  * "no-footage" when that leaves less than MIN_TRANSITION.
  */
 export function transitionLimits(p: Project, clipId: string): TransitionLimits {
-  const at = find(p, clipId)
+  // The audio layer's clips never link.
+  const found = find(p, clipId)
+  const at = found && found.track !== AUDIO_TRACK ? found : null
   const clips = at ? p.tracks[at.track].clips : []
   const prev = at ? clips[at.index - 1] : undefined
   if (!at || !adjoins(prev, at.clip)) return { max: 0, reason: "not-adjoining" }
@@ -292,12 +335,14 @@ export function hasSound(p: Project, c: Clip): boolean {
  * has to fit in the clip it overlaps (the outgoing one for J, the incoming
  * one for L) beside what that clip's other cut takes of it (cutReach), so two
  * cuts' overlaps never meet and a J never reaches before 0; floored to the
- * millisecond. `max` is 0 with the reason when it can't be had. These are
+ * millisecond. `max` is 0 with the reason when it can't be had ("not-adjoining"
+ * on the audio layer, whose clips never link). These are
  * the limits with the footage the clips have now: cutAudioPlan (in
  * lib/video/transitions) trims the clips to make room for a longer one.
  */
 export function cutAudioLimits(p: Project, clipId: string): CutAudioLimits {
-  const at = find(p, clipId)
+  const found = find(p, clipId)
+  const at = found && found.track !== AUDIO_TRACK ? found : null
   const clips = at ? p.tracks[at.track].clips : []
   const prev = at ? clips[at.index - 1] : undefined
   if (!at || !prev || !adjoins(prev, at.clip)) return { j: { max: 0, reason: "not-adjoining" }, l: { max: 0, reason: "not-adjoining" } }
@@ -466,18 +511,25 @@ export function setClipMuted(p: Project, clipId: string, muted: boolean): Projec
   if (!at || isTextClip(at.clip) || Boolean(at.clip.muted) === muted) return p
   const clip: Clip = { ...at.clip, muted: true }
   if (!muted) delete clip.muted
-  return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? clip : c)))
+  return withTrack(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? clip : c)))
 }
 
-/** Puts `clip` on track `trackIndex` (one past the top adds a layer) at `start`, slid clear of overlaps; the same project when it can't. */
+/**
+ * Puts `clip` on track `trackIndex` (one past the top adds a layer; AUDIO_TRACK
+ * the audio layer) at `start`, slid clear of overlaps; the same project when
+ * it can't, or when an audio clip would leave the audio layer or another clip
+ * go onto it.
+ */
 function place(p: Project, clip: Clip, trackIndex: number, start: number): Project {
-  if (!Number.isInteger(trackIndex) || trackIndex < 0 || trackIndex > p.tracks.length) return p
+  const audio = trackIndex === AUDIO_TRACK
+  if (isAudioClip(p, clip) !== audio) return p
+  if (!audio && (!Number.isInteger(trackIndex) || trackIndex < 0 || trackIndex > p.tracks.length)) return p
   let q = p
-  if (trackIndex === p.tracks.length) {
+  if (!audio && trackIndex === p.tracks.length) {
     q = addTrack(p)
     if (q === p) return p
   }
-  const clips = q.tracks[trackIndex].clips
+  const clips = trackAt(q, trackIndex)!.clips
   const at = resolveStart(clips, clipLength(clip), start, clip.id)
   if (at + clipLength(clip) > MAX_TIMELINE + EPS) return p
   const placed: Clip = { id: clip.id, asset: clip.asset, in: clip.in, out: clip.out, start: at }
@@ -494,11 +546,14 @@ function place(p: Project, clip: Clip, trackIndex: number, start: number): Proje
  * at `at.start` (0 when absent), sliding past any clip it would overlap. A
  * track index one past the top adds a layer for it (up to MAX_TRACKS). On a
  * snapped base it's inserted at the slot `at.start` picks (baseInsertion).
+ * An audio file's clip goes on the audio layer whatever track is asked for;
+ * nothing else goes there (the same project).
  */
 export function addClip(p: Project, assetId: string, trackIndex: number, at: { start?: number }, id: string): Project {
-  const asset = p.assets[assetId]
+  const asset = Object.hasOwn(p.assets, assetId) ? p.assets[assetId] : undefined
   if (!asset || asset.duration < MIN_CLIP || hasClip(p, id)) return p
   const clip: Clip = { id, asset: assetId, in: 0, out: assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, start: 0 }
+  if (assetKind(asset) === "audio") return place(p, clip, AUDIO_TRACK, at.start ?? 0)
   // Going in between two clips there parts them: a transition between them goes.
   if (trackIndex === 0 && isMagnetic(p)) return fixTransitions(insertBase(p, clip, at.start ?? 0), p)
   return place(p, clip, trackIndex, at.start ?? 0)
@@ -528,18 +583,21 @@ export function setClipText(p: Project, clipId: string, text: ClipText): Project
   const n = normalizeText(text)
   const t = n && at && fitAnims(n, clipLength(at.clip))
   if (!at || !t || !isTextClip(at.clip) || sameText(at.clip.text, t)) return p
-  return withTrack(p, at.track, p.tracks[at.track].clips.map((c) => (c.id === clipId ? { ...c, text: t } : c)))
+  return withTrack(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? { ...c, text: t } : c)))
 }
 
 /**
  * Moves a clip along its track or to another one (in and out stay) to
  * `at.start` (where it is when absent); see addClip for where it lands. A
- * clip leaving a snapped base closes its gap there.
+ * clip leaving a snapped base closes its gap there. An audio clip stays on
+ * the audio layer (it moves in time only); no other clip goes there.
  */
 export function moveClip(p: Project, id: string, toTrack: number, at: { start?: number }): Project {
   const from = find(p, id)
-  if (!from || !Number.isInteger(toTrack) || toTrack < 0 || toTrack > p.tracks.length) return p
-  const without = withTrack(p, from.track, p.tracks[from.track].clips.filter((c) => c.id !== id))
+  if (!from) return p
+  if (from.track === AUDIO_TRACK) toTrack = AUDIO_TRACK
+  else if (!Number.isInteger(toTrack) || toTrack < 0 || toTrack > p.tracks.length) return p
+  const without = withTrack(p, from.track, trackAt(p, from.track)!.clips.filter((c) => c.id !== id))
   const desired = at.start ?? from.clip.start
   const moved = toTrack === 0 && isMagnetic(p) ? insertBase(without, from.clip, desired) : place(without, from.clip, toTrack, desired)
   return moved === without ? p : settle(p, moved)
@@ -565,7 +623,7 @@ export function trimClip(p: Project, id: string, edge: "in" | "out", seconds: nu
   const asset = at && (isTextClip(at.clip) ? undefined : p.assets[at.clip.asset])
   if (!at || (!asset && !isTextClip(at.clip)) || Number.isNaN(seconds)) return p
   const { clip, track, index } = at
-  const clips = p.tracks[track].clips
+  const clips = trackAt(p, track)!.clips
   // A text's animations shrink with it (fitAnims).
   const replace = (next: Clip) => settle(p, withTrack(p, track, clips.map((c) => (c.id === id ? fitted(next) : c))))
   // A text clip trims like an image.
@@ -630,7 +688,7 @@ export function splitClip(p: Project, id: string, timelineTime: number, newId: s
   const at = find(p, id)
   if (!at || !Number.isFinite(timelineTime) || hasClip(p, newId)) return p
   const { clip, track, index } = at
-  const clips = p.tracks[track].clips
+  const clips = trackAt(p, track)!.clips
   const local = timelineTime - clip.start
   if (local < MIN_CLIP || clipLength(clip) - local < MIN_CLIP) return p
   const next = [...clips]
@@ -655,10 +713,10 @@ const sameTransform = (a: Transform | undefined, b: Transform | undefined) =>
     : a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.scale === b.scale && a.cropTop === b.cropTop && a.cropBottom === b.cropBottom &&
       cropLeftOf(a) === cropLeftOf(b) && cropRightOf(a) === cropRightOf(b) && rotationOf(a) === rotationOf(b) && !a.flipH === !b.flipH && !a.flipV === !b.flipV
 
-/** Sets a clip's transform (clamped into its limits); the identity removes the field. The same project when nothing changes. */
+/** Sets a clip's transform (clamped into its limits); the identity removes the field. The same project when nothing changes, or for an audio clip (no picture). */
 export function setTransform(p: Project, clipId: string, t: Transform): Project {
   const at = find(p, clipId)
-  if (!at) return p
+  if (!at || at.track === AUDIO_TRACK) return p
   const next = normalizeTransform(t)
   if (sameTransform(at.clip.transform, next)) return p
   const clip: Clip = { ...at.clip, transform: next }
@@ -670,7 +728,7 @@ export function setTransform(p: Project, clipId: string, t: Transform): Project 
 export function removeClip(p: Project, id: string): Project {
   const at = find(p, id)
   if (!at) return p
-  return settle(p, withTrack(p, at.track, p.tracks[at.track].clips.filter((c) => c.id !== id)))
+  return settle(p, withTrack(p, at.track, trackAt(p, at.track)!.clips.filter((c) => c.id !== id)))
 }
 
 /**
@@ -689,7 +747,13 @@ export function removeAsset(p: Project, assetId: string): { project: Project; re
   })
   const assets = { ...p.assets }
   delete assets[assetId]
-  return { project: settle(p, { ...p, assets, tracks }), removedClips }
+  let next: Project = { ...p, assets, tracks }
+  if (p.audioTrack) {
+    const kept = p.audioTrack.clips.filter((c) => c.asset !== assetId)
+    removedClips += p.audioTrack.clips.length - kept.length
+    next = withTrack(next, AUDIO_TRACK, kept)
+  }
+  return { project: settle(p, next), removedClips }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -741,17 +805,21 @@ export function parseProject(json: unknown): Project | null {
   for (const [key, a] of Object.entries(assets)) {
     if (key === "__proto__") return null
     if (!isRecord(a) || typeof a.file !== "string" || !isNum(a.duration) || typeof a.hasAudio !== "boolean") return null
-    if (a.kind !== undefined && a.kind !== "image" && a.kind !== "video") return null
+    if (a.kind !== undefined && a.kind !== "image" && a.kind !== "video" && a.kind !== "audio") return null
     if (a.source !== undefined && (typeof a.source !== "string" || a.source.length > MAX_SOURCE)) return null
     parsedAssets[key] = { file: a.file, duration: a.duration, hasAudio: a.hasAudio }
     if (a.kind !== undefined) parsedAssets[key].kind = a.kind
     if (a.source !== undefined) parsedAssets[key].source = a.source
   }
 
+  // The audio layer is read after the other tracks, with the same rules and its own (audioOnly).
+  const rawAudio: unknown = json.audioTrack
+  if (rawAudio !== undefined && !isRecord(rawAudio)) return null
   const ids = new Set<string>()
   const trackIds = new Set<string>()
   const tracks: Track[] = []
-  for (const [t, raw] of rawTracks.entries()) {
+  for (const [t, raw] of (rawAudio === undefined ? rawTracks : [...rawTracks, rawAudio]).entries()) {
+    const audioOnly = t === rawTracks.length
     if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length < 1 || raw.id.length > MAX_TRACK_ID || trackIds.has(raw.id)) return null
     if (raw.muted !== undefined && typeof raw.muted !== "boolean") return null
     if (raw.magnetic !== undefined && typeof raw.magnetic !== "boolean") return null
@@ -772,6 +840,8 @@ export function parseProject(json: unknown): Project | null {
       if (ids.has(c.id)) return null
       if (c.muted !== undefined && typeof c.muted !== "boolean") return null
       const asset = text ? null : parsedAssets[c.asset]
+      // Audio clips live on the audio layer, and only they do.
+      if (audioOnly !== (asset !== null && assetKind(asset) === "audio")) return null
       // A text clip times like an image.
       if (!asset || assetKind(asset) === "image") {
         // The epsilon absorbs float rounding from a split.
@@ -787,7 +857,8 @@ export function parseProject(json: unknown): Project | null {
         start = c.start
       }
       const clip: Clip = { id: c.id, asset: c.asset, in: c.in, out: c.out, start }
-      if (c.transform !== undefined) {
+      // An audio clip has no picture to transform and never links to its neighbours: those fields are dropped.
+      if (c.transform !== undefined && !audioOnly) {
         if (!isValidTransform(c.transform)) return null
         // Only the transform's own fields; a zero left or right crop or rotation and a false flip are left out.
         if (!isIdentity(c.transform)) {
@@ -803,12 +874,12 @@ export function parseProject(json: unknown): Project | null {
       if (text) clip.text = fitAnims(text, clip.out - clip.in)
       // A text clip has no sound to mute.
       else if (c.muted === true || raw.muted === true) clip.muted = true
-      if (c.transition !== undefined) {
+      if (c.transition !== undefined && !audioOnly) {
         const tr = c.transition
         if (!isRecord(tr) || !isTransitionType(tr.type) || !isNum(tr.duration) || tr.duration < MIN_TRANSITION - 1e-9 || tr.duration > MAX_TRANSITION + 1e-9) return null
         clip.transition = { type: tr.type, duration: tr.duration }
       }
-      if (c.cutAudio !== undefined) {
+      if (c.cutAudio !== undefined && !audioOnly) {
         const ca = c.cutAudio
         if (!isRecord(ca) || !isCutAudioMode(ca.mode) || !isNum(ca.duration) || ca.duration < MIN_CUT_AUDIO - 1e-9 || ca.duration > MAX_CUT_AUDIO + 1e-9) return null
         clip.cutAudio = { mode: ca.mode, duration: ca.duration }
@@ -830,8 +901,10 @@ export function parseProject(json: unknown): Project | null {
     tracks.push({ id: raw.id, ...(magnetic ? { magnetic: true } : {}), clips })
   }
 
+  // Kept only while it has clips, so a project without audio stays as it was.
+  const audioTrack = rawAudio === undefined ? undefined : tracks.pop()
   // A transition or audio overlap with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
-  return fixTransitions({ version: 3, name, width, height, fps, assets: parsedAssets, tracks })
+  return fixTransitions({ version: 3, name, width, height, fps, assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}) })
 }
 
 /**
@@ -844,7 +917,9 @@ export function parseProject(json: unknown): Project | null {
  */
 export function mergeClientProject(client: unknown, stored: Project): Project | null {
   const tracks = isRecord(client) && Array.isArray(client.tracks) ? client.tracks.map((t) => (isRecord(t) ? { ...t, muted: undefined } : t)) : undefined
-  const parsed = parseProject(tracks ? { ...(client as Record<string, unknown>), tracks } : client)
+  const audio = isRecord(client) && isRecord(client.audioTrack) ? { audioTrack: { ...client.audioTrack, muted: undefined } } : {}
+  const parsed = parseProject(tracks ? { ...(client as Record<string, unknown>), tracks, ...audio } : client)
+
   if (!parsed) return null
   const clips = allClips(parsed)
   if (clips.length > MAX_CLIPS) return null
