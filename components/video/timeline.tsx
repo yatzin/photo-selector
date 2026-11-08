@@ -1623,12 +1623,9 @@ export function Timeline({
               return r.ok ? r.project : p
             })
           }}
-          onClose={() => {
-            const id = lengthClip.id
-            setLengthFor(null)
-            // The dialog unmounts at once, so focus goes back to the clip here, after it's gone.
-            setTimeout(() => clipEl(id)?.focus({ preventScroll: true }), 0)
-          }}
+          onClose={() => setLengthFor(null)}
+          // The dialog hands the focus back as it closes: to what opened it, else the clip.
+          returnFocus={() => clipEl(lengthClip.id)}
         />
       )}
       {rowCount >= 3 && (

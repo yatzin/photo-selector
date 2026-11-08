@@ -45,6 +45,16 @@ export function useEditorDialog(onClose: () => void): EditorDialogState {
   return { open, close, onOpenChangeComplete }
 }
 
+/** The element marked data-initial-focus, else the body's first control (not the header's Close). */
+function firstFocus(): HTMLElement | true {
+  const popup = document.querySelector("[data-editor-dialog]")
+  return (
+    popup?.querySelector<HTMLElement>("[data-initial-focus]") ??
+    popup?.querySelector<HTMLElement>("[data-dialog-body] :is(input:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex='0'])") ??
+    true
+  )
+}
+
 const SIZES = {
   sm: "sm:max-w-[28rem]",
   md: "sm:max-w-[36rem]",
@@ -90,7 +100,7 @@ export function EditorDialog({ state, icon: Icon, title, subtitle, size = "md", 
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop className="editor-dialog-backdrop fixed inset-0 z-50 bg-black/35 supports-backdrop-filter:backdrop-blur-[2px] dark:bg-black/60" />
         <DialogPrimitive.Popup
-          initialFocus={initialFocus ?? (() => document.querySelector<HTMLElement>("[data-editor-dialog] [data-initial-focus]") ?? true)}
+          initialFocus={initialFocus ?? firstFocus}
           finalFocus={finalFocus}
           data-editor-dialog
           className={cn(

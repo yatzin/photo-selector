@@ -69,7 +69,7 @@ export function ScrubLabel({ htmlFor, id, children, value, step, min, max, disab
   )
 }
 
-export function NumberField({ id, label, value, onChange, unit, step, min, max, disabled, disabledReason, error, hint, linked, scrub = true, autoFocus, inputRef, className, inputClassName, onEnter }: {
+export function NumberField({ id, label, value, onChange, unit, step, min, max, disabled, disabledReason, error, hint, linked, scrub = true, autoFocus, initialFocus, inputRef, className, inputClassName, onEnter }: {
   id: string
   label: string
   /** The field's text. */
@@ -88,6 +88,8 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
   linked?: string
   scrub?: boolean
   autoFocus?: boolean
+  /** The dialog's first focus. */
+  initialFocus?: boolean
   inputRef?: Ref<HTMLInputElement>
   className?: string
   inputClassName?: string
@@ -164,6 +166,7 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
             autoComplete="off"
             spellCheck={false}
             autoFocus={autoFocus}
+            data-initial-focus={initialFocus || undefined}
             value={value}
             disabled={disabled}
             aria-invalid={error && !disabled ? true : undefined}
