@@ -3,7 +3,7 @@ import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
-import { audioLevelFilters } from "./audio-levels"
+import { audioLevelFilters, type ClipAudio } from "./audio-levels"
 import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
@@ -53,6 +53,19 @@ const num = (n: number) => String(Number(n.toFixed(3)))
 /** A transform fraction: six decimals keep the placement well under a pixel. */
 const frac = (n: number) => String(Number(n.toFixed(6)))
 const signed = (n: number) => `${n < 0 ? "-" : "+"}${frac(Math.abs(n))}`
+
+/**
+ * A clip's sound as the export takes it: cut from its source [from, to),
+ * at 48 kHz stereo, then through its audio levels (gain, then its effects in
+ * order) and cut back to `length` s, so an echo's or a reverb's tail doesn't
+ * run on. Ends with a comma, ready for the next filter. The Audio levels
+ * dialog's rendered preview (audio-preview-server) runs the same chain.
+ */
+export function clipSoundChain(from: number, to: number, audio: ClipAudio | undefined, length = to - from): string {
+  const levelFilters = audioLevelFilters(audio)
+  const levels = levelFilters.length > 0 ? `${levelFilters.join(",")},atrim=end=${num(length)},` : ""
+  return `atrim=${num(from)}:${num(to)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${levels}`
+}
 
 /**
  * The overlay filter's x and y for a clip's picture (ffmpeg expressions in W,
@@ -396,7 +409,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const levelFilters = audioLevelFilters(c.audio)
     const levels = (length: number) => (levelFilters.length > 0 ? `${levelFilters.join(",")},atrim=end=${num(length)},` : "")
     if (!a.head && !a.tail) {
-      parts.push(`[${i}:a]atrim=${num(c.in - a.pre)}:${num(c.out + a.post)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,${levels(clipLength(c) + a.pre + a.post)}${fades}${delay}`)
+      parts.push(`[${i}:a]${clipSoundChain(c.in - a.pre, c.out + a.post, c.audio, clipLength(c) + a.pre + a.post)}${fades}${delay}`)
       mix.push(`[a${i}]`)
       return
     }
@@ -706,16 +719,19 @@ export const exportTimeoutMs = (totalSeconds: number) => (4 * totalSeconds + 300
 /**
  * Runs ffmpeg writing to `outFile`. On failure (or timeout) kills the process,
  * removes `outFile` once ffmpeg has let go of it, and rejects with ffmpeg's
- * last stderr line. Always settles, even if removing the file fails.
+ * last stderr line. Always settles, even if removing the file fails. An
+ * aborted `signal` kills it the same way ("Cancelled.").
  */
 export function runExport(
   args: string[],
   outFile: string,
   totalSeconds: number,
   onProgress: (fraction: number) => void,
-  timeoutMs: number = exportTimeoutMs(totalSeconds)
+  timeoutMs: number = exportTimeoutMs(totalSeconds),
+  signal?: AbortSignal
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("Cancelled."))
     const child = spawn(ffmpeg(), args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
     let lastErr = ""
     let buffered = ""
@@ -737,6 +753,9 @@ export function runExport(
       }
     }
     const timer = setTimeout(() => fail("The export timed out."), timeoutMs)
+    const cancel = () => fail("Cancelled.")
+    signal?.addEventListener("abort", cancel, { once: true })
+    child.once("close", () => signal?.removeEventListener("abort", cancel))
     child.stdout.on("data", (chunk: Buffer) => {
       buffered += chunk.toString()
       const lines = buffered.split(/\r?\n/)
