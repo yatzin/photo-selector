@@ -355,11 +355,14 @@ Not while the project is exporting, or while that file is being imported.
   transitions, each playing a small sample (Fade: Crossfade, Fade through
   black, Fade through white; Wipe left, right, up and down; Slide left, right,
   up and down; Shape: Circle open, Circle close, Radial; Effect: Pixelate,
-  Dissolve, Zoom in, Blur), **None** to take it off, and the duration in
-  seconds. Beside the grid (below it on a narrow window) a muted loop plays
-  the two real clips across the cut with the chosen transition and duration,
-  from up to 2 s before it to up to 2 s after, with a play/pause button and a
-  bar marking where the transition sits; under it, what the transition does,
+  Dissolve, Zoom in, Blur; Creative: Collage, Exchange, Page turn, Reveal,
+  Heart; Glitch and whip: Glitch, Glitch reveal, Whip left, right, up and
+  down), **None** to take it off, and the duration in seconds. Beside the
+  grid (below it on a narrow window) a loop plays the two real clips across
+  the cut with the chosen transition and duration, and their sound (mixed as
+  the export mixes it; the speaker button mutes it), from up to 2 s before it
+  to up to 2 s after, with a play/pause button and a bar marking where the
+  transition sits; under it, what the transition does,
   what it's best for and when to avoid it. With reduced motion the loop
   starts paused on the cut. Below them is the **Audio overlap** (see J-cuts
   and L-cuts). Apply (or Remove) is one undo step for both; the arrow keys
@@ -367,32 +370,52 @@ Not while the project is exporting, or while that file is being imported.
   open. As in Premiere and DaVinci Resolve, the transition is centred on
   the cut: clips keep their places and the timeline its length, and over the
   duration the first clip plays half of it past its end and the second half
-  of it before its start, using the footage beyond the trimmed range. So the
-  longest a transition can be is twice the spare footage on the shorter side,
-  no longer than either clip and at most 5 s; a video trimmed right to the
-  start or end of its file has none, and the box says to trim the clip
-  shorter first (there's no "hold the last frame" fallback). Images and text
-  have as much as they need. On the timeline a transition is an amber block
+  of it before its start, using the footage beyond the trimmed range. A clip
+  without that much footage is trimmed automatically: the first clip's end
+  moves earlier, or the second clip's start later, by what's missing, and
+  every later clip on that layer moves back by the trims so the two still
+  touch (other layers stay put). The box says what Apply will trim ("Applying
+  trims 0.4 s from the end of a.mp4 and 0.3 s from the start of b.mp4; later
+  clips on this layer move 0.7 s earlier."), and Apply and its trims are one
+  undo step. A shorter transition later doesn't give the trims back. The
+  longest a transition can be is 10 s, as long as each clip, after its trim,
+  still holds its half beside its other cut and stays at least 0.2 s long;
+  the box shows it ("Longest possible: 3.2 s (the second clip is only 1.6 s
+  long)"). Images and text have footage enough and are never trimmed. On the
+  timeline a transition is an amber block
   across the cut, half over each clip; click it to change it. The sound
   crossfades over the same time (equal power). The preview draws pixelate and
   blur as a blurred crossfade and dissolve as a plain crossfade; the export
-  draws each exactly.
+  draws each exactly. The Creative and Glitch and whip transitions are the
+  app's own: Collage breaks the first clip into squares that shrink and swipe
+  away one after another; Exchange shrinks it to a card that swaps with the
+  next clip's card, which then grows; Page turn folds it away from the right
+  edge, the page's plain back and a soft shadow showing; Reveal splits it
+  down the middle and slides the halves apart; Heart opens the next clip in a
+  growing heart; Glitch splits the colours, shifts strips and flashes noise
+  blocks, switching clips at the peak; Glitch reveal swaps the picture strip
+  by strip with jittering split colours; a Whip moves both clips together
+  fast, with motion blur at the peak. The preview and the export follow the
+  same motion; the page fold is straight, and the whip's blur and the glitch's
+  colour split can look a little different in the preview.
 - **J-cuts and L-cuts.** In the same box, **Audio overlap** lets the sound
   run across the cut while the picture cuts where it did: a **J-cut** starts
   the next clip's sound early (you hear the next scene while still seeing
   this one), an **L-cut** keeps the previous clip's sound going over the next
   picture. Pick None, J-cut or L-cut and the overlap in seconds. A J-cut needs
-  the next clip to be a video with sound and footage before its start; an
-  L-cut needs the previous clip to be a video with sound and footage after
-  its end. Either is at most 5 s and half the clip it plays over; otherwise
-  the option is greyed out with the reason. A muted clip keeps the setting
+  the next clip to be a video with sound, an L-cut the previous clip; a clip
+  without the footage before its start (J) or after its end (L) is trimmed
+  for it as for a transition, and the box says so. Either is at most 10 s and
+  as long as the clip it plays over, beside its other cut; with no sound the
+  option is greyed out with the reason. A muted clip keeps the setting
   but stays silent. Through the overlap both sounds play mixed at full volume
   (no ducking), with a 0.15 s linear fade at the new edge so it never clicks.
   With a transition on the same cut the pictures still blend, but the sound
   follows the J or L instead of crossfading. On the timeline an overlap is a
   thin teal band along the bottom of the clip it plays over, beside the cut
   ("J-cut 1 s" on hover), and the cut's circle shows as set. The loop in the
-  box is muted and marks the overlap on its bar (J or L).
+  box plays the overlap's sound and marks it on its bar, labelled under it
+  ("Audio starts early (J-cut, 1 s)").
 - **Linked clips.** Clips joined by transitions or audio overlaps move
   together or not at all. Dragging one away springs it back with a red X and
   a notice, with **Unlink this clip** (takes the transitions and audio
@@ -450,7 +473,13 @@ on a text of more than 100 characters reveals it in 100 equal steps of a few
 characters each, in the preview too.
 Transitions use ffmpeg's xfade: each clip of a chain joined by transitions is
 played half a transition past its cut, put on a transparent frame of its own,
-and joined to the next at the start of their transition.
+and joined to the next at the start of their transition. The app's own
+transitions use xfade's custom expression, worked out per pixel on RGB
+frames, with the motion for each frame of the transition worked out in
+advance from the same functions the preview uses; whips add ffmpeg's gblur
+in three steps. They cost more than the built-in ones: a 2 s one at 1080p
+takes roughly 15 to 35 s to export on a 12-thread machine (a whole 1080p
+video exports in about real time otherwise).
 A J-cut or L-cut only moves sound: the next clip's sound is read from its
 overlap before its in point and delayed to start that much earlier, or the
 previous clip's is read on past its out point, each with a short fade at the
@@ -460,8 +489,8 @@ new edge, and mixed with the rest.
 - No audio import yet. Text has no size box (use the corner handles) and no
   outline or shadow.
 - Transitions and audio overlaps only between clips that touch on one
-  layer, and only with spare footage beyond the cut. The overlap's sound
-  isn't ducked under the other clip's.
+  layer; a clip short of footage is trimmed for them (no "hold the last
+  frame" fallback). The overlap's sound isn't ducked under the other clip's.
 - Preview plays the files in your browser. A clip the browser can't decode
   (some iPhone HEVC) shows a message in the preview but still exports.
 
