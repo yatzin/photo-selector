@@ -1,9 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
+import { ArrowDownToLine, ArrowRightToLine, Type } from "lucide-react"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
 import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
@@ -11,77 +10,90 @@ import { ANIM_GROUPS } from "@/lib/video/text-animation"
 import { previewBackdrop } from "@/lib/video/text-colours"
 import { cn } from "@/lib/utils"
 import { FontPicker } from "./font-picker"
+import { Callout } from "./ui/callout"
+import { CancelButton, DialogFooter, DialogSection, EditorDialog, PrimaryButton, useEditorDialog } from "./ui/editor-dialog"
+import { NumberField } from "./ui/number-field"
+import { Segmented } from "./ui/segmented"
 
 // A text clip's "Edit text...": the content (new lines where you press
 // Enter; nothing wraps), its colour, whether the letters run across or
-// stack down, and its font (components/video/font-picker: 50 fonts filtered
-// by mood, each name drawn in its font as it scrolls into view; a sample
-// above shows the text in the chosen font and colour, on a dark or light
-// backdrop by whichever shows that colour better, lib/video/text-colours).
-// Under Colour, a swatch for each colour other text clips in the project use
-// (usedColours, most used first) sets it in one click. An Animation tab (the clip menu's
-// "Animation..." opens on it) sets how the text comes in at the clip's start
-// and goes out at its end, each a type and a length in seconds; in and out
-// together longer than the clip are shortened to fit (lib/video/text
-// fitAnims), as a note says. Apply (or Ctrl/Cmd+Enter) is one edit of all of
-// it; Esc or Cancel leaves the text as it was. Its size is the canvas's
+// stack down, and its font (components/video/font-picker: 50 fonts in mood
+// groups, each name drawn in its font as it scrolls into view). The hero is
+// the text itself, drawn large in the chosen font and colour on a dark or
+// light backdrop by whichever shows that colour better (lib/video/text-colours).
+// Beside Colour, a swatch for each colour other text clips in the project use
+// (usedColours, most used first) sets it in one click. An Animation tab (the
+// clip menu's "Animation..." opens on it) sets how the text comes in at the
+// clip's start and goes out at its end, each a type and a length in seconds;
+// in and out together longer than the clip are shortened to fit (lib/video/text
+// fitAnims), as a note says. Save text (or Ctrl/Cmd+Enter) is one edit of all
+// of it; Esc or Cancel leaves the text as it was. Its size is the canvas's
 // corner handles, not set here.
 
 export type TextSection = "text" | "animation"
 
 const DEFAULT_ANIM_SECONDS = 1
 
+const animLabel = (type: AnimType, kind: "in" | "out") => {
+  for (const g of ANIM_GROUPS) for (const t of g.types) if (t.type === type) return kind === "out" ? (t.out ?? t.label) : t.label
+  return type
+}
+
 /** One end's animation: a type (or none) and its length as typed. */
-function AnimField({ id, label, kind, type, seconds, max, autoFocus, onType, onSeconds }: {
+function AnimCard({ id, kind, type, seconds, max, error, onType, onSeconds }: {
   id: string
-  label: string
   kind: "in" | "out"
   type: AnimType | "none"
   seconds: string
   max: number
-  autoFocus?: boolean
+  error: string | null
   onType: (type: AnimType | "none") => void
   onSeconds: (seconds: string) => void
 }) {
+  const Icon = kind === "in" ? ArrowRightToLine : ArrowDownToLine
   return (
-    <fieldset className="grid gap-2 rounded-lg border border-input p-3">
-      <legend className="px-1 text-sm font-medium">{label}</legend>
-      <div className="grid grid-cols-[1fr_7rem] gap-3">
-        <div className="grid gap-1.5">
-          <Label htmlFor={`${id}-type`}>Animation</Label>
-          <select
-            id={`${id}-type`}
-            value={type}
-            autoFocus={autoFocus}
-            onChange={(e) => onType(e.target.value as AnimType | "none")}
-            className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
-          >
-            <option value="none">None</option>
-            {ANIM_GROUPS.map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.types.map((t) => (
-                  <option key={t.type} value={t.type}>{kind === "out" ? (t.out ?? t.label) : t.label}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor={`${id}-seconds`}>Seconds</Label>
-          <input
-            id={`${id}-seconds`}
-            type="number"
-            inputMode="decimal"
-            min={MIN_ANIM}
-            max={max}
-            step={0.1}
-            value={seconds}
-            disabled={type === "none"}
-            onChange={(e) => onSeconds(e.target.value)}
-            className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground disabled:opacity-50"
-          />
+    <fieldset className="grid content-start gap-3 rounded-xl border border-border p-3.5" data-anim={kind}>
+      <legend className="sr-only">{kind === "in" ? "In" : "Out"}</legend>
+      <div className="flex items-center gap-2.5" aria-hidden>
+        <span className="flex size-7 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className={cn("size-4", kind === "out" && "-rotate-90")} /></span>
+        <div className="grid leading-tight">
+          <span className="text-[13px] font-semibold">{kind === "in" ? "In" : "Out"}</span>
+          <span className="text-xs text-muted-foreground">{kind === "in" ? "Plays from the clip's start" : "Plays up to the clip's end"}</span>
         </div>
       </div>
+      <div className="grid gap-1.5">
+        <label htmlFor={`${id}-type`} className="field-label">Animation</label>
+        <Select value={type} onValueChange={(v) => onType((v ?? "none") as AnimType | "none")}>
+          <SelectTrigger id={`${id}-type`} className="h-9 w-full pointer-coarse:h-11" data-initial-focus={kind === "in" ? true : undefined}>
+            <SelectValue>{(v: AnimType | "none") => (v === "none" ? "None" : animLabel(v, kind))}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None</SelectItem>
+            {ANIM_GROUPS.map((g) => (
+              <SelectGroup key={g.label}>
+                <SelectLabel>{g.label}</SelectLabel>
+                {g.types.map((t) => (
+                  <SelectItem key={t.type} value={t.type}>{kind === "out" ? (t.out ?? t.label) : t.label}</SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <NumberField
+        id={`${id}-seconds`}
+        label="Length"
+        unit="s"
+        step={0.1}
+        min={MIN_ANIM}
+        max={max}
+        value={seconds}
+        onChange={onSeconds}
+        disabled={type === "none"}
+        disabledReason="Pick an animation to set its length."
+        error={error}
+        hint={`From ${MIN_ANIM} s up to the clip's ${max.toFixed(1)} s.`}
+      />
     </fieldset>
   )
 }
@@ -97,6 +109,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
   onApply: (text: ClipText) => void
   onClose: () => void
 }) {
+  const dialog = useEditorDialog(onClose)
   const [content, setContent] = useState(text.content)
   const [color, setColor] = useState(text.color)
   const [orientation, setOrientation] = useState<TextOrientation>(text.orientation)
@@ -119,7 +132,6 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
   const typed = animIn !== null && animOut !== null ? normalizeText({ content, color, orientation, font, animIn, animOut }) : null
   const next = typed && fitAnims(typed, length)
   const error = content.trim() === "" ? "Enter some text." : content.length > MAX_TEXT ? `At most ${MAX_TEXT} characters.` : null
-  const animError = animIn === null || animOut === null ? "Enter each length in seconds." : null
   // Longer than the clip, or in and out together longer: what they'll be shortened to.
   const tooLong = (type: AnimType | "none", seconds: string) => type !== "none" && Number(seconds) > length
   const fitNote = !next
@@ -131,175 +143,157 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
         : null
 
   const backdrop = previewBackdrop(color)
+  const fontName = fontById(font).name
 
   function apply() {
     if (!next) return
-    onApply(next)
-    onClose()
+    dialog.close(() => onApply(next))
   }
 
-  const tabButton = (id: TextSection, label: string) => (
-    <button
-      type="button"
-      role="tab"
-      id={`edit-text-tab-${id}`}
-      aria-selected={tab === id}
-      aria-controls={`edit-text-panel-${id}`}
-      tabIndex={tab === id ? 0 : -1}
-      onClick={() => setTab(id)}
-      onKeyDown={(e) => {
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
-        e.preventDefault()
-        const to = id === "text" ? "animation" : "text"
-        setTab(to)
-        document.getElementById(`edit-text-tab-${to}`)?.focus()
-      }}
-      className={cn(
-        "rounded-md px-3 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        tab === id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-      )}
-    >
-      {label}
-      {id === "animation" && (inType !== "none" || outType !== "none") && <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-editor-accent align-middle" />}
-    </button>
-  )
+  const blocked = next ? null : error ? (tab === "text" ? error : `Text: ${error}`) : "Enter each animation's length in seconds."
+  const summary = (() => {
+    const parts = [
+      ...(inType !== "none" && animIn ? [`in with ${animLabel(inType, "in")} (${animIn.duration} s)`] : []),
+      ...(outType !== "none" && animOut ? [`out with ${animLabel(outType, "out")} (${animOut.duration} s)`] : []),
+    ]
+    return parts.length ? `Comes ${parts.join(", goes ")}` : null
+  })()
+  const lines = content.split("\n")
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl" finalFocus={false}>
-        <DialogHeader>
-          <DialogTitle>Edit text</DialogTitle>
-          <DialogDescription>
-            {tab === "text"
-              ? "Press Enter for a new line. Resize it with the corner handles on the preview."
-              : "In plays from the clip's start, out up to its end. Move the playhead to see them."}
-          </DialogDescription>
-        </DialogHeader>
-        <div role="tablist" aria-label="Edit text" className="flex w-fit gap-1 rounded-lg bg-muted p-1">
-          {tabButton("text", "Text")}
-          {tabButton("animation", "Animation")}
+    <EditorDialog
+      state={dialog}
+      icon={Type}
+      title="Edit text"
+      subtitle={`“${text.content.replace(/\s+/g, " ").slice(0, 60)}”, a ${length.toFixed(1)} s text clip`}
+      size="lg"
+      onSubmit={apply}
+      footer={
+        <DialogFooter summary={summary}>
+          <CancelButton state={dialog} />
+          <PrimaryButton disabledReason={blocked}>Save text</PrimaryButton>
+        </DialogFooter>
+      }
+    >
+      <div className="grid gap-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Segmented
+            label="Edit text"
+            tabs
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: "text", label: "Text", id: "edit-text-tab-text", controls: "edit-text-panel-text" },
+              { value: "animation", label: "Animation", id: "edit-text-tab-animation", controls: "edit-text-panel-animation", marker: inType !== "none" || outType !== "none" },
+            ]}
+          />
+          <p className="text-xs text-muted-foreground">Resize it with the corner handles on the canvas.</p>
         </div>
-        <form
-          className="grid gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            apply()
-          }}
+        {/* The hero: the text as it will look. */}
+        <div
+          aria-hidden
+          className="relative flex h-36 items-center justify-center overflow-hidden rounded-xl px-6 ring-1 ring-black/10 ring-inset motion-safe:transition-colors motion-safe:duration-200 dark:ring-white/10 sm:h-44"
+          style={{ backgroundColor: backdrop.background }}
+          data-text-sample
         >
-          <div role="tabpanel" id="edit-text-panel-animation" aria-labelledby="edit-text-tab-animation" hidden={tab !== "animation"} className="grid gap-3">
-            <AnimField
-              id="edit-text-in"
-              label="In"
-              kind="in"
-              type={inType}
-              seconds={inSeconds}
-              max={length}
-              autoFocus={section === "animation"}
-              onType={setInType}
-              onSeconds={setInSeconds}
-            />
-            <AnimField
-              id="edit-text-out"
-              label="Out"
-              kind="out"
-              type={outType}
-              seconds={outSeconds}
-              max={length}
-              onType={setOutType}
-              onSeconds={setOutSeconds}
-            />
-            {animError && <p className="text-xs text-destructive">{animError}</p>}
-            {fitNote && <p role="status" className="text-xs text-muted-foreground">{fitNote}</p>}
+          <div
+            className={cn("max-w-full text-center leading-[1.05] whitespace-pre", orientation === "vertical" && "[writing-mode:vertical-rl] [text-orientation:upright]")}
+            style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, fontSize: `clamp(20px, ${Math.max(18, 44 - Math.max(0, Math.max(...lines.map((l) => l.length)) - 12) * 1.2)}px, 44px)` }}
+          >
+            {content || " "}
           </div>
-          <div role="tabpanel" id="edit-text-panel-text" aria-labelledby="edit-text-tab-text" hidden={tab !== "text"} className="grid gap-4">
-            <div className="grid gap-1.5">
-              <Label htmlFor="edit-text-content">Text</Label>
-              <Textarea
-                id="edit-text-content"
-                value={content}
-                autoFocus={section === "text"}
-                rows={3}
-                maxLength={MAX_TEXT}
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? "edit-text-content-error" : undefined}
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setContent(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault()
-                    apply()
-                  }
-                }}
-                className="max-h-48"
-              />
-              {error && <p id="edit-text-content-error" className="text-xs text-destructive">{error}</p>}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+          <span className="absolute bottom-2 left-3 rounded-md bg-black/45 px-1.5 py-0.5 text-[11px] text-white/90 backdrop-blur-sm">{fontName}</span>
+        </div>
+
+        <div role="tabpanel" id="edit-text-panel-text" aria-labelledby="edit-text-tab-text" hidden={tab !== "text"} className="grid gap-5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="grid content-start gap-5">
+            <DialogSection title="Words" id="edit-text-words">
               <div className="grid gap-1.5">
-                <Label htmlFor="edit-text-color">Colour</Label>
-                <input
-                  id="edit-text-color"
-                  type="color"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  className="h-9 w-full cursor-pointer rounded-lg border border-input bg-background px-1"
+                <label htmlFor="edit-text-content" className="sr-only">Text</label>
+                <Textarea
+                  id="edit-text-content"
+                  value={content}
+                  data-initial-focus={section === "text" ? true : undefined}
+                  rows={3}
+                  maxLength={MAX_TEXT}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby="edit-text-content-note"
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => setContent(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault()
+                      apply()
+                    }
+                  }}
+                  className="max-h-40 min-h-20 resize-y text-[15px]"
                 />
+                <p id="edit-text-content-note" className={cn("flex justify-between gap-2 text-xs", error ? "text-destructive" : "text-muted-foreground")}>
+                  <span>{error ?? "Enter starts a new line; Ctrl+Enter saves."}</span>
+                  <span className="tabular-nums">{content.length}/{MAX_TEXT}</span>
+                </p>
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="edit-text-orientation">Direction</Label>
-                <select
-                  id="edit-text-orientation"
-                  value={orientation}
-                  onChange={(e) => setOrientation(e.target.value as TextOrientation)}
-                  className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
-                >
-                  <option value="horizontal">Horizontal</option>
-                  <option value="vertical">Vertical (stacked letters)</option>
-                </select>
+            </DialogSection>
+            <DialogSection title="Colour" id="edit-text-colour">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-background pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
+                  <span aria-hidden className="size-7 rounded-md ring-1 ring-black/15 ring-inset dark:ring-white/20" style={{ backgroundColor: color }} />
+                  <span className="text-sm font-medium tabular-nums uppercase">{color}</span>
+                  <input id="edit-text-color" type="color" aria-label="Text colour" value={color} onChange={(e) => setColor(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
+                </label>
+                {usedColours.length > 0 && (
+                  <div role="group" aria-label="Colours in other texts" className="flex flex-wrap items-center gap-1.5">
+                    <span className="mr-0.5 text-xs text-muted-foreground">In other texts</span>
+                    {usedColours.map((c) => {
+                      const hex = c.toUpperCase()
+                      const on = color.toLowerCase() === c.toLowerCase()
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          title={hex}
+                          aria-label={`Use colour ${hex}`}
+                          aria-pressed={on}
+                          onClick={() => setColor(c.toLowerCase())}
+                          className={cn(
+                            "size-7 rounded-full ring-1 ring-black/20 ring-inset outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:ring-white/25 pointer-coarse:size-11",
+                            on && "outline-2 outline-offset-2 outline-editor-accent"
+                          )}
+                          style={{ backgroundColor: c }}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-              {usedColours.length > 0 && (
-                <div role="group" aria-label="Colours in other texts" className="col-span-2 flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-muted-foreground">In other texts</span>
-                  {usedColours.map((c) => {
-                    const hex = c.toUpperCase()
-                    const on = color.toLowerCase() === c.toLowerCase()
-                    return (
-                      <button
-                        key={c}
-                        type="button"
-                        title={hex}
-                        aria-label={`Use colour ${hex}`}
-                        aria-pressed={on}
-                        onClick={() => setColor(c.toLowerCase())}
-                        className={cn(
-                          "h-6 w-6 rounded-full border border-foreground/30 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-4 focus-visible:outline-ring",
-                          on && "ring-2 ring-foreground ring-offset-2 ring-offset-background"
-                        )}
-                        style={{ backgroundColor: c }}
-                      />
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-            <div className="grid gap-1.5">
-              <Label id="edit-text-font-label">Font</Label>
-              <div
-                aria-hidden
-                className="flex h-16 items-center justify-center overflow-hidden rounded-lg border border-input px-3 text-[32px] leading-none whitespace-pre motion-safe:transition-colors motion-safe:duration-200"
-                style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, backgroundColor: backdrop.background }}
-              >
-                {content.split("\n")[0] || " "}
-              </div>
-              <FontPicker font={font} labelledBy="edit-text-font-label" onChange={setFont} />
-            </div>
+            </DialogSection>
+            <DialogSection title="Direction" id="edit-text-direction">
+              <Segmented
+                label="Direction"
+                value={orientation}
+                onChange={setOrientation}
+                options={[
+                  { value: "horizontal", label: "Horizontal" },
+                  { value: "vertical", label: "Vertical (stacked)" },
+                ]}
+                className="w-full sm:w-auto"
+              />
+            </DialogSection>
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!next}>Apply</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          <DialogSection title="Font" id="edit-text-font">
+            <FontPicker font={font} onChange={setFont} />
+          </DialogSection>
+        </div>
+
+        <div role="tabpanel" id="edit-text-panel-animation" aria-labelledby="edit-text-tab-animation" hidden={tab !== "animation"} className="grid gap-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
+          <p className="text-xs text-muted-foreground">In plays from the clip&apos;s start, Out up to its end. Move the playhead over the clip to see them.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <AnimCard id="edit-text-in" kind="in" type={inType} seconds={inSeconds} max={length} error={animIn === null ? "Enter a length in seconds." : null} onType={setInType} onSeconds={setInSeconds} />
+            <AnimCard id="edit-text-out" kind="out" type={outType} seconds={outSeconds} max={length} error={animOut === null ? "Enter a length in seconds." : null} onType={setOutType} onSeconds={setOutSeconds} />
+          </div>
+          {fitNote && <Callout tone="info" live>{fitNote}</Callout>}
+        </div>
+      </div>
+    </EditorDialog>
   )
 }
