@@ -10,6 +10,9 @@ import { textSize, type ClipText } from "./text"
 import { animationState } from "./text-animation"
 import { rasteriseText } from "./text-raster-server"
 import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
+import { whipBlurStages, WHIP_BLUR } from "./transition-fx"
+import { CUSTOM_TRANSITIONS, isCustomTransition, TRANSITION_TYPES, type CustomTransition } from "./transition-types"
+import { setTransition } from "./transitions"
 
 describe("parseProbe", () => {
   it("reads duration and audio", () => {
@@ -580,6 +583,40 @@ describe("buildExportArgs with transitions", () => {
     const clips: Clip[] = [{ id: "a", asset: "i", in: 0, out: 4, start: 0 }, { id: "b", asset: "j", in: 0, out: 4, start: 4 }]
     // No transition and no transform: the old concat graph, untouched.
     expect(graph(buildExportArgs(project(clips), xFiles, "o"))).toMatch(/concat=n=2:v=1:a=1\[v\]\[a\]$/)
+  })
+
+  it("draws the app's own transitions with xfade's custom expression on planar RGB, timed like the others", () => {
+    for (const type of CUSTOM_TRANSITIONS) {
+      const g = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0 }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: { type, duration: 2 } }]), xFiles, "o"))
+      expect(g).toContain("[ts0]format=gbrap[ga1];[ts1]format=gbrap[gb1];[ga1][gb1]xfade=transition=custom:duration=2:offset=2:expr='")
+      expect(g).toContain("',format=yuva420p")
+      expect(g).not.toContain(`transition=${type}`)
+      // The footage beyond the cut and the equal-power crossfade, as for any transition.
+      expect(g).toContain("[1:v]trim=1:5,")
+      expect(g).toContain("afade=t=in:st=0:d=2:curve=qsin")
+      // Expressions use only the frame's own variables and samplers.
+      const expr = /expr='([^']*)'/.exec(g)![1]
+      expect(expr.replace(/\b(if|eq|lt|gt|gte|min|clip|floor|abs|pow|sin|between|[ab][0-3]|PLANE|X|Y|W|H|P|A|B)\b/g, "")).toMatch(/^[\d.()+\-*/,]*$/)
+      const blur = g.match(/gblur=[^,;[]*/g) ?? []
+      expect(blur.length).toBe(type.startsWith("whip-") ? 3 : 0)
+    }
+  })
+
+  it("blurs a whip along its move only while it's fastest, in the joined stream's time", () => {
+    const g = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0 }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: { type: "whip-up", duration: 2 } }]), xFiles, "o"))
+    const stages = whipBlurStages()
+    expect(g).toContain(`gblur=sigma=0:sigmaV=${Number((stages[0].sigma * WHIP_BLUR * 1080).toFixed(6))}:enable='between(t,${Number((2 + 2 * stages[0].from).toFixed(6))},${Number((2 + 2 * stages[0].to).toFixed(6))})'`)
+    const h = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0 }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: { type: "whip-left", duration: 2 } }]), xFiles, "o"))
+    expect(h).toContain(`gblur=sigma=${Number((stages[2].sigma * WHIP_BLUR * 1920).toFixed(6))}:sigmaV=0:enable=`)
+  })
+
+  it("leaves a graph with only the eighteen xfade transitions as it was", () => {
+    const old = TRANSITION_TYPES.filter((t) => !isCustomTransition(t))
+    expect(old).toHaveLength(18)
+    const clips: Clip[] = old.map((type, k) => ({ id: `c${k}`, asset: k % 2 ? "v" : "w", in: 2, out: 4, start: 2 * k, ...(k > 0 ? { transition: { type, duration: 1 } } : {}) }))
+    const g = graph(buildExportArgs(project(clips), xFiles, "o"))
+    expect(g).not.toMatch(/gbrap|custom|gblur/)
+    for (const [k, type] of old.entries()) if (k > 0) expect(g).toContain(`xfade=transition=${type}:duration=1:offset=${2 * k - 0.5}[tx${k}]`)
   })
 })
 
@@ -1313,4 +1350,111 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
     expect(isBlue(await pixel(out, 3, 1440))).toBe(true)
     expect(isBlue(await pixel(out, 3.6, 100))).toBe(true)
   }, 60_000)
+
+  describe("the app's own transitions", () => {
+    // A 640x360 canvas keeps the per-pixel expressions quick. `half`: red on the left, blue on the right (the glitch's colour split shows at the seam).
+    const half = path.join(dir, "half.mp4")
+    beforeAll(async () => {
+      await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=160x180:r=30:d=6", "-f", "lavfi", "-i", "color=c=blue:s=160x180:r=30:d=6", "-filter_complex", "[0][1]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-y", half])
+    }, 60_000)
+    const W = 640
+    const H = 360
+    // Red (or the half and half) from source 1 to 4 at 0-3 s, blue from 1 to 4 at 3-6 s: a 1 s transition from 2.5 to 3.5 s.
+    async function renderCustom(type: CustomTransition, from = red) {
+      const p: Project = {
+        ...newProject("X"), width: W, height: H,
+        assets: { r: { file: "r", duration: 6, hasAudio: false }, b: { file: "b", duration: 6, hasAudio: true } },
+        tracks: [{ id: "t1", clips: [{ id: "1", asset: "r", in: 1, out: 4, start: 0 }, { id: "2", asset: "b", in: 1, out: 4, start: 3, transition: { type, duration: 1 } }] }],
+      }
+      const out = path.join(dir, `${type}.mp4`)
+      // The expressions are long: the graph goes in a file, as the export job writes it.
+      const script = path.join(dir, `${type}.graph.txt`)
+      fs.writeFileSync(script, buildExportGraph(p, { r: from, b: blue }).graph)
+      await runExport(buildExportArgs(p, { r: from, b: blue }, out, script), out, totalLength(p), () => {})
+      return out
+    }
+    /** The RGB of every pixel of the frame at `t`. */
+    async function frame(file: string, t: number): Promise<(x: number, y: number) => number[]> {
+      const raw = (await ffmpeg(["-ss", String(t), "-i", file, "-frames:v", "1", "-vf", "format=rgb24", "-f", "rawvideo", "-"])).stdout
+      return (x, y) => {
+        const i = (Math.round(y) * W + Math.round(x)) * 3
+        return [raw[i], raw[i + 1], raw[i + 2]]
+      }
+    }
+    const mixed = ([r, , b]: number[]) => r > 40 && b > 40
+    const colours = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
+
+    it.each(CUSTOM_TRANSITIONS.filter((t) => t !== "glitch"))("%s: the outgoing picture at the start, the incoming one at the end", async (type) => {
+      const out = await renderCustom(type)
+      const start = await frame(out, 2.5)
+      const end = await frame(out, 3.5)
+      for (const [x, y] of [[20, 20], [320, 180], [620, 340]] as const) {
+        expect(isRed(start(x, y))).toBe(true)
+        expect(isBlue(end(x, y))).toBe(true)
+      }
+      const mid = await frame(out, 3)
+      const grid: [number, number][] = []
+      for (let y = 20; y < H; y += 40) for (let x = 20; x < W; x += 40) grid.push([x, y])
+      const seen = colours(mid, grid)
+      // Every one is part way: some of the outgoing picture or something else still shows mid-way, and some of the incoming one.
+      if (!type.startsWith("whip")) expect(seen).toMatch(/B/)
+      if (type === "heart") {
+        expect(isBlue(mid(320, 180))).toBe(true)
+        expect(isRed(mid(5, 5))).toBe(true)
+      } else if (type === "reveal") {
+        expect(colours(mid, [[40, 180], [320, 180], [600, 180]])).toBe("ABA")
+      } else if (type.startsWith("whip")) {
+        // Half and half, smeared where they meet.
+        const seam = type === "whip-left" || type === "whip-right" ? mid(320, 180) : mid(320, 180)
+        expect(mixed(seam)).toBe(true)
+      } else if (type === "exchange") {
+        // The two cards side by side at the middle, black between them.
+        expect(isRed(mid(10, 180))).toBe(true)
+        expect(isBlue(mid(630, 180))).toBe(true)
+      } else if (type === "pageturn") {
+        expect(isRed(mid(40, 180))).toBe(true)
+        const paper = mid(240, 180)
+        expect(paper[0] > 180 && paper[1] > 180 && paper[2] > 180).toBe(true)
+        expect(isBlue(mid(600, 180))).toBe(true)
+      } else {
+        // collage and glitch reveal: some of each.
+        expect(seen).toMatch(/A/)
+      }
+    }, 60_000)
+
+    it("glitch: the colours split apart at the peak, a hard switch at the middle", async () => {
+      const out = await renderCustom("glitch", half)
+      expect(isRed((await frame(out, 2.5))(100, 180))).toBe(true)
+      // Just before the middle, red pulled right over the blue half and blue pulled left: magenta beside the seam on some row.
+      const near = await frame(out, 2.95)
+      const rows = [30, 90, 150, 210, 270, 330]
+      expect(rows.some((y) => { const [r, , b] = near(324, y); return r > 120 && b > 120 })).toBe(true)
+      expect(rows.some((y) => { const [r, , b] = near(316, y); return r > 120 && b > 120 })).toBe(true)
+      // After the middle, the incoming blue (split too, but blue on blue).
+      expect(isBlue((await frame(out, 3.1))(320, 30)) || isBlue((await frame(out, 3.1))(320, 330))).toBe(true)
+      expect(isBlue((await frame(out, 3.5))(320, 180))).toBe(true)
+    }, 60_000)
+
+    it("a 6 s transition between two clips with no footage beyond the cut trims them and exports at the shorter length", async () => {
+      const long = path.join(dir, "long-red.mp4")
+      const longBlue = path.join(dir, "long-blue.mp4")
+      for (const [file, colour] of [[long, "red"], [longBlue, "blue"]] as const) {
+        await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=160x90:r=30:d=12`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", file])
+      }
+      const p: Project = {
+        ...newProject("X"), width: W, height: H,
+        assets: { r: { file: "r", duration: 12, hasAudio: false }, b: { file: "b", duration: 12, hasAudio: false } },
+        tracks: [{ id: "t1", clips: [{ id: "1", asset: "r", in: 6, out: 12, start: 0 }, { id: "2", asset: "b", in: 0, out: 6, start: 6 }] }],
+      }
+      const q = setTransition(p, "2", { type: "fade", duration: 6 })
+      expect(q.tracks[0].clips[1].transition).toEqual({ type: "fade", duration: 6 })
+      // 3 s off each clip: 12 s becomes 6.
+      expect(totalLength(q)).toBe(6)
+      const out = path.join(dir, "trimmed.mp4")
+      await runExport(buildExportArgs(q, { r: long, b: longBlue }, out), out, totalLength(q), () => {})
+      expect(Math.abs((await probeMedia(out)).duration - 6)).toBeLessThan(0.15)
+      expect(isRed((await frame(out, 0.05))(320, 180))).toBe(true)
+      expect(isBlue((await frame(out, 5.9))(320, 180))).toBe(true)
+    }, 60_000)
+  })
 })

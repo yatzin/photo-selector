@@ -5,7 +5,8 @@ import { adjoins, allClips, clipLength, isContiguousFromZero, isStill, isTextCli
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
-import { CUT_AUDIO_FADE } from "./transition-types"
+import { customExpr, stepsFor, whipBlurFilters } from "./transition-expr"
+import { CUT_AUDIO_FADE, isCustomTransition } from "./transition-types"
 
 const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
 
@@ -223,7 +224,9 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
  * of a run is extended by half of each of its transitions (centred on the
  * cut: the footage past its out point, before its in point, a still's frame
  * held), placed on a transparent canvas of its own as above, and xfade joins
- * the canvases one after another (the type is xfade's own name), each at the
+ * the canvases one after another (the type is xfade's own name; the app's own
+ * transitions are xfade's custom expression on planar RGB, from
+ * lib/video/transition-expr, a whip's motion blur gblur after it), each at the
  * start of its transition, so the run keeps its clips' places and length;
  * the run is overlaid like one clip. The sounds overlap by the same spans,
  * fading out and in (equal power). A clip in no run is placed as before, so a
@@ -331,7 +334,16 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
         joined = `[ts${s.i}]`
         return
       }
-      parts.push(`${joined}[ts${s.i}]xfade=transition=${c.transition!.type}:duration=${num(c.transition!.duration)}:offset=${num(from - first.start)}[tx${s.i}]`)
+      const type = c.transition!.type
+      const timing = `duration=${num(c.transition!.duration)}:offset=${num(from - first.start)}`
+      if (isCustomTransition(type)) {
+        // The app's own transitions: xfade's custom expression on planar RGB (lib/video/transition-expr), a whip's blur after it.
+        const blur = whipBlurFilters(type, W, H, from - first.start, c.transition!.duration).map((f) => `,${f}`).join("")
+        parts.push(`${joined}format=gbrap[ga${s.i}]`, `[ts${s.i}]format=gbrap[gb${s.i}]`)
+        parts.push(`[ga${s.i}][gb${s.i}]xfade=transition=custom:${timing}:expr='${customExpr(type, W / H, stepsFor(c.transition!.duration, fps))}',format=yuva420p${blur}[tx${s.i}]`)
+      } else {
+        parts.push(`${joined}[ts${s.i}]xfade=transition=${type}:${timing}[tx${s.i}]`)
+      }
       joined = `[tx${s.i}]`
     })
     parts.push(`${joined}setpts=PTS+${num(first.start)}/TB[u${n}]`)

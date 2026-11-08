@@ -54,12 +54,15 @@ describe("exportFingerprint", () => {
   it("changes with a transition's type and length", () => {
     const p = project()
     const base = exportFingerprint(p)
-    const withTransition = (type: "fade" | "wipeleft", duration: number) =>
+    const withTransition = (type: "fade" | "wipeleft" | "heart" | "whip-up", duration: number) =>
       ({ ...p, tracks: [{ ...p.tracks[0], clips: [p.tracks[0].clips[0], { ...p.tracks[0].clips[1], transition: { type, duration } }] }, p.tracks[1]] })
     const fade = exportFingerprint(withTransition("fade", 1))
     expect(fade).not.toBe(base)
     expect(exportFingerprint(withTransition("wipeleft", 1))).not.toBe(fade)
     expect(exportFingerprint(withTransition("fade", 1.5))).not.toBe(fade)
+    // The app's own transitions too, each its own, and lengths past the old 5 s limit.
+    const heart = exportFingerprint(withTransition("heart", 1))
+    expect(new Set([fade, heart, exportFingerprint(withTransition("whip-up", 1)), exportFingerprint(withTransition("heart", 7.5))]).size).toBe(4)
   })
 
   it("changes with an audio overlap's mode and length, and not when there is none", () => {
