@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react"
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode, type RefObject } from "react"
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { X, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -55,6 +55,25 @@ function firstFocus(): HTMLElement | true {
   )
 }
 
+const TABBABLE = "button:not([disabled]), input:not([disabled]):not([type=hidden]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])"
+
+/** Tab and Shift+Tab wrap inside the dialog (the library's focus guards let focus out to the page here). */
+function trapTab(e: KeyboardEvent<HTMLElement>) {
+  if (e.key !== "Tab" || e.defaultPrevented) return
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => !el.closest("[hidden], [inert]") && el.getClientRects().length > 0 && el.tabIndex >= 0)
+  if (items.length === 0) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  const at = document.activeElement
+  if (e.shiftKey && (at === first || !e.currentTarget.contains(at))) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && at === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
 const SIZES = {
   sm: "sm:max-w-[28rem]",
   md: "sm:max-w-[36rem]",
@@ -103,6 +122,8 @@ export function EditorDialog({ state, icon: Icon, title, subtitle, size = "md", 
           initialFocus={initialFocus ?? firstFocus}
           finalFocus={finalFocus}
           data-editor-dialog
+          aria-modal="true"
+          onKeyDown={trapTab}
           className={cn(
             "editor-dialog fixed z-50 flex flex-col overflow-hidden bg-popover text-sm text-popover-foreground outline-none",
             // A bottom sheet on narrow screens; centred from 640 px.

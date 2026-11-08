@@ -636,6 +636,32 @@ Not while the project is exporting, or while that file is being imported.
 - The main navigation collapses to icons with the button at its bottom; the
   choice is remembered in this browser.
 
+**Dialogs.** Every dialog in the editor (Transition, Edit text, Edit length,
+Audio levels, New/Rename/Delete project, Delete from project) has the same
+layout: a header with an icon, the title and what's being edited ("Between
+Beach.mp4 and Sunset.mp4"); a body that scrolls on its own; and a footer that
+stays put, with Remove on the left, a line saying what Apply will do, Cancel
+and the main button named for its result (Apply transition, Save text, Apply
+length, Apply levels). Where there's a preview it comes first, in a dark
+monitor with the same transport everywhere (play, a bar with the transition or
+overlap marked, time, loop and mute where they apply). Choosers (transitions,
+fonts, effects) are tile grids with a search field and chips that jump to a
+group. On a window under 640 px wide a dialog opens as a sheet from the bottom.
+- Keyboard: focus starts on the main control (the chosen tile, the text, the
+  Length or dB field) and goes back to what opened the dialog when it closes.
+  Enter applies, Esc cancels (in a search field it clears the search first).
+  In a tile grid the arrow keys move by row and column, Home and End go to the
+  ends, PageUp and PageDown between groups, and typing a name jumps to it.
+  Number fields take Up and Down (Shift ten steps, Alt a tenth), and their
+  label can be dragged sideways to change the value (Shift for fine steps).
+- A button that can't be used yet says why when you point at it or focus it;
+  a field with a problem says so under itself, and Apply moves the focus to it.
+- Edit length's Source strip zooms: + and − at the wave's top right (or the +
+  − and 0 keys, or Ctrl + wheel) zoom in steps of 2x up to 32x or a 1 s view,
+  centred on the selection; Fit (or double-click on the 2× readout) shows the
+  whole file again. Zoomed, the wheel pans, as do dragging the time labels and
+  the overview bar under them, and dragging a handle to the strip's edge.
+
 **Export.** Renders an MP4 into `output/` on the server with ffmpeg, at
 1920x1080 and 30 fps, then your browser downloads it. `output/` keeps one
 copy: a finished export deletes the files there before it (subfolders are left
