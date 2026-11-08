@@ -67,9 +67,11 @@ describe("cutsOf", () => {
 })
 
 describe("transitionLimits", () => {
-  it("is twice the smaller handle, at most each clip's length and MAX_TRANSITION", () => {
-    // a has 14 s after its out, b 8 s before its in; the cap is 4 s (the clips' length).
-    expect(transitionLimits(sample(), "b")).toEqual({ max: 4, reason: "ok" })
+  it("is twice the smaller handle, each half at most its clip's length beside its other cut, and MAX_TRANSITION", () => {
+    // a has 14 s after its out, b 8 s before its in; each half fits in a 4 s clip: 8 s.
+    expect(transitionLimits(sample(), "b")).toEqual({ max: 8, reason: "ok" })
+    // A 3 s fade into c takes 1.5 s of b: a fade into b has 2.5 s of b for its half.
+    expect(transitionLimits(setTransition(sample(), "c", fade(3)), "b").max).toBe(5)
     const p = sample()
     // b's in at 8.3: 0.3 s of handle, so 0.6 s at most.
     p.tracks[0].clips[1] = { ...p.tracks[0].clips[1], in: 0.3, out: 4.3 }
@@ -93,24 +95,23 @@ describe("transitionLimits", () => {
       ...sample(),
       tracks: [{ id: "t1", clips: [{ id: "i1", asset: "i", in: 0, out: 3, start: 0 }, { id: "t", asset: "", in: 0, out: 2, start: 3, text: { content: "Hi", color: "#ffffff", orientation: "horizontal" } }] }],
     }
-    expect(transitionLimits(p, "t").max).toBe(2)
+    expect(transitionLimits(p, "t").max).toBe(4)
   })
 })
 
 describe("setTransition", () => {
   it("sets, clamps and removes", () => {
     const p = setTransition(sample(), "b", { type: "wipeleft", duration: 9 })
-    expect(clip(p, "b")?.transition).toEqual({ type: "wipeleft", duration: 4 })
+    expect(clip(p, "b")?.transition).toEqual({ type: "wipeleft", duration: 8 })
     expect(clip(setTransition(sample(), "b", { type: "fade", duration: 0.01 }), "b")?.transition?.duration).toBe(0.1)
     expect(clip(setTransition(p, "b", null), "b")?.transition).toBeUndefined()
   })
 
-  it("refuses a cut with nothing adjoining or no footage, or an unknown type", () => {
+  it("refuses a cut with nothing adjoining, or an unknown type", () => {
     const p = sample()
     expect(setTransition(p, "a", fade())).toBe(p)
     expect(setTransition(p, "b", { type: "spiral" as never, duration: 1 })).toBe(p)
-    p.tracks[0].clips[1] = { ...p.tracks[0].clips[1], in: 0, out: 4 }
-    expect(setTransition(p, "b", fade())).toBe(p)
+    expect(setTransition(p, "b", { type: "fade", duration: Number.NaN })).toBe(p)
   })
 
   it("is the same project when nothing changes", () => {
@@ -173,9 +174,9 @@ describe("edits keep or drop transitions", () => {
     expect(linkedChain(p, "c")).toEqual(["b2", "c"])
   })
 
-  it("splitting shortens a transition to a piece's length", () => {
+  it("splitting shortens a transition to twice a piece's length", () => {
     const p = splitClip(setTransition(sample(), "b", fade(4)), "b", 4.5, "b2")
-    expect(clip(p, "b")?.transition?.duration).toBe(0.5)
+    expect(clip(p, "b")?.transition?.duration).toBe(1)
   })
 
   it("deleting a clip takes its transitions, rippled on a snapped base too", () => {
@@ -196,10 +197,10 @@ describe("edits keep or drop transitions", () => {
 
   it("trimming an inner edge parts the clips; an outer edge re-clamps", () => {
     expect(clip(trimClip(chain(), "a", "out", 5), "b")?.transition).toBeUndefined()
-    // c's free right edge: a 3 s fade into c, then c trimmed to 1 s long.
+    // c's free right edge: a 3 s fade into c, then c trimmed to 1 s long: its half fits in 1 s.
     const p = setTransition(sample(), "c", fade(3))
     const q = trimClip(p, "c", "out", 15)
-    expect(clip(q, "c")?.transition?.duration).toBe(1)
+    expect(clip(q, "c")?.transition?.duration).toBe(2)
     // On a snapped base, c's left edge pulled back to its source's start: no handle left, so the fade goes.
     const r = trimClip(setTransition(setBaseMagnetic(sample(), true), "c", fade(3)), "c", "in", 0)
     expect(clip(r, "c")?.in).toBe(0)
@@ -225,7 +226,7 @@ describe("edits keep or drop transitions", () => {
     const p = chain()
     expect(setClipTiming(p, "c", { start: 9, length: 4 }, "push", () => "x")).toEqual({ ok: false, error: LINKED })
     const r = setClipTiming(setTransition(sample(), "c", fade(3)), "c", { start: 8, length: 1 }, "push", () => "x")
-    expect(r.ok && clip(r.project, "c")?.transition?.duration).toBe(1)
+    expect(r.ok && clip(r.project, "c")?.transition?.duration).toBe(2)
   })
 
   it("undo and redo bring transitions back with the tracks", () => {
@@ -248,10 +249,10 @@ describe("parse", () => {
   it("drops one whose clip has nothing adjoining it, and shortens an overlong one", () => {
     const p = sample()
     p.tracks[0].clips[3] = { ...p.tracks[0].clips[3], transition: fade() }
-    p.tracks[0].clips[1] = { ...p.tracks[0].clips[1], transition: fade(5) }
+    p.tracks[0].clips[1] = { ...p.tracks[0].clips[1], transition: fade(9) }
     const q = parseProject(json(p))!
     expect(clip(q, "d")?.transition).toBeUndefined()
-    expect(clip(q, "b")?.transition).toEqual(fade(4))
+    expect(clip(q, "b")?.transition).toEqual(fade(8))
   })
 
   it("refuses an unknown type or a duration out of range", () => {
@@ -262,7 +263,7 @@ describe("parse", () => {
     }
     expect(bad({ type: "spiral", duration: 1 })).toBeNull()
     expect(bad({ type: "fade", duration: 0.05 })).toBeNull()
-    expect(bad({ type: "fade", duration: 6 })).toBeNull()
+    expect(bad({ type: "fade", duration: 11 })).toBeNull()
     expect(bad({ type: "fade" })).toBeNull()
     expect(bad("fade")).toBeNull()
     expect(bad({ type: "fade", duration: 1 })).not.toBeNull()

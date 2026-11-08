@@ -223,32 +223,52 @@ export const ADJOIN_EPS = 0.001
 export const adjoins = (a: Clip | undefined, b: Clip | undefined) => a !== undefined && b !== undefined && Math.abs(clipEnd(a) - b.start) <= ADJOIN_EPS
 
 /** Spare footage (s) past a clip's out point: unlimited for a still, what the source has left for a video (0 when its asset is gone). */
-function tailHandle(p: Project, c: Clip): number {
+export function tailHandle(p: Project, c: Clip): number {
   if (isStill(p, c)) return Infinity
   const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
   return asset ? Math.max(0, asset.duration - c.out) : 0
 }
 
 /** Spare footage (s) before a clip's in point: unlimited for a still, its in point for a video. */
-const headHandle = (p: Project, c: Clip) => (isStill(p, c) ? Infinity : Math.max(0, c.in))
+export const headHandle = (p: Project, c: Clip) => (isStill(p, c) ? Infinity : Math.max(0, c.in))
 
 export type TransitionLimits = { max: number; reason: "ok" | "not-adjoining" | "no-footage" }
 
 /**
- * How long a transition into clip `clipId` from the clip before it may be.
- * The transition is centred on the cut, so the outgoing clip plays half of it
- * past its out point and the incoming one half before its in point, from the
- * footage beyond them (a still has any amount): the most is twice the smaller
- * of those two handles, at most each clip's own length (so two transitions on
- * one clip never meet) and at most MAX_TRANSITION, floored to the millisecond.
- * `max` is 0 with "not-adjoining" when nothing adjoins it (or the clip is
- * gone), and "no-footage" when the handles leave less than MIN_TRANSITION.
+ * How far the overlap at the cut into `clips[i]` (from the clip before it)
+ * reaches before the cut (`lead`, into the outgoing clip) and after it
+ * (`trail`, into the incoming one): half its transition, or its J-cut (lead)
+ * or L-cut (trail), the longer; 0 where nothing links the two.
+ */
+export function cutReach(clips: Clip[], i: number): { lead: number; trail: number } {
+  const c = clips[i]
+  if (!c || !linksBefore(c) || !adjoins(clips[i - 1], c)) return { lead: 0, trail: 0 }
+  const half = c.transition ? c.transition.duration / 2 : 0
+  const a = c.cutAudio
+  return { lead: Math.max(half, a?.mode === "j" ? a.duration : 0), trail: Math.max(half, a?.mode === "l" ? a.duration : 0) }
+}
+
+/**
+ * How long a transition into clip `clipId` from the clip before it may be
+ * with the footage the clips have now (transitionPlan in lib/video/transitions
+ * trims them to make room for a longer one). The transition is centred on the
+ * cut, so the outgoing clip plays half of it past its out point and the
+ * incoming one half before its in point, from the footage beyond them (a
+ * still has any amount): the most is twice the smaller of those two handles.
+ * Each half also has to fit in its clip beside what the clip's other cut
+ * takes of it (cutReach), so two cuts' windows never meet, and the whole is
+ * at most MAX_TRANSITION, floored to the millisecond. `max` is 0 with
+ * "not-adjoining" when nothing adjoins it (or the clip is gone), and
+ * "no-footage" when that leaves less than MIN_TRANSITION.
  */
 export function transitionLimits(p: Project, clipId: string): TransitionLimits {
   const at = find(p, clipId)
-  const prev = at ? p.tracks[at.track].clips[at.index - 1] : undefined
+  const clips = at ? p.tracks[at.track].clips : []
+  const prev = at ? clips[at.index - 1] : undefined
   if (!at || !adjoins(prev, at.clip)) return { max: 0, reason: "not-adjoining" }
-  const max = Math.floor(Math.min(MAX_TRANSITION, 2 * tailHandle(p, prev!), 2 * headHandle(p, at.clip), clipLength(prev!), clipLength(at.clip)) * 1000 + 1e-6) / 1000
+  const roomOut = clipLength(prev!) - cutReach(clips, at.index - 1).trail
+  const roomIn = clipLength(at.clip) - cutReach(clips, at.index + 1).lead
+  const max = Math.floor(Math.min(MAX_TRANSITION, 2 * tailHandle(p, prev!), 2 * headHandle(p, at.clip), 2 * roomOut, 2 * roomIn) * 1000 + 1e-6) / 1000
   return max < MIN_TRANSITION - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
 }
 
@@ -257,7 +277,7 @@ export type CutAudioReason = "ok" | "not-adjoining" | "no-audio" | "no-footage"
 export type CutAudioLimits = Record<CutAudio["mode"], { max: number; reason: CutAudioReason }>
 
 /** True for a clip whose sound a cut can lead or trail: a video whose file has sound (a muted one counts; it stays silent). */
-function hasSound(p: Project, c: Clip): boolean {
+export function hasSound(p: Project, c: Clip): boolean {
   if (isStill(p, c)) return false
   const asset = Object.hasOwn(p.assets, c.asset) ? p.assets[c.asset] : undefined
   return asset !== undefined && asset.hasAudio
@@ -269,20 +289,27 @@ function hasSound(p: Project, c: Clip): boolean {
  * its in point, so it needs a video with sound and footage there: at most its
  * in point. An L-cut plays the outgoing clip's sound past its out point: a
  * video with sound and footage after it. Either is at most MAX_CUT_AUDIO and
- * half the clip it overlaps (the outgoing one for J, the incoming one for L),
- * so two cuts' overlaps never meet and a J never reaches before 0; floored to
- * the millisecond. `max` is 0 with the reason when it can't be had.
+ * has to fit in the clip it overlaps (the outgoing one for J, the incoming
+ * one for L) beside what that clip's other cut takes of it (cutReach), so two
+ * cuts' overlaps never meet and a J never reaches before 0; floored to the
+ * millisecond. `max` is 0 with the reason when it can't be had. These are
+ * the limits with the footage the clips have now: cutAudioPlan (in
+ * lib/video/transitions) trims the clips to make room for a longer one.
  */
 export function cutAudioLimits(p: Project, clipId: string): CutAudioLimits {
   const at = find(p, clipId)
-  const prev = at ? p.tracks[at.track].clips[at.index - 1] : undefined
+  const clips = at ? p.tracks[at.track].clips : []
+  const prev = at ? clips[at.index - 1] : undefined
   if (!at || !prev || !adjoins(prev, at.clip)) return { j: { max: 0, reason: "not-adjoining" }, l: { max: 0, reason: "not-adjoining" } }
-  const limit = (sound: boolean, handle: number, overlapped: Clip): { max: number; reason: CutAudioReason } => {
+  const limit = (sound: boolean, handle: number, room: number): { max: number; reason: CutAudioReason } => {
     if (!sound) return { max: 0, reason: "no-audio" }
-    const max = Math.floor(Math.min(MAX_CUT_AUDIO, handle, clipLength(overlapped) / 2) * 1000 + 1e-6) / 1000
+    const max = Math.floor(Math.min(MAX_CUT_AUDIO, handle, room) * 1000 + 1e-6) / 1000
     return max < MIN_CUT_AUDIO - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
   }
-  return { j: limit(hasSound(p, at.clip), headHandle(p, at.clip), prev), l: limit(hasSound(p, prev), tailHandle(p, prev), at.clip) }
+  return {
+    j: limit(hasSound(p, at.clip), headHandle(p, at.clip), clipLength(prev) - cutReach(clips, at.index - 1).trail),
+    l: limit(hasSound(p, prev), tailHandle(p, prev), clipLength(at.clip) - cutReach(clips, at.index + 1).lead),
+  }
 }
 
 /** True when a clip has something at its cut from the clip before it (a transition or an audio overlap) that links the two. */

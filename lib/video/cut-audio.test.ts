@@ -40,16 +40,16 @@ const l = (duration = 1) => ({ mode: "l" as const, duration })
 const fade = (duration = 1) => ({ type: "fade" as const, duration })
 
 describe("cutAudioLimits", () => {
-  it("is the footage beyond the clip, at most half the clip it overlaps and MAX_CUT_AUDIO", () => {
-    // J into b: b's in point is 8, a is 4 s long: 2. L into b: a has 14 s past its out, b is 4 s long: 2.
-    expect(cutAudioLimits(sample(), "b")).toEqual({ j: { max: 2, reason: "ok" }, l: { max: 2, reason: "ok" } })
+  it("is the footage beyond the clip, at most the clip it overlaps and MAX_CUT_AUDIO", () => {
+    // J into b: b's in point is 8, a is 4 s long: 4. L into b: a has 14 s past its out, b is 4 s long: 4.
+    expect(cutAudioLimits(sample(), "b")).toEqual({ j: { max: 4, reason: "ok" }, l: { max: 4, reason: "ok" } })
     const long: Project = {
       ...newProject("t"),
       assets: { v: { file: "v.mp4", duration: 100, hasAudio: true } },
       tracks: [{ id: "t1", clips: [{ id: "a", asset: "v", in: 10, out: 30, start: 0 }, { id: "b", asset: "v", in: 0.5, out: 99, start: 20 }] }],
     }
-    // J: b's 0.5 s before its in. L: capped at 5 s, a's 70 s handle notwithstanding.
-    expect(cutAudioLimits(long, "b")).toEqual({ j: { max: 0.5, reason: "ok" }, l: { max: 5, reason: "ok" } })
+    // J: b's 0.5 s before its in. L: capped at 10 s, a's 70 s handle notwithstanding.
+    expect(cutAudioLimits(long, "b")).toEqual({ j: { max: 0.5, reason: "ok" }, l: { max: 10, reason: "ok" } })
   })
 
   it("needs a neighbour, sound and footage", () => {
@@ -77,7 +77,7 @@ describe("setCutAudio", () => {
   it("sets, clamps and removes", () => {
     const p = setCutAudio(sample(), "b", j(1.5))
     expect(clip(p, "b")?.cutAudio).toEqual(j(1.5))
-    expect(clip(setCutAudio(sample(), "b", l(9)), "b")?.cutAudio).toEqual(l(2))
+    expect(clip(setCutAudio(sample(), "b", l(9)), "b")?.cutAudio).toEqual(l(4))
     expect(clip(setCutAudio(sample(), "b", j(0.01)), "b")?.cutAudio).toEqual(j(0.1))
     expect(clip(setCutAudio(p, "b", null), "b")?.cutAudio).toBeUndefined()
   })
@@ -140,10 +140,10 @@ describe("edits keep, clamp or drop audio overlaps", () => {
     expect(linkedChain(p, "c")).toEqual(["b2", "c"])
   })
 
-  it("splitting shortens an overlap to half a piece's length", () => {
+  it("splitting shortens an overlap to a piece's length", () => {
     // A 2 s J into c reaches back over half of b; split b 1 s before its end and the piece left is 1 s long.
     const p = splitClip(setCutAudio(sample(), "c", j(2)), "b", 7, "b2")
-    expect(clip(p, "c")?.cutAudio).toEqual(j(0.5))
+    expect(clip(p, "c")?.cutAudio).toEqual(j(1))
   })
 
   it("deleting a clip takes its overlaps, rippled on a snapped base too", () => {
@@ -153,9 +153,9 @@ describe("edits keep, clamp or drop audio overlaps", () => {
   })
 
   it("trimming clamps or drops it", () => {
-    // L into c (2 s), then c trimmed to 2 s long: at most 1 s now.
-    const p = trimClip(setCutAudio(sample(), "c", l(2)), "c", "out", 16)
-    expect(clip(p, "c")?.cutAudio).toEqual(l(1))
+    // L into c (2 s), then c trimmed to 1.5 s long: at most 1.5 s now.
+    const p = trimClip(setCutAudio(sample(), "c", l(2)), "c", "out", 15.5)
+    expect(clip(p, "c")?.cutAudio).toEqual(l(1.5))
     // J into c on a snapped base, c's left edge pulled back to its source's start: no footage before it, so it goes.
     const q = trimClip(setCutAudio(setBaseMagnetic(sample(), true), "c", j()), "c", "in", 0)
     expect(clip(q, "c")?.in).toBe(0)
@@ -185,10 +185,10 @@ describe("parse", () => {
 
   it("drops one with nothing adjoining and shortens an overlong one", () => {
     const p = sample()
-    const raw = { ...p, tracks: [{ ...p.tracks[0], clips: p.tracks[0].clips.map((c) => (c.id === "a" ? { ...c, cutAudio: j() } : c.id === "b" ? { ...c, cutAudio: l(4) } : c)) }] }
+    const raw = { ...p, tracks: [{ ...p.tracks[0], clips: p.tracks[0].clips.map((c) => (c.id === "a" ? { ...c, cutAudio: j() } : c.id === "b" ? { ...c, cutAudio: l(7) } : c)) }] }
     const q = parseProject(json(raw))!
     expect(clip(q, "a")?.cutAudio).toBeUndefined()
-    expect(clip(q, "b")?.cutAudio).toEqual(l(2))
+    expect(clip(q, "b")?.cutAudio).toEqual(l(4))
   })
 
   it("refuses an unknown mode or a duration out of range", () => {
@@ -196,7 +196,7 @@ describe("parse", () => {
     const withAudio = (cutAudio: unknown) => ({ ...p, tracks: [{ ...p.tracks[0], clips: p.tracks[0].clips.map((c) => (c.id === "b" ? { ...c, cutAudio } : c)) }] })
     expect(parseProject(json(withAudio({ mode: "x", duration: 1 }) as Project))).toBeNull()
     expect(parseProject(json(withAudio({ mode: "j", duration: 0 }) as Project))).toBeNull()
-    expect(parseProject(json(withAudio({ mode: "l", duration: 6 }) as Project))).toBeNull()
+    expect(parseProject(json(withAudio({ mode: "l", duration: 11 }) as Project))).toBeNull()
     expect(parseProject(json(withAudio("j") as Project))).toBeNull()
   })
 })
