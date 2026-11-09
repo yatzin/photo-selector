@@ -377,7 +377,9 @@ Not while the project is exporting, or while that file is being imported.
   the project's other text clips use (most used first, up to 12); click one
   to use it. The font sample sits on a dark or light backdrop, whichever
   shows the chosen colour better.
-- **Text animation.** The Animation tab of Edit text (or **Animation...** in
+- **Text animation.** On the Animation tab the sample at the top of Edit text
+  loops the chosen In, a one-second rest, then Out (a Pause/Play button on the
+  sample stops it; it starts paused with reduced motion). The Animation tab of Edit text (or **Animation...** in
   a text clip's menu) sets an **In** animation, played from the clip's start,
   and an **Out** one, played up to its end, each with its own type and length
   in seconds. Types: Fade; Slide from (In) or to (Out) the left, right, top or

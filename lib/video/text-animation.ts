@@ -232,6 +232,14 @@ const WHOLE: AnimGeometry = { bounds: { x: 0, y: 0, w: 1, h: 1 }, units: 1 }
 /** True when the text has an in or an out animation. */
 export const isAnimated = (text: Pick<ClipText, "animIn" | "animOut">) => text.animIn !== undefined || text.animOut !== undefined
 
+/** How long the text rests between its in and out in the dialog's looping demo (seconds). */
+export const DEMO_HOLD = 1
+
+/** The length of a looping demo of the animations (in, a rest, out), or null when there are none. */
+export function demoLength(text: Pick<ClipText, "animIn" | "animOut">): number | null {
+  return isAnimated(text) ? (text.animIn?.duration ?? 0) + DEMO_HOLD + (text.animOut?.duration ?? 0) : null
+}
+
 /** How the text shows at clip time `t` (seconds from its start) of a clip `length` long; `geo` says where it rests (slides, bounce) and its typewriter units. */
 export function animationState(text: Pick<ClipText, "animIn" | "animOut">, t: number, length: number, geo: AnimGeometry = WHOLE): AnimState {
   const at = phase(text, t, length)

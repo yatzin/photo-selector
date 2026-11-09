@@ -1,12 +1,12 @@
 "use client"
 
-import { useState } from "react"
-import { ArrowRightFromLine, ArrowRightToLine, Type } from "lucide-react"
+import { useEffect, useState } from "react"
+import { ArrowRightFromLine, ArrowRightToLine, Pause, Play, Type } from "lucide-react"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
 import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
-import { ANIM_GROUPS } from "@/lib/video/text-animation"
+import { animationState, ANIM_GROUPS, demoLength, REST } from "@/lib/video/text-animation"
 import { previewBackdrop } from "@/lib/video/text-colours"
 import { cn } from "@/lib/utils"
 import { FontPicker } from "./font-picker"
@@ -142,6 +142,28 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
         ? `An animation runs at most the clip's ${length.toFixed(1)} s.`
         : null
 
+  // On the Animation tab the hero loops the animations: in, a rest, out.
+  const demoText = { animIn: next ? next.animIn : animIn ?? undefined, animOut: next ? next.animOut : animOut ?? undefined }
+  const demo = tab === "animation" ? demoLength(demoText) : null
+  const [playing, setPlaying] = useState(() => typeof window === "undefined" || !window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  const [demoAt, setDemoAt] = useState(0)
+  useEffect(() => {
+    if (demo === null || !playing) return
+    const start = performance.now()
+    let raf = requestAnimationFrame(function tick(now) {
+      setDemoAt(((now - start) / 1000) % demo)
+      raf = requestAnimationFrame(tick)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [demo, playing])
+  const typedCount = content.replaceAll("\n", "").length
+  const shown = demo === null ? REST : animationState(demoText, Math.min(demoAt, demo), demo, { bounds: { x: 0.2, y: 0.3, w: 0.6, h: 0.4 }, units: typedCount })
+  const reveal = shown.reveal
+    ? `inset(${shown.reveal.dir === "down" ? 100 - shown.reveal.fraction * 100 : 0}% ${shown.reveal.dir === "right" ? 100 - shown.reveal.fraction * 100 : 0}% ${shown.reveal.dir === "up" ? 100 - shown.reveal.fraction * 100 : 0}% ${shown.reveal.dir === "left" ? 100 - shown.reveal.fraction * 100 : 0}%)`
+    : undefined
+  const visibleChars = shown.chars
+  let seen = 0
+
   const backdrop = previewBackdrop(color)
   const fontName = fontById(font).name
 
@@ -191,18 +213,38 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
         </div>
         {/* The hero: the text as it will look. */}
         <div
-          aria-hidden
           className="relative flex h-36 items-center justify-center overflow-hidden rounded-xl px-6 ring-1 ring-black/10 ring-inset motion-safe:transition-colors motion-safe:duration-200 dark:ring-white/10 sm:h-44"
           style={{ backgroundColor: backdrop.background }}
           data-text-sample
         >
           <div
-            className={cn("max-w-full text-center leading-[1.05] whitespace-pre", orientation === "vertical" && "[writing-mode:vertical-rl] [text-orientation:upright]")}
-            style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, fontSize: `clamp(20px, ${Math.max(18, 44 - Math.max(0, Math.max(...lines.map((l) => l.length)) - 12) * 1.2)}px, 44px)` }}
+            aria-hidden
+            className="absolute inset-0 flex items-center justify-center px-6"
+            style={{ opacity: shown.opacity, transform: `translate(${shown.offsetX * 100}%, ${shown.offsetY * 100}%) rotate(${shown.rotationDeg}deg) scale(${shown.scale})` }}
           >
-            {content || " "}
+            <div
+              className={cn("max-w-full text-center leading-[1.05] whitespace-pre", orientation === "vertical" && "[writing-mode:vertical-rl] [text-orientation:upright]")}
+              style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, clipPath: reveal, fontSize: `clamp(20px, ${Math.max(18, 44 - Math.max(0, Math.max(...lines.map((l) => l.length)) - 12) * 1.2)}px, 44px)` }}
+            >
+              {visibleChars === null
+                ? content || " "
+                : Array.from(content || " ").map((ch, i) => {
+                    if (ch === "\n") return ch
+                    return <span key={i} className={seen++ < visibleChars ? undefined : "opacity-0"}>{ch}</span>
+                  })}
+            </div>
           </div>
-          <span className="absolute bottom-2 left-3 rounded-md bg-black/45 px-1.5 py-0.5 text-[11px] text-white/90 backdrop-blur-sm">{fontName}</span>
+          {demo !== null && (
+            <button
+              type="button"
+              aria-label={playing ? "Pause the preview" : "Play the preview"}
+              onClick={() => setPlaying((v) => !v)}
+              className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-md bg-black/45 text-white/90 backdrop-blur-sm outline-none hover:bg-black/60 focus-visible:outline-2 focus-visible:outline-white pointer-coarse:size-11"
+            >
+              {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
+            </button>
+          )}
+          <span aria-hidden className="absolute bottom-2 left-3 rounded-md bg-black/45 px-1.5 py-0.5 text-[11px] text-white/90 backdrop-blur-sm">{fontName}</span>
         </div>
 
         <div role="tabpanel" id="edit-text-panel-text" aria-labelledby="edit-text-tab-text" hidden={tab !== "text"} className="grid gap-5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">

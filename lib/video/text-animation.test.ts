@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  alphaWindow, animationExprs, animationState, ANIM_GROUPS, MAX_TYPE_STEPS, printExpr, REST, typeChars, typewriterBoxes, typewriterCuts, typewriterHidden,
+  alphaWindow, animationExprs, animationState, ANIM_GROUPS, DEMO_HOLD, demoLength, MAX_TYPE_STEPS, printExpr, REST, typeChars, typewriterBoxes, typewriterCuts, typewriterHidden,
   type AnimGeometry, type E,
 } from "./text-animation"
 import { ANIM_TYPES, type AnimType, type ClipText } from "./text"
@@ -191,5 +191,22 @@ describe("typewriter geometry", () => {
     expect(typewriterBoxes({ ...text, animIn: { type: "fade", duration: 1 }, animOut: undefined }, 5)).toEqual([])
     // A long text: at most MAX_TYPE_STEPS steps, two boxes each at most.
     expect(typewriterBoxes({ ...text, content: "x".repeat(450) }, 5).length).toBeLessThanOrEqual(2 * MAX_TYPE_STEPS)
+  })
+})
+
+describe("demoLength", () => {
+  it("is null with no animation, else in + rest + out", () => {
+    expect(demoLength({})).toBeNull()
+    expect(demoLength(inOnly("fade", 2))).toBe(2 + DEMO_HOLD)
+    expect(demoLength(outOnly("fade", 1.5))).toBe(DEMO_HOLD + 1.5)
+    expect(demoLength({ ...inOnly("fade", 2), ...outOnly("fade", 1) })).toBe(3 + DEMO_HOLD)
+  })
+
+  it("plays in, rests, then goes out over the demo", () => {
+    const text = { ...inOnly("fade", 1), ...outOnly("fade", 1) }
+    const len = demoLength(text)!
+    expect(animationState(text, 0, len).opacity).toBe(0)
+    expect(animationState(text, 1 + DEMO_HOLD / 2, len)).toEqual(REST)
+    expect(animationState(text, len, len).opacity).toBe(0)
   })
 })
