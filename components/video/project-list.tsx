@@ -12,17 +12,14 @@ import { Input } from "@/components/ui/input"
 import { createProjectAction, deleteProjectAction, renameProjectAction } from "@/lib/actions/video-projects"
 import { formatBytes } from "@/lib/format"
 import { firstDir, formatLength, sortProjects, type SortDir, type SortKey } from "@/lib/video/project-sort"
-import { daysLeft, RETENTION_MONTHS } from "@/lib/video/retention"
 import { cn } from "@/lib/utils"
 import { Callout } from "./ui/callout"
 import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialog } from "./ui/editor-dialog"
 
 // Video Editing's start page, laid out like a file browser: each project is a
-// file in a details list (name, modified, clips, length, size, and when it
-// expires), sorted by clicking a column heading (name or date to start with),
+// file in a details list (name, modified, clips, length, size), sorted by clicking a column heading (name or date to start with),
 // filtered by the search box, opened by clicking its name. Projects are
-// staging files and go after 6 months unchanged (lib/video/retention), as the
-// note at the top says. "Manage inbox" lists the inbox folders, one per user.
+// "Manage inbox" lists the inbox folders, one per user.
 
 type Project = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number }
 type InboxUser = { name: string; files: number }
@@ -30,14 +27,13 @@ type Dialogue = { kind: "new" } | { kind: "rename"; project: Project } | { kind:
 
 const subscribeNothing = () => () => {}
 
-// Name, modified, clips, length, size, expires, actions (the middle ones only from lg up).
-const ROW = "grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-x-3 lg:grid-cols-[minmax(0,1fr)_10.5rem_4rem_5rem_5.5rem_7rem_5rem]"
+// Name, modified, clips, length, size, actions (the middle ones only from lg up).
+const ROW = "grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-x-3 lg:grid-cols-[minmax(0,1fr)_10.5rem_4rem_5rem_5.5rem_5rem]"
 const COLUMNS: { key: SortKey | null; label: string; align?: "right" }[] = [
   { key: "modified", label: "Modified" },
   { key: "clips", label: "Clips", align: "right" },
   { key: "duration", label: "Length", align: "right" },
   { key: "size", label: "Size", align: "right" },
-  { key: null, label: "Expires" },
 ]
 
 export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inboxUsers: InboxUser[] }) {
@@ -45,9 +41,8 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
   const [dialog, setDialog] = useState<Dialogue | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "modified", dir: "desc" })
   const [query, setQuery] = useState("")
-  // The server's locale, time zone and clock differ from the browser's, so dates and "days left" are filled in after mount.
+  // The server's locale, time zone and clock differ from the browser's, so dates are filled in after mount.
   const mounted = useSyncExternalStore(subscribeNothing, () => true, () => false)
-  const [now] = useState(() => Date.now())
   const open = (next: Dialogue) => setDialog(next)
 
   const shown = useMemo(() => {
@@ -113,12 +108,6 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
         </div>
       </div>
 
-      <Callout tone="info">
-        <p>
-          These files are temporary staging files for video projects. A project that hasn&apos;t changed for {RETENTION_MONTHS} months is deleted automatically, so export what you want to keep.
-        </p>
-      </Callout>
-
       {projects.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
           No projects yet. Create one to start editing.
@@ -144,8 +133,6 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
             </div>
             {shown.length === 0 && <p className="px-4 py-8 text-center text-sm text-muted-foreground">No project matches &ldquo;{query}&rdquo;.</p>}
             {shown.map((p) => {
-              const left = mounted ? daysLeft(p.modified, now) : null
-              const soon = left !== null && left <= 30
               return (
                 <div key={p.folder} role="row" className={cn(ROW, "relative border-b px-4 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50 focus-within:bg-muted/50")}>
                   <div role="cell" className="flex min-w-0 items-center gap-3">
@@ -172,9 +159,6 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
                   <div role="cell" className="hidden text-right text-sm text-muted-foreground tabular-nums lg:block">{p.clips.toLocaleString()}</div>
                   <div role="cell" className="hidden text-right text-sm text-muted-foreground tabular-nums lg:block">{formatLength(p.duration)}</div>
                   <div role="cell" className="hidden text-right text-sm text-muted-foreground tabular-nums lg:block">{formatBytes(p.bytes)}</div>
-                  <div role="cell" className={cn("hidden text-sm tabular-nums lg:block", soon ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
-                    {left === null ? "" : left === 0 ? "Today" : `${left.toLocaleString()} day${left === 1 ? "" : "s"}`}
-                  </div>
                   <div role="cell" className="relative z-10 flex justify-end gap-0.5">
                     <Button variant="ghost" size="icon-sm" onClick={() => open({ kind: "rename", project: p })}>
                       <Pencil className="h-4 w-4" />

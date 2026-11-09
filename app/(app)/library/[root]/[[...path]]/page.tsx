@@ -1,3 +1,4 @@
+import { RetentionNote } from "@/components/video/retention-note"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
@@ -77,6 +78,8 @@ export default async function LibraryPage({
           {!status.writable && <> &middot; <span className="text-destructive">read-only</span></>}
         </p>
       </div>
+
+      {root === "video-inbox" && <RetentionNote />}
 
       {locked && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">

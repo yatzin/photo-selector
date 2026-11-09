@@ -158,7 +158,7 @@ Database changes apply themselves on start.
 
 Tools → Video Editing cuts video clips, still images and sound files together and exports an MP4.
 
-**Projects page.** Projects are listed like files in a browser: name, modified, clips, length, size and days until they expire. Click a heading to sort (name or date to start with), search by name, click a row to open it. **Manage inbox** lists each user's inbox folder. Projects are temporary staging files: one that hasn't changed for 6 months is deleted by a sweep at server start and then daily.
+**Projects page.** Projects are listed like files in a browser: name, modified, clips, length and size. Click a heading to sort (name or date to start with), search by name, click a row to open it. **Manage inbox** lists each user's inbox folder. Projects are never deleted automatically. The inbox is staging: a file that arrived over 6 months ago is deleted by a sweep at server start and then daily (the inbox folder pages say so).
 
 **Getting clips in.** Right-click files in the library, use the toolbar's
 **Video Editing** button (not shown in the video folders), or the button in the viewer, then choose

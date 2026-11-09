@@ -1,10 +1,10 @@
-// Video projects are temporary staging files: a project is deleted once it has
-// gone unchanged for RETENTION_MONTHS. Pure date maths; the sweep itself is
-// cleanExpiredProjects in projects-server.
+// The video inbox is temporary staging: a file is deleted once it has been there
+// RETENTION_MONTHS. Projects are never deleted. Pure date maths; the sweep is
+// cleanExpiredInbox in inbox-cleanup-server.
 
 export const RETENTION_MONTHS = 6
 
-/** When a project last changed (epoch ms) becomes the moment it expires (epoch ms), calendar months on. */
+/** When a file arrived (epoch ms) becomes the moment it expires (epoch ms), calendar months on. */
 export function expiresAt(modified: number): number {
   const d = new Date(modified)
   d.setMonth(d.getMonth() + RETENTION_MONTHS)
