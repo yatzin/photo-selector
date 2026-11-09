@@ -1,7 +1,8 @@
+import { RetentionNote } from "@/components/video/retention-note"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
-import { isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
+import { isNoteRoot, isReadOnlyRoot, isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
 import { MediaGrid } from "@/components/library/media-grid"
@@ -53,7 +54,7 @@ export default async function LibraryPage({
   // Temp Storage carry the note they were sent with.
   const [flags, notes] = await Promise.all([
     qualityFlags(root, segments, listing.files),
-    root === "temp" ? tempNotes(segments, listing.files.map((f) => f.name)) : undefined,
+    isNoteRoot(root) ? tempNotes(root, segments, listing.files.map((f) => f.name)) : undefined,
   ])
 
   const totalBytes = listing.files.reduce((sum, f) => sum + f.size, 0)
@@ -77,6 +78,8 @@ export default async function LibraryPage({
           {!status.writable && <> &middot; <span className="text-destructive">read-only</span></>}
         </p>
       </div>
+
+      {root === "video-inbox" && <RetentionNote />}
 
       {locked && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
@@ -115,15 +118,17 @@ export default async function LibraryPage({
           files={listing.files}
           flags={flags}
           notes={notes}
-          canMove={root !== "dropoff" && status.writable && !locked}
-          canEdit={status.writable && !locked}
+          canMove={root !== "dropoff" && !isReadOnlyRoot(root) && status.writable && !locked}
+          canEdit={!isReadOnlyRoot(root) && status.writable && !locked}
         />
       ) : (
         listing.folders.length === 0 && (
           <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
             {root === "temp" && segments.length === 0
               ? "Nothing here yet. Right-click photos anywhere in the library and choose Move to User Temp Storage to start a folder for someone."
-              : "Nothing here yet."}
+              : root === "video-inbox" && segments.length === 0
+                ? "Nothing here yet. Right-click photos or videos anywhere in the library and choose Move to Video Editing to start a folder for someone."
+                : "Nothing here yet."}
           </div>
         )
       )}

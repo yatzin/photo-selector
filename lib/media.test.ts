@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect, it } from "vitest"
-import { fileVersion, isPlainName, isPlainPath, isRootKey, isScanRoot, isSkippedDir, mediaKind, numberedName, resolveInside, safeSegments, tempFolderName, trashBatchId, trashBatchTime } from "./media"
+import { fileVersion, isPlainName, isPlainPath, isReadOnlyRoot, isRootKey, isScanRoot, isSkippedDir, mediaKind, numberedName, projectFolderName, resolveInside, safeSegments, tempFolderName, trashBatchId, trashBatchTime } from "./media"
 
 describe("mediaKind", () => {
   it("recognises photos and videos regardless of case", () => {
@@ -33,10 +33,31 @@ describe("isRootKey", () => {
     expect(isRootKey("etc")).toBe(false)
   })
 
+  it("treats only Video Editing Projects as read-only", () => {
+    expect(isReadOnlyRoot("video-projects")).toBe(true)
+    for (const r of ["upload", "dropoff", "temp", "video-inbox"]) expect(isReadOnlyRoot(r)).toBe(false)
+  })
+
   it("keeps User Temp Storage out of AI scans", () => {
     expect(isScanRoot("upload")).toBe(true)
     expect(isScanRoot("dropoff")).toBe(true)
     expect(isScanRoot("temp")).toBe(false)
+  })
+})
+
+describe("projectFolderName", () => {
+  it("cleans like a temp folder name", () => {
+    expect(projectFolderName("My Trip")).toBe("My Trip")
+    expect(projectFolderName("a/b\\c:d*?")).toBe("abcd")
+    expect(projectFolderName("../x")).toBe("x")
+    expect(projectFolderName("trip. ")).toBe("trip")
+    expect(projectFolderName(".hidden")).toBe("hidden")
+  })
+
+  it("falls back to Untitled", () => {
+    expect(projectFolderName("")).toBe("Untitled")
+    expect(projectFolderName("../..")).toBe("Untitled")
+    expect(projectFolderName("???")).toBe("Untitled")
   })
 })
 

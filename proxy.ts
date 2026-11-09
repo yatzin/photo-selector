@@ -28,6 +28,8 @@ export default auth((req) => {
   return NextResponse.next()
 })
 
+// The Import upload route checks the session itself and is left out: the proxy would hold a copy of every
+// request body in memory (up to proxyClientMaxBodySize), and uploads come in 32 MB pieces.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|api/video-projects/[^/]+/import$).*)"],
 }

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 import { auth } from "@/auth"
 import { moveToDropoff, restoreBatch, rotateFiles, trashFiles, type ActionResult } from "@/lib/file-ops-server"
-import { isPlainName, isRootKey, safeSegments, type RootKey } from "@/lib/media"
+import { isNoteRoot, isPlainName, isReadOnlyRoot, isRootKey, READ_ONLY_ROOT_MESSAGE, safeSegments, type RootKey } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
@@ -19,7 +19,7 @@ const target = z.object({
   names: z.array(z.string().refine(isPlainName)).min(1).max(MAX_BATCH),
 })
 
-type Target = { root: RootKey; folder: string[]; names: string[] }
+type Target = { root: Exclude<RootKey, "video-projects">; folder: string[]; names: string[] }
 
 async function parse(input: unknown): Promise<Target | { error: string }> {
   const session = await auth()
@@ -28,8 +28,11 @@ async function parse(input: unknown): Promise<Target | { error: string }> {
   if (!parsed.success) return { error: "Invalid request." }
   const folder = safeSegments(parsed.data.folder)
   if (!folder) return { error: "Invalid folder." }
-  if (await folderLocked(parsed.data.root, folder)) return { error: SCAN_LOCK_MESSAGE }
-  return { root: parsed.data.root as RootKey, folder, names: parsed.data.names }
+  const root = parsed.data.root as RootKey
+  // Move, delete and rotate all change the source; the editor owns project files.
+  if (isReadOnlyRoot(root)) return { error: READ_ONLY_ROOT_MESSAGE }
+  if (await folderLocked(root, folder)) return { error: SCAN_LOCK_MESSAGE }
+  return { root, folder, names: parsed.data.names }
 }
 
 function done<T extends ActionResult>(result: T): T {
@@ -41,9 +44,9 @@ function done<T extends ActionResult>(result: T): T {
 export async function moveToDropoffAction(input: { root: string; folder: string[]; names: string[] }) {
   const t = await parse(input)
   if ("error" in t) return t
-  if (t.root === "dropoff") return { error: "Only files in Mobile Upload or User Temp Storage can be moved to the drop-off." }
+  if (t.root === "dropoff") return { error: "Only files in Mobile Upload, User Temp Storage or Video Editing Inbox can be moved to the drop-off." }
   const result = await moveToDropoff(t.root, t.folder, t.names)
-  if (t.root === "temp") await dropTempNotes(t.folder, result.ok)
+  if (isNoteRoot(t.root)) await dropTempNotes(t.root, t.folder, result.ok)
   return done(result)
 }
 

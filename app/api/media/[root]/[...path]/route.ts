@@ -5,6 +5,7 @@ import { auth } from "@/auth"
 import { isRootKey, mediaKind, resolveInside, safeSegments } from "@/lib/media"
 import { rootPath } from "@/lib/library-server"
 import { ensureVariant, type Variant } from "@/lib/thumbs-server"
+import { AUDIO_EXTENSIONS } from "@/lib/video/import"
 
 // GET /api/media/<root>/<path>?v=thumb|preview|original
 // Thumbnails and previews come from the cache (made on demand). The original
@@ -16,6 +17,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".dng": "image/x-adobe-dng", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
   ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv", ".mkv": "video/x-matroska", ".flv": "video/x-flv",
   ".3gp": "video/3gpp", ".webm": "video/webm",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".oga": "audio/ogg",
+  ".opus": "audio/ogg", ".flac": "audio/flac", ".wma": "audio/x-ms-wma",
 }
 
 // URLs carry the file's version (?k=), so a cached response never goes stale.
@@ -34,9 +37,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ root
   const segments = safeSegments(rawSegments.map((s) => decodeURIComponent(s)))
   if (!segments || segments.length === 0) return notFound()
   const file = resolveInside(rootPath(root), segments)
-  if (!file || !mediaKind(file)) return notFound()
+  // Sound files are project media only (uploaded with Import); they have no thumbnail or preview.
+  const audio = root === "video-projects" && AUDIO_EXTENSIONS.has(path.extname(file ?? "").toLowerCase())
+  if (!file || (!mediaKind(file) && !audio)) return notFound()
 
   const variant = new URL(request.url).searchParams.get("v") ?? "thumb"
+  if (audio && variant !== "original") return notFound()
 
   if (variant === "thumb" || variant === "preview") {
     let result

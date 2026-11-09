@@ -4,6 +4,259 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* The video editor's text clips: the same font files the export draws them with (lib/video/fonts).
+   A browser fetches a face only when text uses it, so the editor loads just the fonts its text clips and the font picker show. */
+@font-face {
+  font-family: "PS Video Text";
+  src: url("/fonts/GeistMono-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Anton";
+  src: url("/fonts/Anton-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Fredoka";
+  src: url("/fonts/Fredoka-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Pacifico";
+  src: url("/fonts/Pacifico-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Bangers";
+  src: url("/fonts/Bangers-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Permanent Marker";
+  src: url("/fonts/PermanentMarker-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Press Start 2P";
+  src: url("/fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rubik Glitch";
+  src: url("/fonts/RubikGlitch-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Playfair Display";
+  src: url("/fonts/PlayfairDisplay-Black.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Special Elite";
+  src: url("/fonts/SpecialElite-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Creepster";
+  src: url("/fonts/Creepster-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Nosifer";
+  src: url("/fonts/Nosifer-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Reenie Beanie";
+  src: url("/fonts/ReenieBeanie-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Great Vibes";
+  src: url("/fonts/GreatVibes-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Dancing Script";
+  src: url("/fonts/DancingScript-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Parisienne";
+  src: url("/fonts/Parisienne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Tangerine";
+  src: url("/fonts/Tangerine-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Monsieur La Doulaise";
+  src: url("/fonts/MonsieurLaDoulaise-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Sacramento";
+  src: url("/fonts/Sacramento-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Alex Brush";
+  src: url("/fonts/AlexBrush-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Archivo Black";
+  src: url("/fonts/ArchivoBlack-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Black Ops One";
+  src: url("/fonts/BlackOpsOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Bungee";
+  src: url("/fonts/Bungee-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Sedgwick Ave Display";
+  src: url("/fonts/SedgwickAveDisplay-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Graduate";
+  src: url("/fonts/Graduate-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Titan One";
+  src: url("/fonts/TitanOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rubik Bubbles";
+  src: url("/fonts/RubikBubbles-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Gloria Hallelujah";
+  src: url("/fonts/GloriaHallelujah-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Luckiest Guy";
+  src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Chewy";
+  src: url("/fonts/Chewy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Londrina Sketch";
+  src: url("/fonts/LondrinaSketch-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Cabin Sketch";
+  src: url("/fonts/CabinSketch-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Eater";
+  src: url("/fonts/Eater-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Butcherman";
+  src: url("/fonts/Butcherman-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Metal Mania";
+  src: url("/fonts/MetalMania-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Unifraktur Maguntia";
+  src: url("/fonts/UnifrakturMaguntia-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Jolly Lodger";
+  src: url("/fonts/JollyLodger-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Griffy";
+  src: url("/fonts/Griffy-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Rye";
+  src: url("/fonts/Rye-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Shrikhand";
+  src: url("/fonts/Shrikhand-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Poiret One";
+  src: url("/fonts/PoiretOne-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Monoton";
+  src: url("/fonts/Monoton-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Ultra";
+  src: url("/fonts/Ultra-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Audiowide";
+  src: url("/fonts/Audiowide-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Orbitron";
+  src: url("/fonts/Orbitron-Black.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text VT323";
+  src: url("/fonts/VT323-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Kaushan Script";
+  src: url("/fonts/KaushanScript-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Patrick Hand";
+  src: url("/fonts/PatrickHand-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Amatic SC";
+  src: url("/fonts/AmaticSC-Bold.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "PS Video Text Poppins";
+  src: url("/fonts/Poppins-Bold.ttf") format("truetype");
+  font-display: block;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -36,6 +289,8 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-link: var(--link);
+  --color-editor-accent: var(--editor-accent);
+  --color-editor-accent-foreground: var(--editor-accent-foreground);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -62,6 +317,11 @@
   /* Blue for text and icons (links, counts, active tabs). Same as primary in
      light mode; lighter in dark mode, where primary is too dark to read. */
   --link: oklch(0.488 0.243 264.376);
+  /* The video editor's accent (playhead, selection, handles, Snap): primary in
+     light mode; a light sky in dark mode, where primary reads as dark blue on
+     the dark timeline and the black canvas. Its foreground goes on top of it. */
+  --editor-accent: oklch(0.488 0.243 264.376);
+  --editor-accent-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.93 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.93 0 0);
@@ -99,6 +359,8 @@
   --primary: oklch(0.488 0.243 264.376);
   --primary-foreground: oklch(0.985 0 0);
   --link: oklch(0.75 0.14 264);
+  --editor-accent: oklch(0.828 0.111 230.318);
+  --editor-accent-foreground: oklch(0.21 0.034 264.665);
   --secondary: oklch(0.36 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.36 0 0);
@@ -134,6 +396,19 @@
   html {
     @apply font-sans;
   }
+  /* The timeline's empty space pans when dragged: a grab cursor there only
+     (its other parts keep their own), grabbing everywhere while it pans. */
+  [data-pan] {
+    cursor: grab;
+  }
+  [data-pan] > :not([data-pan]) {
+    cursor: auto;
+  }
+  [data-panning],
+  [data-panning] * {
+    cursor: grabbing !important;
+    user-select: none;
+  }
 }
 
 /* Loading placeholder for photos: a soft highlight sweeping across the tile
@@ -162,5 +437,65 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .shimmer::after { animation: none; display: none; }
+  }
+}
+
+/* The video editor's dialogs (components/video/ui/editor-dialog): layered
+   surfaces, a soft shadow in light and a hairline glow in dark, and a short
+   scale-and-fade in and out (a slide up for the bottom sheet on narrow
+   screens), still for people who ask for reduced motion. */
+@layer components {
+  .editor-dialog {
+    box-shadow: 0 0 0 1px oklch(0 0 0 / 7%), 0 2px 6px -1px oklch(0 0 0 / 8%), 0 28px 64px -16px oklch(0 0 0 / 30%);
+    transition: opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1), scale 180ms cubic-bezier(0.2, 0.8, 0.2, 1), translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .dark .editor-dialog {
+    box-shadow: 0 0 0 1px oklch(1 0 0 / 10%), inset 0 1px 0 oklch(1 0 0 / 6%), 0 28px 72px -12px oklch(0 0 0 / 70%);
+  }
+  .editor-dialog[data-starting-style],
+  .editor-dialog[data-ending-style] {
+    opacity: 0;
+    scale: 0.97;
+  }
+  @media (max-width: 639.98px) {
+    .editor-dialog[data-starting-style],
+    .editor-dialog[data-ending-style] {
+      scale: 1;
+      translate: 0 2.5rem;
+    }
+  }
+  .editor-dialog-backdrop {
+    transition: opacity 180ms ease-out;
+  }
+  .editor-dialog-backdrop[data-starting-style],
+  .editor-dialog-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .editor-dialog,
+    .editor-dialog-backdrop {
+      transition: none;
+    }
+  }
+  @media (forced-colors: active) {
+    .editor-dialog {
+      border: 1px solid CanvasText;
+    }
+  }
+  /* A section's name: small caps, quiet. */
+  .section-label {
+    font-size: 13px;
+    line-height: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    font-variant-caps: all-small-caps;
+    color: var(--muted-foreground);
+  }
+  /* A field's name over its control. */
+  .field-label {
+    font-size: 12px;
+    line-height: 1.25rem;
+    font-weight: 500;
+    color: var(--foreground);
   }
 }

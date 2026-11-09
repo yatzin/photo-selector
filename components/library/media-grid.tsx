@@ -4,7 +4,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, ChevronDown, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, Clapperboard, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl, preview } from "@/lib/format"
@@ -19,7 +19,7 @@ import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
 import { useDragSelect } from "./use-drag-select"
 import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
-import { TempDialog } from "./temp-dialog"
+import { TempDialog, type TempDest } from "./temp-dialog"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
@@ -197,6 +197,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   const [busy, setBusy] = useState(false)
   // Names waiting in the "Send to User Temp Storage" dialog.
   const [temp, setTemp] = useState<string[] | null>(null)
+  const [tempDest, setTempDest] = useState<TempDest>("temp")
   const [, startTransition] = useTransition()
   // Measured on the client: the grid's width, the scrolling <main>, and how
   // far below the top of the scroll area the grid starts (folders, toolbar).
@@ -409,7 +410,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
       if (menu.flagged) router.push(`/ai/runs/${menu.flagged}?tab=found`)
       return
     }
-    if (action === "temp") {
+    if (action === "temp" || action === "video") {
+      setTempDest(action === "video" ? "video-inbox" : "temp")
       setTemp(menu.names)
       return
     }
@@ -530,10 +532,16 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                   </Button>
                 </>
               )}
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => setTemp(names)} title="Move or copy to User Temp Storage">
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("temp"); setTemp(names) }} title="Move or copy to User Temp Storage">
                 <Inbox className="h-4 w-4" />
                 <span className="hidden lg:inline">Temp Storage</span>
               </Button>
+              {root !== "video-inbox" && root !== "video-projects" && (
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("video-inbox"); setTemp(names) }} title="Move or copy to Video Editing">
+                  <Clapperboard className="h-4 w-4" />
+                  <span className="hidden lg:inline">Video Editing</span>
+                </Button>
+              )}
               {canMove && (
                 <Button size="sm" disabled={busy} onClick={() => run("move", names)} title="Move to Sort Dropoff (M)">
                   <FolderOutput className="h-4 w-4" />
@@ -704,12 +712,14 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
           onDelete={(name) => run("delete", [name])}
           onRotate={(name, dir) => run(dir === "cw" ? "rotate-cw" : "rotate-ccw", [name])}
           notes={notes}
-          onTemp={(name) => setTemp([name])}
+          onTemp={(name) => { setTempDest("temp"); setTemp([name]) }}
+          onVideo={(name) => { setTempDest("video-inbox"); setTemp([name]) }}
         />
       )}
       {temp && (
         <TempDialog
           target={{ root, folder, names: temp }}
+          dest={tempDest}
           canMove={canEdit}
           onDone={(ok, moved) => {
             if (moved) hide(ok)

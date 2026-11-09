@@ -28,24 +28,51 @@ export function isSkippedDir(name: string): boolean {
  * The library roots, chosen by the short key used in URLs. Mapped from the
  * NAS in docker-compose.yml; locally they can point at the UNC share.
  */
-export const ROOT_KEYS = ["upload", "dropoff", "temp"] as const
+export const ROOT_KEYS = ["upload", "dropoff", "temp", "video-inbox", "video-projects"] as const
 export type RootKey = (typeof ROOT_KEYS)[number]
 
 export const ROOT_LABELS: Record<RootKey, string> = {
   upload: "Mobile Upload",
   dropoff: "Sort Dropoff",
   temp: "User Temp Storage",
+  "video-inbox": "Video Editing Inbox",
+  "video-projects": "Video Editing Projects",
+}
+
+/** Roots that hold a folder per user, where files can carry a note. */
+export const NOTE_ROOT_KEYS = ["temp", "video-inbox"] as const satisfies readonly RootKey[]
+export type NoteRootKey = (typeof NOTE_ROOT_KEYS)[number]
+
+export function isNoteRoot(value: string): value is NoteRootKey {
+  return (NOTE_ROOT_KEYS as readonly string[]).includes(value)
 }
 
 export function isRootKey(value: string): value is RootKey {
   return (ROOT_KEYS as readonly string[]).includes(value)
 }
 
-/** The roots AI scans can read. User Temp Storage is a staging area, not part of the library to sort. */
+/** Video Editing projects are managed by the editor; the library may only read (and copy) them. */
+export function isReadOnlyRoot(value: string): value is "video-projects" {
+  return value === "video-projects"
+}
+
+export const READ_ONLY_ROOT_MESSAGE = "Video Editing projects are read-only here."
+
+/** The roots AI scans can read. User Temp Storage and Video Editing are staging areas, not part of the library to sort. */
 export const SCAN_ROOT_KEYS = ["upload", "dropoff"] as const satisfies readonly RootKey[]
 
 export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[number] {
   return (SCAN_ROOT_KEYS as readonly string[]).includes(value)
+}
+
+function cleanFolderName(s: string): string {
+  return s
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[.@#\s]+/, "")
+    .replace(/[.\s]+$/, "")
+    .slice(0, 80)
 }
 
 /**
@@ -55,15 +82,12 @@ export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[numb
  * "user", stand in when nothing is left.
  */
 export function tempFolderName(name: string, email: string): string {
-  const clean = (s: string) =>
-    s
-      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/^[.@#\s]+/, "")
-      .replace(/[.\s]+$/, "")
-      .slice(0, 80)
-  return clean(name) || clean(email.split("@")[0] ?? "") || "user"
+  return cleanFolderName(name) || cleanFolderName(email.split("@")[0] ?? "") || "user"
+}
+
+/** A video project's folder name: the same cleaning as tempFolderName, "Untitled" when nothing is left. */
+export function projectFolderName(name: string): string {
+  return cleanFolderName(name) || "Untitled"
 }
 
 /**

@@ -21,7 +21,13 @@ const FIRST_SCAN_DELAY_MS = 5_000
 // Cache files younger than this survive a sweep even if no scan saw them.
 const SWEEP_MIN_AGE_MS = 60 * 60_000
 
-const PREPARE: Record<RootKey, Variant[]> = { upload: ["thumb", "preview"], dropoff: ["thumb"], temp: ["thumb", "preview"] }
+const PREPARE: Record<RootKey, Variant[]> = {
+  upload: ["thumb", "preview"],
+  dropoff: ["thumb"],
+  temp: ["thumb", "preview"],
+  "video-inbox": ["thumb", "preview"],
+  "video-projects": ["thumb", "preview"],
+}
 
 export type WorkerStatus = {
   started: boolean

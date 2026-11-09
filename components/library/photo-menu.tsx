@@ -1,13 +1,13 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { FolderOutput, ImageOff, Inbox, RotateCcw, RotateCw, Trash2 } from "lucide-react"
+import { Clapperboard, FolderOutput, ImageOff, Inbox, RotateCcw, RotateCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Right-click menu for photos in the grid. It acts on the selection when the
 // clicked photo is part of it, otherwise on just that photo.
 
-export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos" | "temp"
+export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos" | "temp" | "video"
 
 export function PhotoMenu({
   x, y, count, canRotate, showMove, canMove, canEdit, showEdit = true, canTemp = true, showBadPhotos = false, onAction, onClose,
@@ -53,7 +53,7 @@ export function PhotoMenu({
 
   // Keep the menu on screen near the pointer.
   const W = showBadPhotos ? 260 : 250
-  const H = (showEdit ? 180 : 40) + (showBadPhotos ? 40 : 0) + 36
+  const H = (showEdit ? 180 : 40) + (showBadPhotos ? 40 : 0) + 72
   const left = Math.min(x, window.innerWidth - W - 8)
   const top = Math.min(y, window.innerHeight - H - 8)
   const n = count > 1 ? ` ${count}` : ""
@@ -95,6 +95,7 @@ export function PhotoMenu({
       )}
       {showMove && item("move", `Move${n} to Dropoff`, <FolderOutput className="h-4 w-4" />, canMove)}
       {item("temp", `Move${n} to User Temp Storage…`, <Inbox className="h-4 w-4" />, canTemp)}
+      {item("video", `Move${n} to Video Editing…`, <Clapperboard className="h-4 w-4" />, canTemp)}
       {showEdit && (
         <>
           <div className="my-1 h-px bg-border" />

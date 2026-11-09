@@ -13,4 +13,14 @@ export async function register() {
 
   const { startAiRunner } = await import("@/lib/ai/runner-server")
   startAiRunner()
+
+  // The video inbox is staging: delete files that arrived over 6 months ago, at startup and then daily.
+  const { cleanExpiredInbox } = await import("@/lib/video/inbox-cleanup-server")
+  const sweep = () =>
+    cleanExpiredInbox().then(
+      (n) => n > 0 && console.log(`[video] removed ${n} inbox file${n === 1 ? "" : "s"} older than 6 months`),
+      (error) => console.error("[video] cleanup failed:", error)
+    )
+  void sweep()
+  setInterval(() => void sweep(), 24 * 60 * 60 * 1000).unref()
 }

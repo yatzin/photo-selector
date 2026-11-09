@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Loader2, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { FieldHelp } from "@/components/ui/field-help"
 import { startRunAction } from "@/lib/actions/ai"
 import { ROOT_LABELS, type RootKey } from "@/lib/media"
 import { minScanImages, type ScanKind } from "@/lib/ai/review"
@@ -56,6 +57,7 @@ export function NewScanForm({ kind, folders, ready, isAdmin }: { kind: ScanKind;
         </select>
         <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <input type="checkbox" checked={fresh} onChange={(e) => setFresh(e.target.checked)} /> Start fresh
+          <FieldHelp id="ai.start-fresh" />
         </label>
         <Button onClick={run} disabled={!ready || !value || busy}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Run
