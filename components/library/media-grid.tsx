@@ -536,10 +536,12 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                 <Inbox className="h-4 w-4" />
                 <span className="hidden lg:inline">Temp Storage</span>
               </Button>
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("video-inbox"); setTemp(names) }} title="Move or copy to Video Editing">
-                <Clapperboard className="h-4 w-4" />
-                <span className="hidden lg:inline">Video Editing</span>
-              </Button>
+              {root !== "video-inbox" && root !== "video-projects" && (
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("video-inbox"); setTemp(names) }} title="Move or copy to Video Editing">
+                  <Clapperboard className="h-4 w-4" />
+                  <span className="hidden lg:inline">Video Editing</span>
+                </Button>
+              )}
               {canMove && (
                 <Button size="sm" disabled={busy} onClick={() => run("move", names)} title="Move to Sort Dropoff (M)">
                   <FolderOutput className="h-4 w-4" />

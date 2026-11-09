@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { ChevronsLeft, ChevronsRight, Clapperboard, FolderInput, FolderOutput, FolderKanban, Images, Inbox, Menu, Settings, Sparkles } from "lucide-react"
+import { Clapperboard, FolderInput, FolderOutput, Images, Inbox, Menu, PanelLeftClose, PanelLeftOpen, Settings, Sparkles } from "lucide-react"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import type { RootCounts } from "@/lib/library-server"
 
@@ -15,12 +15,6 @@ const navItems: (NavItem & { root: keyof RootCounts })[] = [
   { root: "upload", href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
   { root: "dropoff", href: "/library/dropoff", label: "Sort Dropoff", icon: FolderOutput },
   { root: "temp", href: "/library/temp", label: "User Temp Storage", icon: Inbox },
-]
-
-// Tools: Video Editing, with its two folders.
-const toolItems: (NavItem & { root: keyof RootCounts })[] = [
-  { root: "video-inbox", href: "/library/video-inbox", label: "Inbox", icon: Inbox },
-  { root: "video-projects", href: "/library/video-projects", label: "Projects", icon: FolderKanban },
 ]
 
 const itemCount = (n: number) => `${n.toLocaleString()} item${n === 1 ? "" : "s"}`
@@ -89,25 +83,12 @@ function SidebarContent({
 }) {
   return (
     <div className={cn("flex h-full flex-col py-4", collapsed ? "px-2" : "px-3")}>
-      <div className={cn("mb-6 flex items-center gap-2", collapsed ? "justify-center" : "px-3")}>
+      {/* The toggle shares the logo's row (under it when collapsed), so it costs the nav no height. */}
+      <div className={cn("mb-6 flex items-center gap-2", collapsed ? "flex-col" : "pl-3")}>
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground" title={collapsed ? "Photo Selector" : undefined}>
           <Images className="h-4 w-4" />
         </div>
         {!collapsed && <span className="whitespace-nowrap font-heading font-semibold tracking-tight">Photo Selector</span>}
-      </div>
-      <nav className="flex flex-1 flex-col gap-1">
-        <Section label="Library" collapsed={collapsed} first />
-        {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} collapsed={collapsed} />)}
-        <Section label="Review" collapsed={collapsed} />
-        <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} collapsed={collapsed} />
-        <Section label="Tools" collapsed={collapsed} />
-        <NavLink href="/tools/video-editing" label="Video Editing" icon={Clapperboard} onClick={onNavClick} collapsed={collapsed} />
-        <div className={cn("flex flex-col gap-1", !collapsed && "ml-4 border-l pl-2")}>
-          {toolItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} collapsed={collapsed} />)}
-        </div>
-      </nav>
-      <nav className="flex flex-col gap-1 border-t pt-3 mt-3">
-        {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} collapsed={collapsed} />)}
         {onToggle && (
           <button
             type="button"
@@ -116,14 +97,24 @@ function SidebarContent({
             aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
             title={collapsed ? "Expand navigation" : "Collapse navigation"}
             className={cn(
-              "flex items-center gap-3 whitespace-nowrap rounded-lg py-2 text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              collapsed ? "justify-center px-0" : "px-3"
+              "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              !collapsed && "ml-auto"
             )}
           >
-            {collapsed ? <ChevronsRight className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} /> : <ChevronsLeft className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />}
-            {!collapsed && "Collapse"}
+            {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.5} aria-hidden="true" /> : <PanelLeftClose className="h-[18px] w-[18px]" strokeWidth={1.5} aria-hidden="true" />}
           </button>
         )}
+      </div>
+      <nav className="flex flex-1 flex-col gap-1">
+        <Section label="Library" collapsed={collapsed} first />
+        {navItems.map(({ root, ...item }) => <NavLink key={item.href} {...item} subtitle={itemCount(counts[root])} onClick={onNavClick} collapsed={collapsed} />)}
+        <Section label="Review" collapsed={collapsed} />
+        <NavLink href="/ai" label="AI" icon={Sparkles} badge={aiPending} onClick={onNavClick} collapsed={collapsed} />
+        <Section label="Tools" collapsed={collapsed} />
+        <NavLink href="/tools/video-editing" label="Video Editing" icon={Clapperboard} onClick={onNavClick} collapsed={collapsed} />
+      </nav>
+      <nav className="flex flex-col gap-1 border-t pt-3 mt-3">
+        {bottomItems.map((item) => <NavLink key={item.href} {...item} onClick={onNavClick} collapsed={collapsed} />)}
       </nav>
     </div>
   )

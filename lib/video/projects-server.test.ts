@@ -357,3 +357,29 @@ describe("assetPath", () => {
     expect(assetPath("mike", "..", "clip.mp4")).toBeNull()
   })
 })
+
+describe("cleanExpiredProjects", () => {
+  it("removes projects unchanged for six months and keeps the rest", async () => {
+    await createProject("mike", "Old")
+    await createProject("mike", "Fresh")
+    await fs.mkdir(path.join(user, "Loose"), { recursive: true })
+    const old = new Date(Date.now() - 200 * 86_400_000)
+    await fs.utimes(path.join(user, "Old", "project.json"), old, old)
+    await fs.utimes(path.join(user, "Loose"), old, old)
+    const { cleanExpiredProjects } = await import("./projects-server")
+    expect(await cleanExpiredProjects()).toBe(1)
+    expect(await exists(user, "Old")).toBe(false)
+    expect(await exists(user, "Fresh", "project.json")).toBe(true)
+    expect(await exists(user, "Loose")).toBe(true)
+  })
+})
+
+describe("listProjects details", () => {
+  it("reports the length and the folder's size", async () => {
+    await createProject("mike", "Sized")
+    await fs.writeFile(path.join(user, "Sized", "assets", "x.bin"), "12345")
+    const [p] = await listProjects("mike")
+    expect(p.duration).toBe(0)
+    expect(p.bytes).toBeGreaterThanOrEqual(5)
+  })
+})

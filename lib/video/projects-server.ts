@@ -7,7 +7,9 @@ import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
 import { peaksFileName } from "./peaks"
-import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, type Asset, type Project } from "./project"
+import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, totalLength, type Asset, type Project } from "./project"
+import { withLock } from "./project-lock-server"
+import { isExpired } from "./retention"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -42,7 +44,28 @@ async function sameDir(a: string, b: string): Promise<boolean> {
 
 const exists = (p: string) => fs.access(p).then(() => true, () => false)
 
-export async function listProjects(userFolder: string): Promise<{ folder: string; name: string; clips: number; modified: number }[]> {
+/** Bytes of every file under `dir`, all levels down. */
+async function dirSize(dir: string): Promise<number> {
+  let entries
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  const sizes = await Promise.all(
+    entries.map(async (e) => {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) return dirSize(full)
+      if (!e.isFile()) return 0
+      return fs.stat(full).then((st) => st.size, () => 0)
+    })
+  )
+  return sizes.reduce((a, b) => a + b, 0)
+}
+
+export type ProjectSummary = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number }
+
+export async function listProjects(userFolder: string): Promise<ProjectSummary[]> {
   const dir = userDir(userFolder)
   if (!dir) return []
   let entries
@@ -51,19 +74,62 @@ export async function listProjects(userFolder: string): Promise<{ folder: string
   } catch {
     return []
   }
-  const out: { folder: string; name: string; clips: number; modified: number }[] = []
+  const out: ProjectSummary[] = []
   for (const e of entries) {
     if (!e.isDirectory()) continue
     const p = await readProject(userFolder, e.name)
     if (!p) continue
     try {
       const st = await fs.stat(path.join(dir, e.name, "project.json"))
-      out.push({ folder: e.name, name: p.name, clips: allClips(p).length, modified: st.mtimeMs })
+      out.push({ folder: e.name, name: p.name, clips: allClips(p).length, modified: st.mtimeMs, duration: totalLength(p), bytes: await dirSize(path.join(dir, e.name)) })
     } catch {
       continue
     }
   }
   return out
+}
+
+/**
+ * Deletes every project whose project.json hasn't changed for the retention
+ * period (lib/video/retention), across all users; returns how many went.
+ * Folders without a project.json are left alone; it takes the project's lock
+ * and checks the file again before removing, so a save in between keeps it.
+ */
+export async function cleanExpiredProjects(now = Date.now()): Promise<number> {
+  const root = rootPath("video-projects")
+  let users
+  try {
+    users = await fs.readdir(root, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const u of users) {
+    if (!u.isDirectory() || !isPlainName(u.name)) continue
+    const dir = path.join(root, u.name)
+    let projects
+    try {
+      projects = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of projects) {
+      if (!e.isDirectory() || !isPlainName(e.name)) continue
+      const file = path.join(dir, e.name, "project.json")
+      try {
+        if (!isExpired((await fs.stat(file)).mtimeMs, now)) continue
+        await withLock(`${u.name}/${e.name}`, async () => {
+          // Saved again while waiting for the lock: keep it.
+          if (!isExpired((await fs.stat(file)).mtimeMs, now)) return
+          await fs.rm(path.join(dir, e.name), { recursive: true, force: true })
+          removed++
+        })
+      } catch {
+        continue
+      }
+    }
+  }
+  return removed
 }
 
 export async function createProject(userFolder: string, name: string): Promise<{ folder: string } | { error: string }> {
