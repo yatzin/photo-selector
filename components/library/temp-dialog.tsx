@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { FieldHelp } from "@/components/ui/field-help"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -107,7 +108,7 @@ export function TempDialog({
           }}
         >
           <div className="grid gap-2">
-            <Label>Action</Label>
+            <div className="flex items-center gap-1.5"><Label>Action</Label><FieldHelp id="send.action" /></div>
             <div className="flex gap-2" role="radiogroup" aria-label="Move or copy">
               {radio("move", "Move", canMove)}
               {radio("copy", "Copy", true)}
@@ -115,7 +116,7 @@ export function TempDialog({
             {!canMove && <p className="text-xs text-muted-foreground">This folder can&apos;t be changed right now, so only a copy is possible.</p>}
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="temp-user">User</Label>
+            <div className="flex items-center gap-1.5"><Label htmlFor="temp-user">User</Label><FieldHelp id="send.user" /></div>
             <select
               id="temp-user"
               value={userId}
@@ -131,7 +132,7 @@ export function TempDialog({
             </select>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="temp-note">Details</Label>
+            <div className="flex items-center gap-1.5"><Label htmlFor="temp-note">Details</Label><FieldHelp id="send.details" /></div>
             <Textarea
               id="temp-note"
               value={note}

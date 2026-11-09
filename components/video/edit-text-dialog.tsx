@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { ArrowRightFromLine, ArrowRightToLine, Pause, Play, Type } from "lucide-react"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { FieldHelp } from "@/components/ui/field-help"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
 import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
 import { animationState, ANIM_GROUPS, demoLength, REST } from "@/lib/video/text-animation"
@@ -62,7 +63,10 @@ function AnimCard({ id, kind, type, seconds, max, error, onType, onSeconds }: {
         </div>
       </div>
       <div className="grid gap-1.5">
-        <label htmlFor={`${id}-type`} className="field-label">Animation</label>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor={`${id}-type`} className="field-label">Animation</label>
+          <FieldHelp id="text.animation" />
+        </div>
         <Select value={type} onValueChange={(v) => onType((v ?? "none") as AnimType | "none")}>
           <SelectTrigger id={`${id}-type`} className="h-9 w-full pointer-coarse:h-11" data-initial-focus={kind === "in" ? true : undefined}>
             <SelectValue>{(v: AnimType | "none") => (v === "none" ? "None" : animLabel(v, kind))}</SelectValue>
@@ -83,6 +87,7 @@ function AnimCard({ id, kind, type, seconds, max, error, onType, onSeconds }: {
       <NumberField
         id={`${id}-seconds`}
         label="Length"
+        help="text.animation-length"
         unit="s"
         step={0.1}
         min={MIN_ANIM}
@@ -249,7 +254,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
 
         <div role="tabpanel" id="edit-text-panel-text" aria-labelledby="edit-text-tab-text" hidden={tab !== "text"} className="grid gap-5 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <div className="grid content-start gap-5">
-            <DialogSection title="Words" id="edit-text-words">
+            <DialogSection title="Words" id="edit-text-words" help="text.content">
               <div className="grid gap-1.5">
                 <label htmlFor="edit-text-content" className="sr-only">Text</label>
                 <Textarea
@@ -276,7 +281,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
                 </p>
               </div>
             </DialogSection>
-            <DialogSection title="Colour" id="edit-text-colour">
+            <DialogSection title="Colour" id="edit-text-colour" help="text.colour">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
                   <span aria-hidden className="size-7 rounded-md ring-1 ring-black/15 ring-inset dark:ring-white/20" style={{ backgroundColor: color }} />
@@ -309,7 +314,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
                 )}
               </div>
             </DialogSection>
-            <DialogSection title="Direction" id="edit-text-direction">
+            <DialogSection title="Direction" id="edit-text-direction" help="text.direction">
               <Segmented
                 label="Direction"
                 value={orientation}
@@ -322,7 +327,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
               />
             </DialogSection>
           </div>
-          <DialogSection title="Font" id="edit-text-font">
+          <DialogSection title="Font" id="edit-text-font" help="text.font">
             <FontPicker font={font} onChange={setFont} />
           </DialogSection>
         </div>

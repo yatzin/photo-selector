@@ -1304,7 +1304,12 @@ export function Timeline({
                         data-clip-id={clip.id}
                         onPointerDown={(e) => startMove(e, clip, i, starts[k])}
                         onContextMenu={(e) => openMenu(e, clip)}
-                        onDoubleClick={text ? () => onEditText(clip.id) : undefined}
+                        onDoubleClick={(e) => {
+                          if ((e.target as HTMLElement).closest("button")) return
+                          if (text) return onEditText(clip.id)
+                          onEditLength()
+                          setLengthFor(clip.id)
+                        }}
                         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(clip.id))}
                         className={cn(
                           "group absolute touch-none select-none overflow-hidden rounded-lg border outline-none",

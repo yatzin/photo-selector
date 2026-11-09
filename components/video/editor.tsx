@@ -1,5 +1,6 @@
 "use client"
 
+import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
@@ -718,8 +719,9 @@ export function Editor({
                 >
                   <AudioWaveform className="h-4 w-4" />
                 </Button>
+                <FieldHelp id="video.waveforms" />
                 <label className="flex min-w-0 items-center gap-2">
-                  Zoom
+                  Zoom<FieldHelp id="video.zoom" className="-ml-1" />
                   <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 min-w-0 accent-editor-accent" />
                 </label>
               </div>

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { LINKED, setClipTiming, type ClipTiming, type TimingMode } from "@/lib/video/clip-timing"
 import { fxPreviewed } from "@/lib/video/audio-levels"
 import { lengthSummary } from "@/lib/video/dialog-ui"
+import { FieldHelp } from "@/components/ui/field-help"
 import { assetKind, clipLength, hasSound, isMagnetic, isTextClip, MIN_CLIP, type Clip, type Project } from "@/lib/video/project"
 import { formatSeconds, parseTime, playheadEdge, roundMs, stepTime, typedEdge, type EdgeResult } from "@/lib/video/source-precision"
 import type { SourceSelection } from "@/lib/video/source-window"
@@ -85,7 +86,10 @@ function SourceTimeField({ side, value, onTry, onPlayhead }: {
   return (
     <div className="grid min-w-0 content-start gap-1.5">
       <div className="flex min-h-5 items-center justify-between gap-2">
-        <label htmlFor={id} className="field-label">{label}</label>
+        <span className="flex items-center gap-1.5">
+          <label htmlFor={id} className="field-label">{label}</label>
+          {side === "in" ? <FieldHelp id="length.in" /> : <FieldHelp id="length.out" />}
+        </span>
         <Button type="button" size="xs" variant="ghost" className="-mr-1.5 text-muted-foreground hover:text-foreground" data-set-to-playhead={side} onClick={onPlayhead} title={`Set ${label} to the preview's playhead`}>
           <Crosshair />
           Set {label} to playhead
@@ -247,6 +251,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
         <NumberField
           id="edit-length-start"
           label="Start"
+          help="length.start"
           unit="s"
           step={0.1}
           min={0}
@@ -260,6 +265,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
         <NumberField
           id="edit-length-end"
           label="End"
+          help="length.end"
           unit="s"
           step={0.1}
           min={0}
@@ -272,6 +278,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
         <NumberField
           id="edit-length-length"
           label="Length"
+          help="length.length"
           unit="s"
           step={0.1}
           min={MIN_CLIP}
@@ -292,7 +299,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
   )
 
   const overlap = (
-    <DialogSection title="When it overlaps other media" id="edit-length-mode">
+    <DialogSection title="When it overlaps other media" id="edit-length-mode" help="length.mode">
       <Segmented
         label="When it overlaps other media"
         value={mode}
@@ -347,7 +354,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
               {overlap}
             </div>
           </div>
-          <DialogSection title="Source" id="edit-length-source">
+          <DialogSection title="Source" id="edit-length-source" help="length.source">
             <p className="-mt-1 text-xs leading-snug text-muted-foreground">Drag an edge to crop, or the selection to slide it. Double-click for the whole file. Click the top row to move the preview; zoom with the buttons, + and −, or Ctrl + wheel.</p>
             <div role="group" aria-labelledby="edit-length-source-label" onKeyDown={(e) => spaceToggles(e, player.toggle)}>
               <SourceStrip

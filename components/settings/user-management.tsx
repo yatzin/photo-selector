@@ -8,6 +8,7 @@ import { z } from "zod"
 import { toast } from "sonner"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { FieldHelp } from "@/components/ui/field-help"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
@@ -178,7 +179,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: (result?:
             )} />
             <FormField control={form.control} name="role" render={({ field }) => (
               <FormItem>
-                <FormLabel>Role *</FormLabel>
+                <FormLabel>Role *<FieldHelp id="users.role" /></FormLabel>
                 <Select onValueChange={field.onChange} value={field.value}>
                   <FormControl><SelectTrigger><SelectValue>{(v: keyof typeof roleLabel) => roleLabel[v]}</SelectValue></SelectTrigger></FormControl>
                   <SelectContent>

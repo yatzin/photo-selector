@@ -12,6 +12,7 @@ import { clipEnd, type Clip, type Project } from "@/lib/video/project"
 import { formatClock } from "@/lib/video/source-precision"
 import { cn } from "@/lib/utils"
 import { dbText, levelsSummary } from "@/lib/video/dialog-ui"
+import { FieldHelp } from "@/components/ui/field-help"
 import { buildLevels, type LevelsChain } from "./audio-levels-graph"
 import { Callout } from "./ui/callout"
 import { CancelButton, DialogFooter, DialogSection, EditorDialog, PrimaryButton, RemoveButton, useEditorDialog } from "./ui/editor-dialog"
@@ -464,6 +465,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
             <DialogSection
               title="Volume"
               id="audio-volume"
+              help="audio.volume"
               action={
                 <Button type="button" size="xs" variant="ghost" className="text-muted-foreground" onClick={() => setGainText("0")} disabled={gainNumber === 0 && gainDb !== null}>
                   <RotateCcw />
@@ -490,7 +492,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
                 {gainNumber === 0 ? "0 dB plays the clip as recorded. Mute silences it altogether." : gainNumber > 6 ? "A big boost can clip; a Limiter after it keeps the peaks in." : `${dbText(gainNumber)} for the whole clip, in the preview and the export.`}
               </p>
             </DialogSection>
-            <DialogSection title="Presets" id="audio-presets">
+            <DialogSection title="Presets" id="audio-presets" help="audio.presets">
               <div className="flex flex-wrap gap-1.5" data-audio-presets>
                 {AUDIO_PRESETS.map((p) => (
                   <button
@@ -509,7 +511,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
                 ))}
               </div>
             </DialogSection>
-            <DialogSection title={`Applied (${fx.length} of ${MAX_FX})`} id="audio-applied">
+            <DialogSection title={`Applied (${fx.length} of ${MAX_FX})`} id="audio-applied" help="audio.applied">
               {fx.length === 0 ? (
                 <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">No effects yet. Pick some below, or start from a preset.</p>
               ) : (
@@ -536,7 +538,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
                         </span>
                         {fi.amount ? (
                           <label className="col-start-2 col-end-4 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                            Intensity
+                            Intensity<FieldHelp id="audio.amount" className="-ml-1" />
                             <input
                               type="range"
                               min={0}
@@ -568,7 +570,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
             </DialogSection>
           </div>
         </div>
-        <DialogSection title="Effects" id="audio-effects">
+        <DialogSection title="Effects" id="audio-effects" help="audio.effects">
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,17rem)]">
             <div data-audio-fx-chips className="min-w-0">
               <TileGrid

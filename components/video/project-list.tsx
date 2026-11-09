@@ -7,6 +7,7 @@ import { ArrowDown, ArrowUp, ChevronDown, Clapperboard, FolderPlus, Inbox, Loade
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { FieldHelp } from "@/components/ui/field-help"
 import { Input } from "@/components/ui/input"
 import { createProjectAction, deleteProjectAction, renameProjectAction } from "@/lib/actions/video-projects"
 import { formatBytes } from "@/lib/format"
@@ -124,9 +125,12 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="relative max-w-sm">
+          <div className="flex max-w-sm items-center gap-2">
+          <div className="relative min-w-0 flex-1">
             <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input type="search" aria-label="Search projects" placeholder="Search projects" value={query} onChange={(e) => setQuery(e.target.value)} className="h-9 pl-8" />
+          </div>
+          <FieldHelp id="video.search" />
           </div>
           <div role="table" aria-label="Video projects" className="overflow-hidden rounded-xl border bg-card">
             <div role="row" className={cn(ROW, "border-b bg-muted/40 px-4 py-1.5")}>
@@ -253,7 +257,10 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
         </Callout>
       ) : (
         <div className="grid gap-1.5">
-          <label htmlFor="project-name" className="field-label">Project name</label>
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="project-name" className="field-label">Project name</label>
+            <FieldHelp id="video.project-name" />
+          </div>
           <Input
             id="project-name"
             data-initial-focus

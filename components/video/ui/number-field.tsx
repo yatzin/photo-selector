@@ -2,6 +2,7 @@
 
 import { useRef, type KeyboardEvent, type PointerEvent, type ReactNode, type Ref } from "react"
 import { CircleAlert, Link2, Minus, Plus } from "lucide-react"
+import { FieldHelp } from "@/components/ui/field-help"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { scrubValue } from "@/lib/video/dialog-ui"
 import { cn } from "@/lib/utils"
@@ -69,9 +70,11 @@ export function ScrubLabel({ htmlFor, id, children, value, step, min, max, disab
   )
 }
 
-export function NumberField({ id, label, value, onChange, unit, step, min, max, disabled, disabledReason, error, hint, linked, scrub = true, autoFocus, initialFocus, inputRef, className, inputClassName, onEnter }: {
+export function NumberField({ id, label, help, value, onChange, unit, step, min, max, disabled, disabledReason, error, hint, linked, scrub = true, autoFocus, initialFocus, inputRef, className, inputClassName, onEnter }: {
   id: string
   label: string
+  /** The field's id in lib/field-help: shows a ? beside the label. */
+  help?: string
   /** The field's text. */
   value: string
   onChange: (text: string) => void
@@ -137,6 +140,7 @@ export function NumberField({ id, label, value, onChange, unit, step, min, max, 
         ) : (
           <label htmlFor={id} className="field-label">{label}</label>
         )}
+        {help && <FieldHelp id={help} />}
         {linked && (
           <Tooltip>
             <TooltipTrigger

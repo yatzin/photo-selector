@@ -4,6 +4,7 @@ import { useState } from "react"
 import { ArrowRight, AudioLines, Blend, LogIn, LogOut, Type } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { trimSummary } from "@/lib/video/dialog-ui"
+import { FieldHelp } from "@/components/ui/field-help"
 import { audioCutState, audioEdgeState } from "@/lib/video/audio-fx"
 import { allClips, clipLength, isAudioClip, isTextClip, type Clip, type Project } from "@/lib/video/project"
 import {
@@ -265,7 +266,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
           <Tips name={choice === "none" ? "None (hard cut)" : TRANSITION_INFO[choice].name} {...guide} />
         </div>
         <div className="grid min-w-0 content-start gap-5">
-          <DialogSection title="Transition" id="transition-type">
+          <DialogSection title="Transition" id="transition-type" help="transition.type">
             <TileGrid
               label="Transition"
               groups={TRANSITION_GROUPS.map((g) => ({ name: g, items: TRANSITION_TYPES.filter((t) => TRANSITION_INFO[t].group === g) }))}
@@ -284,6 +285,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
               <NumberField
                 id="transition-duration"
                 label="Duration"
+                help="transition.duration"
                 unit="s"
                 step={0.1}
                 min={MIN_TRANSITION}
@@ -296,7 +298,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
                 hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
               />
               <div className="grid content-start gap-1.5">
-                <span className="field-label flex min-h-5 items-center">Audio overlap</span>
+                <span className="field-label flex min-h-5 items-center gap-1.5">Audio overlap<FieldHelp id="transition.audio-overlap" /></span>
                 <Segmented
                   label="Audio overlap"
                   value={audioMode}
@@ -314,6 +316,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
                 <NumberField
                   id="cut-audio-duration"
                   label="Overlap"
+                  help="transition.overlap"
                   unit="s"
                   step={0.1}
                   min={MIN_CUT_AUDIO}
@@ -492,7 +495,7 @@ function AudioCutDialog({ project, clip, audioUrl, onApply, onClose }: {
           <Tips name={choice === "none" ? "None (hard cut)" : AUDIO_TRANSITION_INFO[choice].name} {...(choice === "none" ? transitionGuide("none") : AUDIO_TRANSITION_GUIDES[choice])} />
         </div>
         <div className="grid min-w-0 content-start gap-5">
-          <DialogSection title="Audio transition" id="audio-transition-type">
+          <DialogSection title="Audio transition" id="audio-transition-type" help="transition.audio-type">
             <TileGrid
               label="Audio transition"
               groups={AUDIO_TRANSITION_GROUPS.map((g) => ({ name: g, items: AUDIO_TRANSITION_TYPES.filter((t) => AUDIO_TRANSITION_INFO[t].group === g) }))}
@@ -510,6 +513,7 @@ function AudioCutDialog({ project, clip, audioUrl, onApply, onClose }: {
             <NumberField
               id="transition-duration"
               label="Duration"
+                help="transition.duration"
               unit="s"
               step={0.1}
               min={MIN_TRANSITION}
@@ -596,7 +600,7 @@ function EdgeDialog({ project, clip, edge, videoUrl, imageUrl, audioUrl, onApply
           <Tips {...guide} />
         </div>
         <div className="grid min-w-0 content-start gap-5">
-          <DialogSection title={audio ? (edge === "in" ? "Fade in" : "Fade out") : edge === "in" ? "Transition in" : "Transition out"} id="edge-type">
+          <DialogSection title={audio ? (edge === "in" ? "Fade in" : "Fade out") : edge === "in" ? "Transition in" : "Transition out"} id="edge-type" help="transition.edge">
             {audio ? (
               <TileGrid
                 label={edge === "in" ? "Fade in" : "Fade out"}
@@ -631,6 +635,7 @@ function EdgeDialog({ project, clip, edge, videoUrl, imageUrl, audioUrl, onApply
             <NumberField
               id="edge-duration"
               label="Duration"
+                help="transition.duration"
               unit="s"
               step={0.1}
               min={MIN_EDGE}

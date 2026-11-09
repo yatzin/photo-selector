@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type Key
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { X, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { FieldHelp } from "@/components/ui/field-help"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
@@ -231,12 +232,12 @@ export function RemoveButton({ children, onClick }: { children: ReactNode; onCli
 }
 
 /** A body section: a small-caps label (with an optional control at its right) over its content. */
-export function DialogSection({ title, action, children, className, id }: { title: string; action?: ReactNode; children: ReactNode; className?: string; id?: string }) {
+export function DialogSection({ title, action, children, className, id, help }: { title: string; action?: ReactNode; children: ReactNode; className?: string; id?: string; help?: string }) {
   const labelId = id ? `${id}-label` : undefined
   return (
     <section aria-labelledby={labelId} className={cn("grid min-w-0 content-start gap-2.5", className)}>
       <div className="flex min-h-6 items-center justify-between gap-2">
-        <h3 id={labelId} className="section-label">{title}</h3>
+        <h3 id={labelId} className="section-label flex items-center gap-1.5">{title}{help && <FieldHelp id={help} />}</h3>
         {action}
       </div>
       {children}
