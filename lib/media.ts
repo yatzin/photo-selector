@@ -28,19 +28,18 @@ export function isSkippedDir(name: string): boolean {
  * The library roots, chosen by the short key used in URLs. Mapped from the
  * NAS in docker-compose.yml; locally they can point at the UNC share.
  */
-export const ROOT_KEYS = ["upload", "dropoff", "temp", "video-inbox", "video-projects"] as const
+export const ROOT_KEYS = ["upload", "dropoff", "temp", "video-projects"] as const
 export type RootKey = (typeof ROOT_KEYS)[number]
 
 export const ROOT_LABELS: Record<RootKey, string> = {
   upload: "Mobile Upload",
   dropoff: "Sort Dropoff",
-  temp: "User Temp Storage",
-  "video-inbox": "Video Editing Inbox",
+  temp: "Personal Storage",
   "video-projects": "Video Editing Projects",
 }
 
 /** Roots that hold a folder per user, where files can carry a note. */
-export const NOTE_ROOT_KEYS = ["temp", "video-inbox"] as const satisfies readonly RootKey[]
+export const NOTE_ROOT_KEYS = ["temp"] as const satisfies readonly RootKey[]
 export type NoteRootKey = (typeof NOTE_ROOT_KEYS)[number]
 
 export function isNoteRoot(value: string): value is NoteRootKey {
@@ -58,7 +57,7 @@ export function isReadOnlyRoot(value: string): value is "video-projects" {
 
 export const READ_ONLY_ROOT_MESSAGE = "Video Editing projects are read-only here."
 
-/** The roots AI scans can read. User Temp Storage and Video Editing are staging areas, not part of the library to sort. */
+/** The roots AI scans can read. Personal Storage and Video Editing are staging areas, not part of the library to sort. */
 export const SCAN_ROOT_KEYS = ["upload", "dropoff"] as const satisfies readonly RootKey[]
 
 export function isScanRoot(value: string): value is (typeof SCAN_ROOT_KEYS)[number] {
@@ -76,13 +75,18 @@ function cleanFolderName(s: string): string {
 }
 
 /**
- * A user's folder inside User Temp Storage, named after them. Characters no
+ * A user's folder inside Personal Storage, named after them. Characters no
  * file system accepts are dropped, as is a leading ".", "@" or "#" (folders
  * starting with those are skipped in listings); the email's local part, then
  * "user", stand in when nothing is left.
  */
 export function tempFolderName(name: string, email: string): string {
   return cleanFolderName(name) || cleanFolderName(email.split("@")[0] ?? "") || "user"
+}
+
+/** A subfolder's name in Personal Storage: the same cleaning as a user's folder, null when nothing is left. */
+export function subfolderName(name: string): string | null {
+  return cleanFolderName(name) || null
 }
 
 /** A video project's folder name: the same cleaning as tempFolderName, "Untitled" when nothing is left. */

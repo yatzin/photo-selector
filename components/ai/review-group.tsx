@@ -13,7 +13,7 @@ import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
 import { PhotoMenu } from "@/components/library/photo-menu"
-import { TempDialog, type TempDest } from "@/components/library/temp-dialog"
+import { TempDialog } from "@/components/library/temp-dialog"
 
 export type ReviewPhoto = { name: string; rank: number | null; note: string | null; suggested: boolean; decision: "KEEP" | "TRASH" | null; current: FileEntry | null }
 
@@ -62,10 +62,9 @@ export function ReviewGroup({
   }, [confirmingDelete])
   const [viewer, setViewer] = useState<number | null>(null)
   const items = present.map((p) => p.current!)
-  // Right-click on a photo: move or copy it to User Temp Storage.
+  // Right-click on a photo: move or copy it to Personal Storage.
   const [menu, setMenu] = useState<{ x: number; y: number; name: string } | null>(null)
   const [temp, setTemp] = useState<string | null>(null)
-  const [tempDest, setTempDest] = useState<TempDest>("temp")
 
   useEffect(() => {
     if (viewer === null || temp !== null) return
@@ -217,8 +216,7 @@ export function ReviewGroup({
           onMove={() => {}}
           onDelete={() => {}}
           onRotate={() => {}}
-          onTemp={(name) => { setTempDest("temp"); setTemp(name) }}
-          onVideo={(name) => { setTempDest("video-inbox"); setTemp(name) }}
+          onTemp={(name) => setTemp(name)}
         />
       )}
       {menu && (
@@ -232,14 +230,13 @@ export function ReviewGroup({
           canEdit={false}
           showEdit={false}
           canTemp={!busy}
-          onAction={(action) => { setTempDest(action === "video" ? "video-inbox" : "temp"); setTemp(menu.name) }}
+          onAction={() => setTemp(menu.name)}
           onClose={() => setMenu(null)}
         />
       )}
       {temp !== null && (
         <TempDialog
           target={{ root, folder, names: [temp] }}
-          dest={tempDest}
           canMove={!locked}
           onDone={() => router.refresh()}
           onClose={() => setTemp(null)}

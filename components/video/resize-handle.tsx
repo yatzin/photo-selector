@@ -3,18 +3,25 @@
 import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 
-// A horizontal bar between two stacked panels that sets the upper one's height:
-// drag it, or focus it and use the arrow keys (Home/End for the limits).
-// Double-click resets. `onResize(px, done)` reports every step of a drag
-// (done = false) and the final height (done = true).
+// A bar between two panels that sets one's size: drag it, or focus it and use
+// the arrow keys (Home/End for the limits). Double-click resets.
+// `onResize(px, done)` reports every step of a drag (done = false) and the
+// final size (done = true). By default it is a horizontal bar between stacked
+// panels and sets the upper one's height; with axis "x" it is a vertical bar
+// between side-by-side panels and sets the width of the one `after` it (the
+// right one: dragging left makes it wider) or, with `before`, the left one.
 
 const KEY_STEP = 24
 
 export function ResizeHandle({
-  label, value, min, max, onResize, onReset, className,
+  label, value, min, max, onResize, onReset, className, axis = "y", sizes = "before",
 }: {
   label: string
-  /** The upper panel's current height, px. */
+  /** "y": a bar across, sizing the panel above it. "x": a bar down, sizing the panel `sizes` says. */
+  axis?: "x" | "y"
+  /** With axis "x": which side's width `value` is. */
+  sizes?: "before" | "after"
+  /** The sized panel's current size (height, or width with axis "x"), px. */
   value: number
   min: number
   max: number
@@ -32,11 +39,12 @@ export function ResizeHandle({
     if (e.button !== 0) return
     e.preventDefault()
     stopDrag.current?.()
-    const startY = e.clientY
+    const startAt = axis === "x" ? e.clientX : e.clientY
+    const sign = axis === "x" && sizes === "after" ? -1 : 1
     const start = value
     let last = start
     const onMove = (ev: PointerEvent) => {
-      last = clamp(start + ev.clientY - startY)
+      last = clamp(start + sign * ((axis === "x" ? ev.clientX : ev.clientY) - startAt))
       onResize(last, false)
     }
     const stop = () => {
@@ -56,8 +64,9 @@ export function ResizeHandle({
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    const next =
-      e.key === "ArrowUp" ? value - KEY_STEP : e.key === "ArrowDown" ? value + KEY_STEP : e.key === "Home" ? min : e.key === "End" ? max : null
+    const grow = axis === "x" ? (sizes === "after" ? "ArrowLeft" : "ArrowRight") : "ArrowDown"
+    const shrink = axis === "x" ? (sizes === "after" ? "ArrowRight" : "ArrowLeft") : "ArrowUp"
+    const next = e.key === shrink ? value - KEY_STEP : e.key === grow ? value + KEY_STEP : e.key === "Home" ? min : e.key === "End" ? max : null
     if (next === null) return
     e.preventDefault()
     onResize(clamp(next), true)
@@ -66,7 +75,7 @@ export function ResizeHandle({
   return (
     <div
       role="separator"
-      aria-orientation="horizontal"
+      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
       aria-label={label}
       aria-valuenow={value}
       aria-valuemin={min}
@@ -77,11 +86,12 @@ export function ResizeHandle({
       onKeyDown={onKeyDown}
       onDoubleClick={onReset}
       className={cn(
-        "group relative flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center bg-border/60 outline-none hover:bg-editor-accent/30 focus-visible:bg-editor-accent/40",
+        "group relative flex shrink-0 touch-none items-center justify-center bg-border/60 outline-none hover:bg-editor-accent/30 focus-visible:bg-editor-accent/40",
+        axis === "x" ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize",
         className
       )}
     >
-      <span aria-hidden="true" className="h-0.5 w-10 rounded-full bg-muted-foreground/50 group-hover:bg-editor-accent" />
+      <span aria-hidden="true" className={cn("rounded-full bg-muted-foreground/50 group-hover:bg-editor-accent", axis === "x" ? "h-10 w-0.5" : "h-0.5 w-10")} />
     </div>
   )
 }

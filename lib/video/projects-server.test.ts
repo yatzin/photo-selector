@@ -14,7 +14,7 @@ const projects = path.join(tmp, "projects")
 const inbox = path.join(tmp, "inbox")
 
 process.env.PHOTOS_VIDEO_PROJECTS_DIR = projects
-process.env.PHOTOS_VIDEO_INBOX_DIR = inbox
+process.env.PHOTOS_TEMP_DIR = inbox
 process.env.PHOTOS_CACHE_DIR = path.join(tmp, "cache")
 
 afterAll(() => fs.rm(tmp, { recursive: true, force: true }))

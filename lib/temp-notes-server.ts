@@ -2,7 +2,7 @@ import "server-only"
 import { prisma } from "@/lib/prisma"
 import type { NoteRootKey } from "@/lib/media"
 
-// Notes left with photos put in User Temp Storage or the Video Editing Inbox
+// Notes left with photos put in Personal Storage
 // (see lib/actions/temp.ts). Keyed by root, the user's folder and the file's name there.
 
 export type TempNoteView = { note: string; by: string | null; at: number }

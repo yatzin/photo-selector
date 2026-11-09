@@ -7,15 +7,17 @@ import { z } from "zod"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { sendToTemp, type ActionResult } from "@/lib/file-ops-server"
-import { isNoteRoot, isPlainPath, isReadOnlyRoot, isRootKey, NOTE_ROOT_KEYS, READ_ONLY_ROOT_MESSAGE, ROOT_LABELS, safeSegments, tempFolderName } from "@/lib/media"
+import { isNoteRoot, isPlainName, isPlainPath, isReadOnlyRoot, isRootKey, READ_ONLY_ROOT_MESSAGE, ROOT_LABELS, safeSegments, tempFolderName } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
+import { listTempFolderPaths, listTempTrash, moveFromTrash, restoreTrash } from "@/lib/temp-trash-server"
+import type { TrashBatch } from "@/lib/temp-trash"
+import { createTempFolder, renameTempFile, renameTempFolder, trashTempFolder } from "@/lib/temp-folders-server"
 import { clearRootCounts } from "@/lib/library-server"
 
-// User Temp Storage and Video Editing Inbox: a staging folder per user. Photos
-// and videos are moved or copied there from anywhere in the library, each with
-// a note for that user.
+// Personal Storage: a staging folder per user. Photos and videos are moved or
+// copied there from anywhere in the library, each with a note for that user.
 
 export type TempUser = { id: string; name: string; folder: string }
 
@@ -37,8 +39,6 @@ export async function listTempUsersAction(): Promise<TempUser[]> {
 
 const input = z.object({
   root: z.string().refine(isRootKey),
-  /** Where they go. */
-  dest: z.enum(NOTE_ROOT_KEYS).default("temp"),
   folder: z.array(z.string()).max(64),
   // May sit in a day folder of a month scan ("18/IMG_1.jpg").
   names: z.array(z.string().refine(isPlainPath)).min(1).max(MAX_BATCH),
@@ -49,7 +49,6 @@ const input = z.object({
 
 export async function sendToTempAction(data: {
   root: string
-  dest?: string
   folder: string[]
   names: string[]
   userId: string
@@ -59,7 +58,8 @@ export async function sendToTempAction(data: {
   const session = await requireUser()
   const parsed = input.safeParse(data)
   if (!parsed.success) return { error: "Invalid request." }
-  const { root, dest, names, userId, mode } = parsed.data
+  const { root, names, userId, mode } = parsed.data
+  const dest = "temp"
   const folder = safeSegments(parsed.data.folder)
   if (!folder || !isRootKey(root)) return { error: "Invalid folder." }
   // A copy leaves the source alone, so it's allowed from a read-only root.
@@ -90,4 +90,101 @@ export async function sendToTempAction(data: {
   revalidatePath("/library", "layout")
   revalidatePath("/ai", "layout")
   return { ...result, to: user.name, dest: ROOT_LABELS[dest] }
+}
+
+const folderPath = z.array(z.string()).max(16)
+
+/** Makes a subfolder inside a folder of Personal Storage (below a user's own folder). */
+export async function createTempFolderAction(parent: string[], name: string): Promise<{ name: string } | { error: string }> {
+  await requireUser()
+  const p = folderPath.safeParse(parent)
+  const segments = p.success ? safeSegments(p.data) : null
+  if (!segments || typeof name !== "string" || name.length > 200) return { error: "Invalid request." }
+  const result = await createTempFolder(segments, name)
+  if (!("error" in result)) refresh()
+  return result
+}
+
+/** Deletes a subfolder and what's in it (to the trash). */
+export async function deleteTempFolderAction(parent: string[], name: string): Promise<{ ok: true } | { error: string }> {
+  await requireUser()
+  const p = folderPath.safeParse(parent)
+  const segments = p.success ? safeSegments(p.data) : null
+  if (!segments || typeof name !== "string" || !isPlainPath(name) || name.includes("/")) return { error: "Invalid request." }
+  const result = await trashTempFolder(segments, name)
+  if (!("error" in result)) refresh()
+  return result
+}
+
+/** Renames a subfolder (not a user's own folder). */
+export async function renameTempFolderAction(parent: string[], name: string, newName: string): Promise<{ name: string } | { error: string }> {
+  await requireUser()
+  const p = folderPath.safeParse(parent)
+  const segments = p.success ? safeSegments(p.data) : null
+  if (!segments || !isPlainName(name) || typeof newName !== "string" || newName.length > 200) return { error: "Invalid request." }
+  const result = await renameTempFolder(segments, name, newName)
+  if (!("error" in result)) refresh()
+  return result
+}
+
+/** Renames a photo or video, keeping its extension; its note, if it has one, moves with it. */
+export async function renameTempFileAction(parent: string[], name: string, newStem: string): Promise<{ name: string } | { error: string }> {
+  await requireUser()
+  const p = folderPath.safeParse(parent)
+  const segments = p.success ? safeSegments(p.data) : null
+  if (!segments || !isPlainName(name) || typeof newStem !== "string" || newStem.length > 200) return { error: "Invalid request." }
+  const result = await renameTempFile(segments, name, newStem)
+  if ("error" in result) return result
+  // Notes are kept for files directly in a user's folder, by name.
+  if (segments.length === 1 && result.name !== name) {
+    await prisma.tempNote.updateMany({ where: { root: "temp", folder: segments[0], name }, data: { name: result.name } })
+  }
+  refresh()
+  return result
+}
+
+const trashRef = z.object({ folder: z.array(z.string()).max(16), name: z.string().refine(isPlainName) })
+const batchId = z.string().regex(/^\d{13}-[a-z0-9]{1,8}$/i)
+
+/** Everything in the Personal Storage trash, newest delete first. */
+export async function listTempTrashAction(): Promise<TrashBatch[]> {
+  await requireUser()
+  return listTempTrash()
+}
+
+/** Every Personal Storage folder, for choosing where to move a file from the trash. */
+export async function listTempFoldersAction(): Promise<string[]> {
+  await requireUser()
+  return listTempFolderPaths()
+}
+
+/** Puts files of one trash batch back where they were deleted from (all of them when `files` is null). */
+export async function restoreTrashAction(id: string, files: { folder: string[]; name: string }[] | null): Promise<{ restored: number; failed: { name: string; error: string }[] } | { error: string }> {
+  await requireUser()
+  const b = batchId.safeParse(id)
+  const refs = files === null ? null : z.array(trashRef).max(5000).safeParse(files)
+  if (!b.success || (refs && !refs.success)) return { error: "Invalid request." }
+  const checked = refs && refs.success ? refs.data.map((r) => ({ name: r.name, folder: safeSegments(r.folder) })) : null
+  if (checked?.some((r) => !r.folder)) return { error: "Invalid request." }
+  const result = await restoreTrash(b.data, checked ? checked.map((r) => ({ name: r.name, folder: r.folder! })) : null)
+  refresh()
+  return result
+}
+
+/** Moves one file out of the trash into another Personal Storage folder. */
+export async function moveTrashAction(id: string, file: { folder: string[]; name: string }, destination: string[]): Promise<{ name: string } | { error: string }> {
+  await requireUser()
+  const b = batchId.safeParse(id)
+  const f = trashRef.safeParse(file)
+  const from = f.success ? safeSegments(f.data.folder) : null
+  const to = folderPath.safeParse(destination)
+  if (!b.success || !f.success || !from || !to.success) return { error: "Invalid request." }
+  const result = await moveFromTrash(b.data, { folder: from, name: f.data.name }, to.data)
+  if (!("error" in result)) refresh()
+  return result
+}
+
+function refresh() {
+  clearRootCounts()
+  revalidatePath("/library", "layout")
 }

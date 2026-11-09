@@ -28,12 +28,12 @@ model User {
   tempNotesBy       TempNote[] @relation("TempNoteBy")
 }
 
-/// The note left with a photo or video put in someone's User Temp Storage or
-/// Video Editing Inbox folder. One per file: putting the same name there again
+/// The note left with a photo or video put in someone's Personal Storage
+/// folder. One per file: putting the same name there again
 /// replaces the file and updates the note.
 model TempNote {
   id          String   @id @default(cuid())
-  /// Which root the folder is in: "temp" or "video-inbox" (see NOTE_ROOT_KEYS in lib/media.ts).
+  /// Which root the folder is in: "temp" (see NOTE_ROOT_KEYS in lib/media.ts).
   root        String   @default("temp")
   /// The user's folder inside that root (see tempFolderName in lib/media.ts).
   folder      String

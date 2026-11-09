@@ -14,7 +14,7 @@ import { DEFAULT_FONT, fontById, isFontId, lineWidth } from "./fonts"
 // - Each font carries its advance widths (read from the font file when it was
 //   added) and line metrics. A line's width is its characters' advances added
 //   up; for Mono that's 0.6 of the font size a character, as before.
-// - The base font size is a tenth of the canvas height (108 px on 1080p); the
+// - The base font size is a tenth of the canvas's shorter side (108 px on 1080p, either way up); the
 //   clip's Transform scale multiplies it like any picture's.
 // - Lines: horizontal text breaks at its newlines only (no wrapping); vertical
 //   text puts every character on its own line (letters stacked), and a space or
@@ -183,10 +183,10 @@ export function textLayout(text: Pick<ClipText, "content" | "orientation" | "fon
   return { w, h, lines: lines.map((l, i) => ({ text: l, cx: w / 2, baseline: pad + (i * font.line + font.ascent) * fontPx })) }
 }
 
-/** The base font size (px) on a canvas `canvasH` tall. */
+/** The base font size (px) for a canvas whose shorter side is `canvasH` (its height when wide, its width when tall, so text looks the same either way up). */
 export const baseFontPx = (canvasH: number) => canvasH * TEXT_BASE
 
-/** A text's natural (scale 1) content box on a canvas `canvasH` tall, in canvas px. */
+/** A text's natural (scale 1) content box on a canvas whose shorter side is `canvasH`, in canvas px. */
 export function textSize(text: Pick<ClipText, "content" | "orientation" | "font">, canvasH: number): { w: number; h: number } {
   const { w, h } = textLayout(text, baseFontPx(canvasH))
   return { w, h }

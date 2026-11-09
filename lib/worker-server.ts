@@ -11,7 +11,7 @@ import { purgeTrash } from "@/lib/file-ops-server"
 // Mobile Upload (a phone backup landing). New files are queued at low
 // priority, so someone browsing always goes first.
 //
-// Mobile Upload and User Temp Storage get previews too (that's where photos
+// Mobile Upload and Personal Storage get previews too (that's where photos
 // are looked at one by one); Sort Dropoff only thumbnails, with previews made
 // when opened.
 
@@ -25,7 +25,6 @@ const PREPARE: Record<RootKey, Variant[]> = {
   upload: ["thumb", "preview"],
   dropoff: ["thumb"],
   temp: ["thumb", "preview"],
-  "video-inbox": ["thumb", "preview"],
   "video-projects": ["thumb", "preview"],
 }
 

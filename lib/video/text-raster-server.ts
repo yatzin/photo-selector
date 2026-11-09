@@ -11,7 +11,11 @@ import { textLayout, type ClipText } from "./text"
 // line centred across the box on the baseline textLayout gives, as the preview
 // draws it. The export then treats the PNG like an image clip's still.
 
-const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
+// Run from a temporary folder (cwd below), so a relative FFMPEG_PATH such as "./.data/ffmpeg.exe" is made absolute first; a bare "ffmpeg" is found on PATH.
+const ffmpeg = () => {
+  const p = process.env.FFMPEG_PATH || "ffmpeg"
+  return /[\\/]/.test(p) ? path.resolve(p) : p
+}
 
 /** A font's file (lib/video/fonts; Mono for none), under public/fonts in the app's folder (the server's working directory, in development, tests and the container). */
 export const textFontPath = (font?: string) => path.join(process.cwd(), "public", "fonts", fontById(font).file)

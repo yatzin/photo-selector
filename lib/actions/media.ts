@@ -44,7 +44,7 @@ function done<T extends ActionResult>(result: T): T {
 export async function moveToDropoffAction(input: { root: string; folder: string[]; names: string[] }) {
   const t = await parse(input)
   if ("error" in t) return t
-  if (t.root === "dropoff") return { error: "Only files in Mobile Upload, User Temp Storage or Video Editing Inbox can be moved to the drop-off." }
+  if (t.root === "dropoff") return { error: "Only files in Mobile Upload or Personal Storage can be moved to the drop-off." }
   const result = await moveToDropoff(t.root, t.folder, t.names)
   if (isNoteRoot(t.root)) await dropTempNotes(t.root, t.folder, result.ok)
   return done(result)

@@ -168,7 +168,7 @@ export function EdgeLoopPreview({ project, clip, edge, type, duration, videoUrl,
 
   const tf = clip.transform ?? IDENTITY
   const picture = (mirror = false) => {
-    if (isTextClip(clip)) return <div className="absolute" style={placement(textSize(clip.text, H), W, H, tf)}><TextPicture text={clip.text} ready /></div>
+    if (isTextClip(clip)) return <div className="absolute" style={placement(textSize(clip.text, Math.min(W, H)), W, H, tf)}><TextPicture text={clip.text} ready /></div>
     const style = placement(aspect ?? W / H, W, H, tf)
     // A clip with no transform fills the canvas letterboxed in black, as in the editor.
     if (isStill(project, clip)) {

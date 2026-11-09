@@ -1,4 +1,3 @@
-import { RetentionNote } from "@/components/video/retention-note"
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
@@ -6,6 +5,8 @@ import { isNoteRoot, isReadOnlyRoot, isRootKey, resolveInside, ROOT_LABELS } fro
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
 import { MediaGrid } from "@/components/library/media-grid"
+import { TrashButton } from "@/components/library/temp-trash"
+import { NewTempFolderButton, TempBrowser, TempFolderCard, UploadMediaButton } from "@/components/library/temp-folder-actions"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
 import { activeScans, folderLocked } from "@/lib/ai/lock-server"
 import { isFolderLocked } from "@/lib/ai/lock"
@@ -51,7 +52,7 @@ export default async function LibraryPage({
   const [listing, locked] = await Promise.all([listDirectory(root, segments), folderLocked(root, segments)])
   if (!listing) notFound()
   // Photos a Quality Checks scan flagged as bad get a red frame; ones in User
-  // Temp Storage carry the note they were sent with.
+  // Personal Storage carry the note they were sent with.
   const [flags, notes] = await Promise.all([
     qualityFlags(root, segments, listing.files),
     isNoteRoot(root) ? tempNotes(root, segments, listing.files.map((f) => f.name)) : undefined,
@@ -59,8 +60,10 @@ export default async function LibraryPage({
 
   const totalBytes = listing.files.reduce((sum, f) => sum + f.size, 0)
 
+  // Personal Storage: below a user's own folder, folders can be made, renamed and deleted and media uploaded.
+  const personal = root === "temp" && segments.length > 0 && status.writable
   return (
-    <div className="space-y-6">
+    <TempBrowser parent={segments} enabled={personal}>
       <div>
         <nav aria-label="Folder path" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
           <Link href={libraryHref(root, [])} className="hover:text-foreground">{ROOT_LABELS[root]}</Link>
@@ -71,15 +74,22 @@ export default async function LibraryPage({
             </span>
           ))}
         </nav>
-        <h1 className="mt-1 font-heading text-2xl font-semibold">{segments.at(-1) ?? ROOT_LABELS[root]}</h1>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+          <h1 className="font-heading text-2xl font-semibold">{segments.at(-1) ?? ROOT_LABELS[root]}</h1>
+          {root === "temp" && (
+            <div className="flex items-center gap-2">
+              {personal && <UploadMediaButton />}
+              {personal && <NewTempFolderButton />}
+              <TrashButton />
+            </div>
+          )}
+        </div>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {listing.files.length.toLocaleString()} item{listing.files.length === 1 ? "" : "s"} in this folder
           {listing.files.length > 0 && <> &middot; {formatBytes(totalBytes)}</>}
           {!status.writable && <> &middot; <span className="text-destructive">read-only</span></>}
         </p>
       </div>
-
-      {root === "video-inbox" && <RetentionNote />}
 
       {locked && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
@@ -94,7 +104,9 @@ export default async function LibraryPage({
 
       {listing.folders.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {listing.folders.map((f) => (
+          {listing.folders.map((f) => root === "temp" ? (
+            <TempFolderCard key={f.name} parent={segments} name={f.name} count={f.mediaCount} href={libraryHref(root, [...segments, f.name])} editable={personal} />
+          ) : (
             <Link
               key={f.name}
               href={libraryHref(root, [...segments, f.name])}
@@ -125,13 +137,11 @@ export default async function LibraryPage({
         listing.folders.length === 0 && (
           <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
             {root === "temp" && segments.length === 0
-              ? "Nothing here yet. Right-click photos anywhere in the library and choose Move to User Temp Storage to start a folder for someone."
-              : root === "video-inbox" && segments.length === 0
-                ? "Nothing here yet. Right-click photos or videos anywhere in the library and choose Move to Video Editing to start a folder for someone."
-                : "Nothing here yet."}
+              ? "Nothing here yet. Right-click photos anywhere in the library and choose Move to Personal Storage to start a folder for someone."
+              : "Nothing here yet."}
           </div>
         )
       )}
-    </div>
+    </TempBrowser>
   )
 }

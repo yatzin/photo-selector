@@ -11,6 +11,35 @@ export const VIDEO_HELP: FieldHelpMap = {
     what: "Narrows the list to projects whose name contains what you type.",
     use: "Only changes what you see here. Sorting still applies to the matches.",
   },
+  "video.orientation": {
+    title: "Orientation",
+    what: "Whether the video is wide (Horizontal) or tall (Vertical).",
+    use: "Sets the shape of the preview and of the exported video. A new project picks it from the first video or photo you add; you can change it any time. Clips keep their place and size relative to the frame.",
+    values: [
+      { label: "Horizontal", effect: "Wide, 16:9. For YouTube and TV." },
+      { label: "Vertical", effect: "Tall, 9:16. For phones: Shorts, TikTok, Reels." },
+    ],
+  },
+  "video.resolution": {
+    title: "Resolution",
+    what: "How sharp the exported video is, in pixels.",
+    use: "Higher is sharper but makes bigger files that take longer to export. A new project matches its first video, up to Full HD. Changing it makes the next export render again.",
+    values: [
+      { label: "Ultra HD", effect: "3840 on the long side. Sharpest, biggest, slowest." },
+      { label: "Full HD", effect: "1920 on the long side. The usual choice for YouTube and social media." },
+      { label: "HD", effect: "1280 on the long side. Smaller file, fine for messages." },
+      { label: "Standard", effect: "854 on the long side. Smallest and quickest, lower quality." },
+    ],
+  },
+  "video.preview-layout": {
+    title: "Preview layout",
+    what: "Where the preview sits in the editor: above the timeline, or beside it.",
+    use: "Only changes how the editor is laid out, in this browser. It does not change the video. Switching a project to Vertical moves the preview to the right; you can switch back.",
+    values: [
+      { label: "Horizontal", effect: "The preview is on top, the timeline below it." },
+      { label: "Vertical", effect: "The preview is on the right, the timeline on the left. Drag the bar between them to resize." },
+    ],
+  },
   "video.zoom": {
     title: "Zoom",
     what: "How much of the timeline fits on screen. Zoomed in, one second is wider, so cuts are easier to place.",

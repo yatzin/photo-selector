@@ -15,12 +15,12 @@ import type { FileEntry } from "@/lib/library-server"
 import { Lightbox } from "@/components/library/lightbox"
 import { PhotoImage } from "@/components/library/photo-image"
 import { PhotoMenu } from "@/components/library/photo-menu"
-import { TempDialog, type TempDest } from "@/components/library/temp-dialog"
+import { TempDialog } from "@/components/library/temp-dialog"
 
 // Find Screenshots and Quality Checks results. Click (tap) images to select
 // them, then delete them, move them to Sort Dropoff (screenshots), or say the
 // AI got them wrong. The magnifier opens one full size. Right-click moves or
-// copies to User Temp Storage.
+// copies to Personal Storage.
 
 export type ShotItem = { id: string; name: string; note: string | null; error: string | null; file: FileEntry | null }
 
@@ -50,7 +50,6 @@ export function ShotGrid({
   const [viewer, setViewer] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; names: string[] } | null>(null)
   const [temp, setTemp] = useState<string[] | null>(null)
-  const [tempDest, setTempDest] = useState<TempDest>("temp")
 
   // Fresh data from the server: anything hidden optimistically is gone for real, or back (Undo).
   const [prevItems, setPrevItems] = useState(items)
@@ -246,8 +245,7 @@ export function ShotGrid({
           onMove={() => {}}
           onDelete={() => {}}
           onRotate={() => {}}
-          onTemp={(name) => { setTempDest("temp"); setTemp([name]) }}
-          onVideo={(name) => { setTempDest("video-inbox"); setTemp([name]) }}
+          onTemp={(name) => setTemp([name])}
         />
       )}
       {menu && (
@@ -261,14 +259,13 @@ export function ShotGrid({
           canEdit={false}
           showEdit={false}
           canTemp={!busy}
-          onAction={(action) => { setTempDest(action === "video" ? "video-inbox" : "temp"); setTemp(menu.names) }}
+          onAction={() => setTemp(menu.names)}
           onClose={() => setMenu(null)}
         />
       )}
       {temp && (
         <TempDialog
           target={{ root, folder, names: temp }}
-          dest={tempDest}
           canMove={!locked}
           onDone={(ok, moved) => {
             if (moved) {

@@ -10,7 +10,7 @@ import {
  * An imported file. `kind` is absent for videos (older projects have no kind).
  * For an image, `duration` is its default clip length. An audio file
  * ("audio") has sound and no picture; its clips live on the audio layer only.
- * `source` is the Inbox path it was copied from ("<folder>/<name>"), so a
+ * `source` is the Personal Storage path it was copied from ("<folder>/<name>"), so a
  * second import reuses it, or the original name of a file uploaded with Import.
  */
 export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string }
@@ -64,6 +64,8 @@ export type Project = {
   width: number
   height: number
   fps: number
+  /** Set once someone picks the orientation or resolution themselves: a new project's first picture then leaves them alone. */
+  formatChosen?: true
   assets: Record<string, Asset>
   tracks: Track[]
   audioTrack?: Track
@@ -126,7 +128,7 @@ export function isStill(p: Project, c: Clip): boolean {
   return asset !== undefined && assetKind(asset) === "image"
 }
 
-/** Every asset copied from this Inbox path ("<folder>/<name>"), oldest first; a deleted copy can leave more than one. */
+/** Every asset copied from this Personal Storage path ("<folder>/<name>"), oldest first; a deleted copy can leave more than one. */
 export function findAssetsBySource(p: Project, source: string): { id: string; asset: Asset }[] {
   if (!source) return []
   return Object.entries(p.assets).filter(([, asset]) => asset.source === source).map(([id, asset]) => ({ id, asset }))
@@ -916,6 +918,7 @@ export function parseProject(json: unknown): Project | null {
   const { name, width, height, fps, assets } = json
   if (typeof name !== "string" || name.length > MAX_NAME || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
   if (!isRecord(assets)) return null
+  if (json.formatChosen !== undefined && json.formatChosen !== true) return null
   const rawTracks: unknown = json.version === 1 ? (Array.isArray(json.clips) ? [{ id: "t1", clips: json.clips }] : null) : json.tracks
   if (!Array.isArray(rawTracks) || rawTracks.length < 1 || rawTracks.length > MAX_TRACKS) return null
 
@@ -1036,7 +1039,7 @@ export function parseProject(json: unknown): Project | null {
   // Kept only while it has clips, so a project without audio stays as it was.
   const audioTrack = rawAudio === undefined ? undefined : tracks.pop()
   // A transition or audio overlap with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
-  return fixTransitions({ version: 3, name, width, height, fps, assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}) })
+  return fixTransitions({ version: 3, name, width, height, fps, ...(json.formatChosen === true ? { formatChosen: true as const } : {}), assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}) })
 }
 
 /**
@@ -1057,6 +1060,6 @@ export function mergeClientProject(client: unknown, stored: Project): Project | 
   if (clips.length > MAX_CLIPS) return null
   // A text clip uses no asset.
   if (!clips.every((c) => isTextClip(c) || Object.hasOwn(stored.assets, c.asset))) return null
-  const { name, width, height, fps, assets } = stored
-  return parseProject({ ...parsed, name, width, height, fps, assets })
+  const { name, width, height, fps, assets, formatChosen } = stored
+  return parseProject({ ...parsed, name, width, height, fps, formatChosen, assets })
 }

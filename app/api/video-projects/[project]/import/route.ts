@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { isSameOrigin, isUploadId, MAX_IMPORT_CHUNK_BYTES, sanitizeImportName } from "@/lib/video/import"
 import { cancelUpload, finishUpload, startUpload, writeChunk } from "@/lib/video/import-server"
 import { withLock } from "@/lib/video/project-lock-server"
-import { readProject, writeProject } from "@/lib/video/projects-server"
+import { formatForFirstPicture, readProject, writeProject } from "@/lib/video/projects-server"
 
 // POST /api/video-projects/<project>/import?name=&size=&offset=[&upload=]
 // One piece of a file uploaded with Import (the raw bytes are the body; see
@@ -83,11 +83,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     }
     const finished = await finishUpload(userFolder, folder, id, name, size)
     if ("error" in finished) return finished
-    await writeProject(userFolder, folder, { ...project, assets: { ...project.assets, [finished.id]: finished.asset } })
-    return finished
+    // A new project takes its orientation and resolution from its first picture or video.
+    const format = await formatForFirstPicture(userFolder, folder, project, finished.asset)
+    await writeProject(userFolder, folder, { ...project, ...format, assets: { ...project.assets, [finished.id]: finished.asset } })
+    return { ...finished, format }
   })
   if ("error" in result) return json({ error: result.error }, result.status)
-  return json({ done: true, id: result.id, asset: result.asset })
+  return json({ done: true, id: result.id, asset: result.asset, ...(result.format ? { format: result.format } : {}) })
 }
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ project: string }> }) {

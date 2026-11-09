@@ -3,7 +3,7 @@
 import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
@@ -25,7 +25,9 @@ import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/v
 import type { Edge } from "@/lib/video/transition-types"
 import { AudioLevelsDialog } from "./audio-levels-dialog"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
-import { FileTree, type InboxFolder } from "./file-tree"
+import { FileTree, type TempFolder } from "./file-tree"
+import { FormatMenus } from "./format-menu"
+import { ORIENTATIONS, orientationOf, RESOLUTIONS, resolutionOf, sizeText, type Orientation } from "@/lib/video/format"
 import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
@@ -41,7 +43,9 @@ import { useMediaImport } from "./use-media-import"
 
 const MIN_PREVIEW = 120 // px
 const MIN_TIMELINE = 160 // px
-const HANDLE = 8 // px, the resize handle's height
+const HANDLE = 8 // px, the resize handle's height (or width, beside the timeline)
+const MIN_PREVIEW_W = 220 // px, the preview when it sits beside the timeline
+const MIN_TIMELINE_W = 480 // px, the timeline when the preview sits beside it
 /** Arrow keys' nudge direction. */
 const ARROWS: Record<string, [number, number] | undefined> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
 
@@ -70,12 +74,12 @@ function initialState(p: Project): EditorState {
 }
 
 export function Editor({
-  folder, userFolder, initial, inbox,
+  folder, userFolder, initial, temp,
 }: {
   folder: string
   userFolder: string
   initial: Project
-  inbox: InboxFolder[]
+  temp: TempFolder[]
 }) {
   const [editor, setEditor] = useState(() => initialState(initial))
   const project = useMemo<Project>(() => ({ ...editor.meta, ...editor.history.present }), [editor.meta, editor.history.present])
@@ -145,19 +149,33 @@ export function Editor({
   const [dragHeight, setDragHeight] = useState<number | null>(null)
   const parsedHeight = storedHeight ? Number(storedHeight) : NaN
   const previewHeight = dragHeight ?? (parsedHeight >= MIN_PREVIEW ? parsedHeight : null)
+  // Preview layout: above the timeline, or on the right of it. None chosen (for this project, in this browser) follows the project's orientation.
+  const [storedLayout, setStoredLayout] = useStoredValue(`ps.video.previewLayout.${folder}`)
+  const layout: Orientation = storedLayout === "horizontal" || storedLayout === "vertical" ? storedLayout : orientationOf(project.width, project.height)
+  const sideBySide = layout === "vertical"
+  // The media panel on the left: folded to a thin rail, remembered in this browser (the server and first paint show it open).
+  const [storedCollapsed, setStoredCollapsed] = useStoredValue("ps.video.mediaCollapsed")
+  const mediaCollapsed = storedCollapsed === "1"
+  const [storedWidth, setStoredWidth] = useStoredValue("ps.video.previewWidth")
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const parsedWidth = storedWidth ? Number(storedWidth) : NaN
+  const previewWidth = dragWidth ?? (parsedWidth >= MIN_PREVIEW_W ? parsedWidth : null)
   const column = useRef<HTMLDivElement>(null)
   const previewBox = useRef<HTMLDivElement>(null)
-  const [sizes, setSizes] = useState({ preview: 0, column: 0 })
+  const [sizes, setSizes] = useState({ preview: 0, column: 0, previewW: 0, columnW: 0 })
   useEffect(() => {
     const col = column.current
     const pre = previewBox.current
     if (!col || !pre) return
-    const ro = new ResizeObserver(() => setSizes({ preview: Math.round(pre.offsetHeight), column: col.clientHeight }))
+    const ro = new ResizeObserver(() => setSizes({ preview: Math.round(pre.offsetHeight), column: col.clientHeight, previewW: Math.round(pre.offsetWidth), columnW: col.clientWidth }))
     ro.observe(col)
     ro.observe(pre)
     return () => ro.disconnect()
   }, [])
   const maxPreview = Math.max(MIN_PREVIEW, sizes.column - HANDLE - MIN_TIMELINE)
+  const maxPreviewW = Math.max(MIN_PREVIEW_W, sizes.columnW - HANDLE - MIN_TIMELINE_W)
+  // Beside the timeline the preview starts about as wide as a tall frame fits its height (plus the margin round it).
+  const defaultPreviewW = sizes.column > 0 ? Math.min(maxPreviewW, Math.max(MIN_PREVIEW_W, Math.round((sizes.column * 9) / 16) + 32)) : null
 
   useEffect(() => () => {
     if (exportTimer.current) clearInterval(exportTimer.current)
@@ -212,7 +230,19 @@ export function Editor({
   const lengthMediaUrl = useCallback((assetId: string) => videoUrl(assetId) || audioUrl(assetId), [videoUrl, audioUrl])
   const player = usePreviewPlayer(project, videoUrl, audioUrl)
   // Import: files from the computer land in Project media as each one finishes (the server owns assets: take the new one from its reply).
-  const importer = useMediaImport(folder, (id, asset) => setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [id]: asset } } })))
+  /** The project's size changed (chosen in the format menus, or taken from a new project's first picture). */
+  const applySize = useCallback((size: { width: number; height: number }, announce = false) => {
+    setEditor((s) => ({ ...s, meta: { ...s.meta, width: size.width, height: size.height } }))
+    if (announce) {
+      const orientation = ORIENTATIONS.find((o) => o.id === orientationOf(size.width, size.height))!.label
+      const named = RESOLUTIONS.find((r) => r.id === resolutionOf(size.width, size.height))
+      toast.info(`Video set to ${orientation}, ${named ? named.label : sizeText(size.width, size.height)}, to match your first clip. Change it in the top bar.`)
+    }
+  }, [])
+  const importer = useMediaImport(folder, (id, asset, format) => {
+    setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [id]: asset } } }))
+    if (format) applySize(format, true)
+  })
   const playhead = player.time
   const { toggle } = player
 
@@ -248,7 +278,7 @@ export function Editor({
     }
   }
 
-  /** Copies an Inbox file into Project media (or finds the copy already there); its asset id and asset, or null when it failed. */
+  /** Copies a Personal Storage file (inboxFolder is its path, "user/sub") into Project media (or finds the copy already there); its asset id and asset, or null when it failed. */
   async function importFile(inboxFolder: string, name: string): Promise<{ id: string; asset: Asset } | null> {
     if (importingRef.current) {
       toast.info("Wait for the current import to finish.")
@@ -257,13 +287,14 @@ export function Editor({
     importingRef.current = true
     setImporting(`${inboxFolder}/${name}`)
     try {
-      const r = await importAssetAction(folder, [inboxFolder], name)
+      const r = await importAssetAction(folder, inboxFolder.split("/"), name)
       if ("error" in r) {
         toast.error(r.error)
         return null
       }
       // The server owns assets: take the new one from its reply.
       setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
+      if (r.format) applySize(r.format, true)
       return { id: r.id, asset: r.asset }
     } catch {
       toast.error("Something went wrong importing that file.")
@@ -274,7 +305,14 @@ export function Editor({
     }
   }
 
-  /** An Inbox file dropped on the timeline: import it, then put it where it was dropped. */
+  /** A Personal Storage file dropped on Project media (or chosen from its menu): copied in, not placed. */
+  async function copyToMedia(inboxFolder: string, name: string) {
+    const known = Object.values(latest.current.assets).some((a) => a.source === `${inboxFolder}/${name}`)
+    const imported = await importFile(inboxFolder, name)
+    if (imported) toast.success(known ? `${name} is already in Project media` : `Copied ${name} to Project media`)
+  }
+
+  /** A Personal Storage file dropped on the timeline: import it, then put it where it was dropped. */
   async function dropFromInbox(inboxFolder: string, name: string, target: DropTarget) {
     const imported = await importFile(inboxFolder, name)
     if (!imported) return
@@ -293,7 +331,7 @@ export function Editor({
   /**
    * A file dropped on the player: a clip at the playhead (as it was at the
    * drop) on the lowest layer free for its whole length there, a new layer when
-   * none is (up to MAX_TRACKS), selected so its frame shows. An Inbox file is
+   * none is (up to MAX_TRACKS), selected so its frame shows. A Personal Storage file is
    * imported first and placed in the project as it is then. One undo step.
    */
   async function dropOnPlayer(drop: MediaDrop) {
@@ -587,7 +625,8 @@ export function Editor({
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border/60 px-4">
+      <div className="grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-border/60 px-4">
+        <div className="flex min-w-0 items-center gap-3">
         <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
           <ArrowLeft className="h-4 w-4" />
           <span className="sr-only">All projects</span>
@@ -602,43 +641,88 @@ export function Editor({
           </span>
         </span>
         <ImportButton importer={importer} />
-        <div className="flex-1" />
+        </div>
+        <FormatMenus width={project.width} height={project.height} folder={folder} disabled={exportProgress !== null} onChanged={(size) => {
+          // Turning the video to the other orientation turns the preview layout with it.
+          if (orientationOf(size.width, size.height) !== orientationOf(project.width, project.height)) setStoredLayout(orientationOf(size.width, size.height))
+          applySize(size)
+        }} layout={layout} onLayout={setStoredLayout} />
+        <div className="flex justify-end">
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
         </Button>
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-64 shrink-0 border-r border-border/60 md:block">
-          <FileTree inbox={inbox} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} />
+        <aside aria-label="Media" className={cn("hidden shrink-0 flex-col border-r border-border/60 transition-[width] duration-150 motion-reduce:transition-none md:flex", mediaCollapsed ? "w-11" : "w-64")}>
+          {/* Like the site's side nav: a button at the top folds the panel to a thin rail and opens it again. */}
+          <div className={cn("flex h-9 shrink-0 items-center border-b border-border/60", mediaCollapsed ? "justify-center" : "justify-between pl-3 pr-1.5")}>
+            {!mediaCollapsed && <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Media</span>}
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => setStoredCollapsed(mediaCollapsed ? "0" : "1")}
+              aria-expanded={!mediaCollapsed}
+              aria-label={mediaCollapsed ? "Expand media panel" : "Collapse media panel"}
+              title={mediaCollapsed ? "Expand media panel" : "Collapse media panel"}
+            >
+              {mediaCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </Button>
+          </div>
+          {/* Kept mounted while folded, so open folders and what was loaded are still there on reopening. */}
+          <div className={cn("min-h-0 flex-1", mediaCollapsed && "hidden")}>
+            <FileTree temp={temp} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} onCopyTemp={(f, n) => void copyToMedia(f, n)} />
+          </div>
         </aside>
-        <div ref={column} className="flex min-w-0 flex-1 flex-col">
+        <div ref={column} className={cn("flex min-w-0 flex-1", sideBySide ? "flex-row-reverse" : "flex-col")}>
           {/* With a set height the preview gives way first (flex-shrink) and the timeline grows; CSS keeps both minimums. */}
           <div
             ref={previewBox}
-            className={cn("flex min-h-[120px] flex-col", previewHeight === null && "flex-1")}
-            style={previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
+            className={cn("flex flex-col", sideBySide ? "min-w-[220px]" : "min-h-[120px]", !sideBySide && previewHeight === null && "flex-1")}
+            style={sideBySide ? { flex: `0 1 ${previewWidth ?? defaultPreviewW ?? "40%"}${typeof (previewWidth ?? defaultPreviewW) === "number" ? "px" : ""}` } : previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
             <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={openText} />
           </div>
-          <ResizeHandle
-            label="Resize preview"
-            value={Math.min(maxPreview, Math.max(MIN_PREVIEW, sizes.preview))}
-            min={MIN_PREVIEW}
-            max={maxPreview}
-            onResize={(px, done) => {
-              if (!done) return setDragHeight(px)
-              setStoredHeight(String(px))
-              setDragHeight(null)
-            }}
-            onReset={() => {
-              setStoredHeight("")
-              setDragHeight(null)
-            }}
-          />
+          {sideBySide ? (
+            <ResizeHandle
+              axis="x"
+              sizes="after"
+              label="Resize preview width"
+              value={Math.min(maxPreviewW, Math.max(MIN_PREVIEW_W, sizes.previewW))}
+              min={MIN_PREVIEW_W}
+              max={maxPreviewW}
+              onResize={(px, done) => {
+                if (!done) return setDragWidth(px)
+                setStoredWidth(String(px))
+                setDragWidth(null)
+              }}
+              onReset={() => {
+                setStoredWidth("")
+                setDragWidth(null)
+              }}
+            />
+          ) : (
+            <ResizeHandle
+              label="Resize preview"
+              value={Math.min(maxPreview, Math.max(MIN_PREVIEW, sizes.preview))}
+              min={MIN_PREVIEW}
+              max={maxPreview}
+              onResize={(px, done) => {
+                if (!done) return setDragHeight(px)
+                setStoredHeight(String(px))
+                setDragHeight(null)
+              }}
+              onReset={() => {
+                setStoredHeight("")
+                setDragHeight(null)
+              }}
+            />
+          )}
           {/* The tracks scroll inside the timeline (vertically too, with several layers); the bar above stays put. */}
-          <div className={cn("flex flex-col bg-card", previewHeight === null ? "max-h-[60%] shrink-0" : "min-h-[160px] flex-1")}>
+          <div className={cn("flex flex-col bg-card", sideBySide ? "min-w-[480px] min-h-0 flex-1" : previewHeight === null ? "max-h-[60%] shrink-0" : "min-h-[160px] flex-1")}>
             {/* Three parts: the edit tools, Play/Pause in the middle of the bar whatever the sides hold, the view settings. */}
             <div
               role="toolbar"
