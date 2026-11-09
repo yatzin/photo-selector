@@ -12,7 +12,7 @@ import { DEFAULT_IMAGE, type Asset } from "./project"
 import { newAssetId, placeInAssets, projectDir } from "./projects-server"
 
 // Files uploaded with Import, straight into a project's assets/ (never
-// through the Inbox). The browser sends a file in pieces (lib/video/import
+// through Personal Storage). The browser sends a file in pieces (lib/video/import
 // IMPORT_CHUNK_BYTES), one request each, so no request is held open long and
 // nothing big sits in memory: each piece streams onto the end of a hidden
 // part file in the project's folder (".import-<id><ext>", the same volume as
@@ -102,7 +102,13 @@ export async function writeChunk(
   userFolder: string, folder: string, id: string, name: string, size: number, offset: number, body: ReadableStream<Uint8Array> | null
 ): Promise<{ received: number } | UploadError> {
   const part = partPath(userFolder, folder, id, name)
-  if (!part || !Number.isSafeInteger(offset) || offset < 0 || offset > size) return fail("Invalid upload.", 400)
+  if (!part) return fail("Invalid upload.", 400)
+  return appendChunk(part, name, size, offset, body)
+}
+
+/** writeChunk's work on a part file already chosen (also used by Personal Storage uploads). */
+export async function appendChunk(part: string, name: string, size: number, offset: number, body: ReadableStream<Uint8Array> | null): Promise<{ received: number } | UploadError> {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > size) return fail("Invalid upload.", 400)
   try {
     const st = await fs.lstat(part)
     if (!st.isFile()) return fail("Invalid upload.", 400)
@@ -129,7 +135,7 @@ export async function cancelUpload(userFolder: string, folder: string, id: strin
 }
 
 /** True when sharp can decode `file` as a picture (for stills ffmpeg can't read, such as some HEIC and DNG files). */
-async function sharpReads(file: string): Promise<boolean> {
+export async function sharpReads(file: string): Promise<boolean> {
   try {
     const m = await sharp(file, { failOn: "none", limitInputPixels: false }).metadata()
     return (m.width ?? 0) > 0 && (m.height ?? 0) > 0

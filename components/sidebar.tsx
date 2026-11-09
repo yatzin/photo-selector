@@ -14,7 +14,7 @@ type NavItem = { href: string; label: string; icon: React.ElementType; badge?: n
 const navItems: (NavItem & { root: keyof RootCounts })[] = [
   { root: "upload", href: "/library/upload", label: "Mobile Upload", icon: FolderInput },
   { root: "dropoff", href: "/library/dropoff", label: "Sort Dropoff", icon: FolderOutput },
-  { root: "temp", href: "/library/temp", label: "User Temp Storage", icon: Inbox },
+  { root: "temp", href: "/library/temp", label: "Personal Storage", icon: Inbox },
 ]
 
 const itemCount = (n: number) => `${n.toLocaleString()} item${n === 1 ? "" : "s"}`

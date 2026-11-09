@@ -38,6 +38,9 @@ export function importCategory(name: string): ImportCategory | null {
 /** The file picker's accept list: any picture, video or sound, and every extension the server takes by name. */
 export const IMPORT_ACCEPT = ["video/*", "image/*", "audio/*", ...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS].join(",")
 
+/** The file picker's accept list for Personal Storage uploads: pictures and videos only. */
+export const TEMP_UPLOAD_ACCEPT = ["video/*", "image/*", ...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS].join(",")
+
 const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/i
 
 /**
@@ -119,4 +122,34 @@ export function isSameOrigin(origin: string | null, host: string | null): boolea
   } catch {
     return false
   }
+}
+
+/** Why a file can't be uploaded into Personal Storage from its name and size alone, or null. Pictures and videos only: that's what it holds. */
+export function tempUploadRejection(name: string, size: number): string | null {
+  const category = importCategory(name)
+  if (category !== "image" && category !== "video") return `${name} isn't a photo or video. Personal Storage holds photos and videos.`
+  return importRejection(name, size)
+}
+
+/**
+ * The size of a file's first picture as it is shown, from `ffmpeg -i` stderr:
+ * the "1920x1080" of the first video stream (cover art doesn't count), turned
+ * the other way when the file says it is rotated a quarter turn (a phone held
+ * upright: "rotation of -90.00 degrees" or the older "rotate : 90").
+ */
+export function parsePictureSize(stderr: string): { width: number; height: number } | null {
+  const lines = stderr.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*Stream #.*: Video:/.test(lines[i]) || /\(attached pic\)/.test(lines[i])) continue
+    const m = /\b(\d{2,5})x(\d{2,5})\b/.exec(lines[i].replace(/\([^)]*\)/g, ""))
+    if (!m) return null
+    let turned = false
+    for (let j = i + 1; j < lines.length && !/^\s*Stream #/.test(lines[j]); j++) {
+      const r = /rotation of (-?\d+(?:\.\d+)?) degrees/.exec(lines[j]) ?? /^\s*rotate\s*:\s*(-?\d+)/.exec(lines[j])
+      if (r && Math.round(Math.abs(Number(r[1]))) % 180 === 90) turned = true
+    }
+    const [w, h] = [Number(m[1]), Number(m[2])]
+    return turned ? { width: h, height: w } : { width: w, height: h }
+  }
+  return null
 }

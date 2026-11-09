@@ -1,16 +1,16 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { Clapperboard, FolderOutput, ImageOff, Inbox, RotateCcw, RotateCw, Trash2 } from "lucide-react"
+import { FolderOutput, ImageOff, Inbox, Pencil, RotateCcw, RotateCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Right-click menu for photos in the grid. It acts on the selection when the
 // clicked photo is part of it, otherwise on just that photo.
 
-export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos" | "temp" | "video"
+export type PhotoMenuAction = "rotate-ccw" | "rotate-cw" | "move" | "delete" | "bad-photos" | "temp" | "rename"
 
 export function PhotoMenu({
-  x, y, count, canRotate, showMove, canMove, canEdit, showEdit = true, canTemp = true, showBadPhotos = false, onAction, onClose,
+  x, y, count, canRotate, showMove, canMove, canEdit, showEdit = true, canTemp = true, canRename = false, showBadPhotos = false, onAction, onClose,
 }: {
   x: number
   y: number
@@ -21,10 +21,12 @@ export function PhotoMenu({
   showMove: boolean
   canMove: boolean
   canEdit: boolean
-  /** Rotate and delete; off where the menu only offers User Temp Storage (AI results). */
+  /** Rotate and delete; off where the menu only offers Personal Storage (AI results). */
   showEdit?: boolean
-  /** Move / copy to User Temp Storage. */
+  /** Move / copy to Personal Storage. */
   canTemp?: boolean
+  /** Personal Storage: offer Rename (one photo or video at a time). */
+  canRename?: boolean
   /** The clicked photo was flagged by Quality Checks: link to that review. */
   showBadPhotos?: boolean
   onAction: (action: PhotoMenuAction) => void
@@ -94,8 +96,8 @@ export function PhotoMenu({
         </>
       )}
       {showMove && item("move", `Move${n} to Dropoff`, <FolderOutput className="h-4 w-4" />, canMove)}
-      {item("temp", `Move${n} to User Temp Storage…`, <Inbox className="h-4 w-4" />, canTemp)}
-      {item("video", `Move${n} to Video Editing…`, <Clapperboard className="h-4 w-4" />, canTemp)}
+      {canRename && item("rename", "Rename…", <Pencil className="h-4 w-4" />, count === 1)}
+      {item("temp", `Move${n} to Personal Storage…`, <Inbox className="h-4 w-4" />, canTemp)}
       {showEdit && (
         <>
           <div className="my-1 h-px bg-border" />

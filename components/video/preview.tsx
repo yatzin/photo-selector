@@ -156,7 +156,7 @@ function AnimatedText({ player, clip, transform, W, H, total, zIndex, children }
   const cuts = useMemo(() => (typing ? typewriterCuts(text) : null), [typing, text])
   const look = now >= total ? Math.max(0, total - 0.001) : now
   const length = clipLength(clip)
-  const b = rotatedBounds(textSize(text, H), W, H, transform)
+  const b = rotatedBounds(textSize(text, Math.min(W, H)), W, H, transform)
   const s = animationState(text, Math.max(0, Math.min(length, look - clip.start)), length, {
     bounds: { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H },
     units: cuts?.length ?? 0,
@@ -271,7 +271,7 @@ export function Preview({
   const transformOf = (clip: Clip) => (draft?.id === clip.id ? draft.transform : clip.transform ?? IDENTITY)
   const aspectOf = (assetId: string) => aspects[assetId] ?? W / H
   /** What clipRect places for a clip: a text's content box, else its picture's aspect. */
-  const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, H) : aspectOf(clip.asset))
+  const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, Math.min(W, H)) : aspectOf(clip.asset))
   const learnAspect = (assetId: string | null, w: number, h: number) => {
     if (!assetId || !(w > 0 && h > 0)) return
     const ratio = w / h

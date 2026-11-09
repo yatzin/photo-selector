@@ -6,6 +6,8 @@ import path from "path"
 import { rootPath } from "@/lib/library-server"
 import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside } from "@/lib/media"
 import { probeMedia } from "./ffmpeg-server"
+import { formatFromSource, sizeFor, turnTo, type Orientation, type ResolutionId } from "./format"
+import { mediaSize } from "./media-size-server"
 import { peaksFileName } from "./peaks"
 import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, totalLength, type Asset, type Project } from "./project"
 
@@ -230,9 +232,9 @@ export async function placeInAssets(assets: string, fileName: string, put: (targ
 export const newAssetId = () => `a${randomBytes(8).toString("hex")}`
 
 /**
- * Copies a video or image from the Video Editing Inbox into the project's
+ * Copies a video or image from Personal Storage into the project's
  * assets/ (never replacing a file); a video is probed, an image gets the
- * default length. The Inbox original stays; its path is kept as `source`.
+ * default length. The original stays; its path is kept as `source`.
  */
 export async function importAsset(
   userFolder: string,
@@ -244,17 +246,17 @@ export async function importAsset(
   if (!dir) return { error: "Invalid project." }
   const kind = mediaKind(fileName)
   if (!isPlainName(fileName) || !kind) return { error: "Not a video or image." }
-  const src = resolveInside(rootPath("video-inbox"), [...inboxFolder, fileName])
-  if (!src) return { error: "Invalid Inbox folder." }
+  const src = resolveInside(rootPath("temp"), [...inboxFolder, fileName])
+  if (!src) return { error: "Invalid folder." }
   const assets = path.join(dir, "assets")
   if (!(await exists(assets))) return { error: "Project not found." }
 
-  // A symlink in the Inbox could point anywhere; copy only a real file that really sits inside the Inbox.
+  // A symlink in Personal Storage could point anywhere; copy only a real file that really sits inside it.
   try {
     const st = await fs.lstat(src)
     if (!st.isFile() || st.isSymbolicLink()) return { error: "Not a media file." }
-    const [realRoot, realParent] = await Promise.all([fs.realpath(rootPath("video-inbox")), fs.realpath(path.dirname(src))])
-    if (!resolveInside(realRoot, [path.relative(realRoot, realParent)])) return { error: "Invalid Inbox folder." }
+    const [realRoot, realParent] = await Promise.all([fs.realpath(rootPath("temp")), fs.realpath(path.dirname(src))])
+    if (!resolveInside(realRoot, [path.relative(realRoot, realParent)])) return { error: "Invalid folder." }
   } catch (error) {
     return { error: (error as NodeJS.ErrnoException).code === "ENOENT" ? "The file no longer exists." : errorText(error) }
   }
@@ -280,7 +282,7 @@ export async function importAsset(
   }
 }
 
-/** The first asset copied from this Inbox path whose file is still a regular file in assets/. */
+/** The first asset copied from this Personal Storage path whose file is still a regular file in assets/. */
 export async function reusableAsset(userFolder: string, folder: string, p: Project, source: string): Promise<{ id: string; asset: Asset } | null> {
   for (const found of findAssetsBySource(p, source)) {
     const file = assetPath(userFolder, folder, found.asset.file)
@@ -334,4 +336,43 @@ export function assetPath(userFolder: string, folder: string, file: string): str
   const dir = projectDir(userFolder, folder)
   if (!dir || !isPlainName(file)) return null
   return resolveInside(path.join(dir, "assets"), [file])
+}
+
+/** A project is new until it holds a picture or video, or someone chooses its format. */
+export const isNewProject = (p: Project): boolean => !p.formatChosen && Object.values(p.assets).every((a) => a.kind === "audio")
+
+/**
+ * The width and height a new project should take from its first picture or
+ * video (`asset`, already in assets/): its orientation, and the resolution
+ * that matches it up to Full HD (lib/video/format). Null when the project isn't
+ * new, the file is sound, or its size can't be read; the caller then leaves
+ * the format alone. Call it before adding `asset` to the project.
+ */
+export async function formatForFirstPicture(userFolder: string, folder: string, before: Project, asset: Asset): Promise<{ width: number; height: number } | null> {
+  if (!isNewProject(before) || asset.kind === "audio") return null
+  const file = assetPath(userFolder, folder, asset.file)
+  if (!file) return null
+  const size = await mediaSize(file, asset.kind === "image" ? "image" : "video")
+  if (!size) return null
+  const next = formatFromSource(size.width, size.height)
+  return next.width === before.width && next.height === before.height ? null : next
+}
+
+/**
+ * Sets a project's orientation and resolution (call under its lock; not while
+ * it exports). Either may be left out to keep it: a size that isn't one of the
+ * named ones keeps its shorter side when only the orientation turns. The
+ * project is marked as chosen, so a first video no longer picks for it.
+ */
+export async function setProjectFormat(userFolder: string, folder: string, change: { orientation?: Orientation; resolution?: ResolutionId }): Promise<{ width: number; height: number } | { error: string }> {
+  const project = await readProject(userFolder, folder)
+  if (!project) return { error: "Project not found." }
+  const orientation = change.orientation ?? (project.height > project.width ? "vertical" : "horizontal")
+  const size = change.resolution
+    ? sizeFor(orientation, change.resolution)
+    : change.orientation
+      ? turnTo(orientation, project.width, project.height)
+      : { width: project.width, height: project.height }
+  await writeProject(userFolder, folder, { ...project, width: size.width, height: size.height, formatChosen: true })
+  return size
 }

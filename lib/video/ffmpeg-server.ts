@@ -1,7 +1,7 @@
 import "server-only"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
-import { parseStreams, type ProbedStreams } from "./import"
+import { parsePictureSize, parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
 import { audioLevelFilters, type ClipAudio } from "./audio-levels"
 import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
@@ -158,7 +158,7 @@ function textAnimation(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }
   const { width: W, height: H } = p
   const length = clipLength(c)
   const t = c.transform ?? IDENTITY
-  const b = rotatedBounds(textSize(c.text, H), W, H, t)
+  const b = rotatedBounds(textSize(c.text, Math.min(W, H)), W, H, t)
   const x = animationExprs(c.text, length, { bounds: { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H }, units: 0 })
   const local = `(t-${num(c.start)})`
   const window = alphaWindow(c.text, length)
@@ -189,10 +189,10 @@ const TEXT_FONT_STEP = 20
  */
 export function textRaster(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }): { fontPx: number; w: number; h: number } {
   const scale = (c.transform ?? IDENTITY).scale
-  const box = textSize(c.text, p.height)
+  const box = textSize(c.text, Math.min(p.width, p.height))
   const unit = textLayout(c.text, TEXT_FONT_STEP)
   const most = Math.max(1, Math.floor(MAX_TEXT_RASTER / Math.max(unit.w, unit.h)))
-  const fontPx = TEXT_FONT_STEP * Math.min(most, Math.max(1, Math.ceil((baseFontPx(p.height) * scale) / TEXT_FONT_STEP - 1e-9)))
+  const fontPx = TEXT_FONT_STEP * Math.min(most, Math.max(1, Math.ceil((baseFontPx(Math.min(p.width, p.height)) * scale) / TEXT_FONT_STEP - 1e-9)))
   const even = (v: number) => Math.max(2, Math.round(v / 2) * 2)
   return { fontPx, w: even(box.w * scale), h: even(box.h * scale) }
 }
@@ -781,4 +781,9 @@ export function runExport(
       }
     })
   })
+}
+
+/** A file's picture size as shown (turned phone video comes back upright), or null when ffmpeg finds no picture. */
+export function probePictureSize(file: string): Promise<{ width: number; height: number } | null> {
+  return probeWith(file, parsePictureSize)
 }

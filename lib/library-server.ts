@@ -9,7 +9,7 @@ import { fileVersion, isSkippedDir, mediaKind, resolveInside, ROOT_KEYS, SCAN_RO
 // Reads the photo library from the mounted folders. In the container these are
 // /photos/upload and /photos/dropoff (see docker-compose.yml); for local
 // development PHOTOS_UPLOAD_DIR / PHOTOS_DROPOFF_DIR can point at the share.
-// User Temp Storage lives in the app's own data volume, next to the cache.
+// Personal Storage lives in the app's own data volume, next to the cache.
 
 const DEFAULT_ROOTS: Record<"upload" | "dropoff", string> = {
   upload: "/photos/upload",
@@ -20,7 +20,6 @@ const ENV_NAMES: Record<RootKey, string> = {
   upload: "PHOTOS_UPLOAD_DIR",
   dropoff: "PHOTOS_DROPOFF_DIR",
   temp: "PHOTOS_TEMP_DIR",
-  "video-inbox": "PHOTOS_VIDEO_INBOX_DIR",
   "video-projects": "PHOTOS_VIDEO_PROJECTS_DIR",
 }
 
@@ -32,15 +31,14 @@ export function rootPath(key: RootKey): string {
   if (fromEnv) return path.resolve(fromEnv)
   // Beside the cache: /data/UserTempStorage in the container, ./.data/UserTempStorage locally.
   if (key === "temp") return path.join(path.dirname(cacheDir()), TEMP_DIR_NAME)
-  // Video Editing: /data/VideoEditing/Inbox and /Projects in the container.
-  if (key === "video-inbox") return path.join(path.dirname(cacheDir()), VIDEO_DIR_NAME, "Inbox")
+  // Video Editing projects: /data/VideoEditing/Projects in the container.
   if (key === "video-projects") return path.join(path.dirname(cacheDir()), VIDEO_DIR_NAME, "Projects")
   return path.resolve(DEFAULT_ROOTS[key])
 }
 
-/** Creates User Temp Storage and the Video Editing folders when missing (at startup; user folders are made as needed). */
+/** Creates Personal Storage and the Video Editing folders when missing (at startup; user folders are made as needed). */
 export async function ensureTempRoot(): Promise<void> {
-  for (const key of ["temp", "video-inbox", "video-projects"] as const) {
+  for (const key of ["temp", "video-projects"] as const) {
     try {
       await fs.mkdir(rootPath(key), { recursive: true })
     } catch (error) {

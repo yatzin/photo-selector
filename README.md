@@ -19,8 +19,8 @@ take of each, using any OpenAI-compatible vision model you host yourself.
   (to an in-app trash with Undo, purged after 30 days) or rotate (lossless for JPEG).
 - Full-screen viewer with keyboard navigation, videos and iPhone HEIC photos.
 - A background worker pre-makes thumbnails and watches for new uploads.
-- **User Temp Storage**: right-click photos anywhere (library or AI results) and
-  choose **Move to User Temp Storage…** to move or copy them into another
+- **Personal Storage**: right-click photos anywhere (library or AI results) and
+  choose **Move to Personal Storage…** to move or copy them into another
   user's staging folder with a note. Opening one there shows the note; from
   there it can be rotated, deleted, moved to Sort Dropoff or sent on to someone
   else. Sending a file that's already in that folder replaces it and updates the note.
@@ -150,20 +150,62 @@ Database changes apply themselves on start.
 | `\\ugreen\Photo\Mobile Upload`  | `/photos/upload`   | `PHOTOS_UPLOAD_DIR`   |
 | `\\ugreen\Photo\Sort Dropoff`   | `/photos/dropoff`  | `PHOTOS_DROPOFF_DIR`  |
 | (app data)                      | `/data`            | `DATABASE_URL`, `PHOTOS_CACHE_DIR` |
-| (app data) User Temp Storage    | `/data/UserTempStorage` | `PHOTOS_TEMP_DIR` (created on start) |
-| (app data) Video Editing Inbox  | `/data/VideoEditing/Inbox` | `PHOTOS_VIDEO_INBOX_DIR` (created on start) |
+| (app data) Personal Storage    | `/data/UserTempStorage` | `PHOTOS_TEMP_DIR` (created on start) |
 | (app data) Video Editing Projects | `/data/VideoEditing/Projects` | `PHOTOS_VIDEO_PROJECTS_DIR` (created on start) |
 
 ## Video Editing
 
 Tools → Video Editing cuts video clips, still images and sound files together and exports an MP4.
 
-**Projects page.** Projects are listed like files in a browser: name, modified, clips, length and size. Click a heading to sort (name or date to start with), search by name, click a row to open it. **Manage inbox** lists each user's inbox folder. Projects are never deleted automatically. The inbox is staging: a file that arrived over 6 months ago is deleted by a sweep at server start and then daily (the inbox folder pages say so).
+**Projects page.** Projects are listed like files in a browser: name, modified, clips, length and size. Click a heading to sort (name or date to start with), search by name, click a row to open it. Nothing is deleted automatically.
 
-**Getting clips in.** Right-click files in the library, use the toolbar's
-**Video Editing** button (not shown in the video folders), or the button in the viewer, then choose
-**Move to Video Editing…**. The files go to `Inbox/<user>` with a note, and you
-pick whose folder. You can copy instead of move.
+**Getting clips in.** Put files in Personal Storage (right-click them in the
+library and choose **Move to Personal Storage…**, or use the toolbar or
+viewer button). They are then listed in the editor's left panel.
+
+**Personal Storage folders.** On a Personal Storage page (below a person's own
+folder) you can right-click empty space to **create a folder** or **upload
+media** (photos and videos from your computer, checked by ffmpeg like Import
+is; sound files go in with Import in the editor), right-click a folder card to
+**rename** or **delete** it, and right-click a photo or video to **rename** it
+(the extension stays). Folders nest as deep as you like. A deleted folder goes
+to the trash with what is in it, like deleted files, and a warning comes
+first. A person's own top-level folder can't be renamed or deleted.
+The **Trash** button on Personal Storage pages lists every delete still held
+(files and folders alike): when it was deleted, when the app removes it for
+good (30 days after, checked on each library scan), a preview on double-click,
+**Restore** (back where it was, the folder made again if it is gone; a taken
+name gets " (1)"), **Move…** (into another Personal Storage folder) and
+**Restore all** for a whole delete. The trash is the hidden
+`.photo-selector-trash` folder at the top of Personal Storage, not the
+operating system's. A new folder appears on the page you are on. The
+editor's left panel shows the same folders, closed until opened, with the same
+actions in an ellipsis menu on each row and on right-click. Double-click a file
+there to preview and play it. Drag a file onto **Project media** to copy it into
+the project (the bar between Project media and Personal Storage resizes the
+two; double-click it to reset).
+
+**Orientation and resolution.** Two menus in the middle of the editor's top
+bar set the video's shape and sharpness. **Orientation** is Horizontal (wide,
+for YouTube) or Vertical (tall, for Shorts, TikTok and Reels). **Resolution** is
+named in plain words with its size: Ultra HD (3840 × 2160), Full HD (1920 ×
+1080, the usual choice for YouTube and social media), HD (1280 × 720) and
+Standard (854 × 480); a Vertical project turns each on its side. A new project
+takes both from the first picture or video that goes into it (Vertical for a
+phone video held upright, and the resolution it matches, up to Full HD), once;
+after that, or once you have chosen either menu yourself, your choice stays.
+Changing either makes the next export render again, and the menus are greyed
+while a project exports. Text is sized from the frame's shorter side, so it
+looks the same either way up. Older projects open as Horizontal Full HD.
+
+**Layout.** A third menu in the top bar sets the **preview layout**: above the
+timeline (Horizontal, the default for wide video) or on the right with the
+timeline on the left (Vertical, the default for tall video; switching the
+video's orientation switches it too, and you can change it back). Drag the bar
+between the two to resize them; double-click it to reset. The choice is kept per
+project in this browser and is not part of the project. The media panel on the
+left folds to a thin rail with the button at its top, like the site's side nav,
+and the choice is remembered.
 
 **Projects.** Each one is a folder, `Projects/<user>/<project>/`:
 
@@ -176,12 +218,13 @@ pick whose folder. You can copy instead of move.
   was made from
 - `config/export.json`: export size and frame rate
 
-The Inbox list in the editor shows a thumbnail for each video and image. Its
-files are drag-only: dragging one onto the timeline copies it into `assets/`
-(Project media) and adds it where you drop it. The original stays in the Inbox.
-Dragging the same Inbox file again reuses the copy already in the project
-instead of copying it twice. Reuse goes by path: a file replaced in the Inbox
-under the same name reuses the existing copy (delete that copy from Project
+The Personal Storage list in the editor has one folder per user, all closed
+until you open one (its contents load then). It shows a thumbnail for each
+video and image. Its files are drag-only: dragging one onto the timeline
+copies it into `assets/` (Project media) and adds it where you drop it. The
+original stays in Personal Storage. Dragging the same file again reuses the
+copy already in the project instead of copying it twice. Reuse goes by path: a
+file replaced in Personal Storage under the same name reuses the existing copy (delete that copy from Project
 media to import the new one).
 
 **Importing from your computer.** **Import** in the editor's top bar, right
@@ -189,12 +232,12 @@ after the back arrow, the project name and the saved status (Export stays at
 the far right), opens the file
 picker: choose any number of videos, images and sound files. You can also drop
 files from your computer onto Project media. They upload straight into the
-project's `assets/` (not through the Inbox), two at a time, each listed under
+project's `assets/` (not through Personal Storage), two at a time, each listed under
 the Import button with its progress and a cancel button; each one appears in
 Project media as soon as it's in. A file that fails says why, with Retry and
 Dismiss, and the others carry on. The name is kept (cleaned of path parts and
-characters the disk can't take; a taken name gets " (1)", as Inbox copies do).
-- Formats: images and videos as the Inbox takes them (jpg, png, gif, bmp,
+characters the disk can't take; a taken name gets " (1)", as copies from Personal Storage do).
+- Formats: images and videos as Personal Storage takes them (jpg, png, gif, bmp,
   webp, heic, tif, dng; mp4, mov, m4v, avi, wmv, mkv, flv, 3gp, webm) and
   sound files (mp3, wav, m4a, aac, ogg, opus, flac, wma). What a file is comes
   from ffmpeg reading it, not its name: a renamed text file is refused, and a
@@ -213,7 +256,7 @@ characters the disk can't take; a taken name gets " (1)", as Inbox copies do).
 (or focus it and press **Delete**). The warning says how many timeline clips
 use it. Confirmed, it leaves the project: every clip of it comes off the
 timeline (leaving gaps), its copy in `assets/` is deleted and undo history
-starts over. The Inbox original isn't touched, so you can import it again.
+starts over. The Personal Storage original isn't touched, so you can import it again.
 Not while the project is exporting, or while that file is being imported.
 
 **Editing.**
@@ -231,7 +274,7 @@ Not while the project is exporting, or while that file is being imported.
   the top layer (it shows while you drag) to make a new layer. The **+** at
   the left of the ruler adds an empty layer; an empty layer has an **×** to
   remove it. Drag a clip up or down to move it to another layer.
-- **Drop on the player.** Drop a Project media or Inbox file on the preview
+- **Drop on the player.** Drop a Project media or Personal Storage file on the preview
   to add it at the playhead, on the lowest layer free for its whole length
   there (a new layer when none is, up to four). It comes in selected, with
   its frame showing, ready to move or resize.
@@ -753,9 +796,8 @@ before. Projects without levels export exactly as they did.
 
 **Requirements.** ffmpeg 7 or newer on the server, with drawtext (libfreetype)
 for text clips (the Docker image has both).
-Set the folders with `PHOTOS_VIDEO_INBOX_DIR` and `PHOTOS_VIDEO_PROJECTS_DIR`.
-They default to `/data/VideoEditing/Inbox` and `/data/VideoEditing/Projects`,
-beside the cache.
+Set the projects folder with `PHOTOS_VIDEO_PROJECTS_DIR`. It defaults to
+`/data/VideoEditing/Projects`, beside the cache.
 
 ## File share permissions
 
@@ -766,7 +808,7 @@ normal ownership on the share. That user needs:
 | --- | --- | --- |
 | Mobile Upload (`/photos/upload`) | **read + write**, including subfolders | Lists photos, moves picks out, moves deleted photos into its trash folder, writes rotations |
 | Sort Dropoff (`/photos/dropoff`) | **read + write** | Receives the photos you keep; deleting and rotating work there too |
-| App data (`/data`) | read + write | Database, thumbnail cache and User Temp Storage. The container makes it owned by `PUID:PGID` on start |
+| App data (`/data`) | read + write | Database, thumbnail cache and Personal Storage. The container makes it owned by `PUID:PGID` on start |
 
 Deleted photos go to a hidden `.photo-selector-trash` folder inside each photo
 folder, so Undo can put them back. It's emptied after 30 days. Both photo

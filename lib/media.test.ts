@@ -35,10 +35,14 @@ describe("isRootKey", () => {
 
   it("treats only Video Editing Projects as read-only", () => {
     expect(isReadOnlyRoot("video-projects")).toBe(true)
-    for (const r of ["upload", "dropoff", "temp", "video-inbox"]) expect(isReadOnlyRoot(r)).toBe(false)
+    for (const r of ["upload", "dropoff", "temp"]) expect(isReadOnlyRoot(r)).toBe(false)
   })
 
-  it("keeps User Temp Storage out of AI scans", () => {
+  it("no longer has a Video Editing inbox root", () => {
+    expect(isRootKey("video-inbox")).toBe(false)
+  })
+
+  it("keeps Personal Storage out of AI scans", () => {
     expect(isScanRoot("upload")).toBe(true)
     expect(isScanRoot("dropoff")).toBe(true)
     expect(isScanRoot("temp")).toBe(false)

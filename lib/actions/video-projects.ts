@@ -1,17 +1,16 @@
 "use server"
 
-import fs from "fs/promises"
-import path from "path"
 import { z } from "zod"
 import { redirect } from "next/navigation"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { rootPath } from "@/lib/library-server"
-import { isPlainName, isSkippedDir, mediaKind, safeSegments, tempFolderName } from "@/lib/media"
+import { listDirectory } from "@/lib/library-server"
+import { isPlainName, safeSegments, tempFolderName } from "@/lib/media"
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
 import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
-import { createProject, deleteAsset, deleteProject, importAsset, readProject, renameProject, reusableAsset, writeProject } from "@/lib/video/projects-server"
+import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
+import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
 
 // Server actions for video projects. The user's folder always comes from the
 // session, never from the client; failures come back as { error }.
@@ -108,7 +107,7 @@ export async function importAssetAction(
   folder: string,
   inboxFolder: string[],
   fileName: string
-): Promise<{ id: string; asset: Asset; reused?: true } | { error: string }> {
+): Promise<{ id: string; asset: Asset; reused?: true; format?: { width: number; height: number } } | { error: string }> {
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   const file = plainName.safeParse(fileName)
@@ -119,13 +118,15 @@ export async function importAssetAction(
     return await withLock(`${userFolder}/${f.data}`, async () => {
       const project = await readProject(userFolder, f.data)
       if (!project) return { error: "Project not found." }
-      // The same Inbox file again: use the copy that's already in the project.
+      // The same file again: use the copy that's already in the project.
       const existing = await reusableAsset(userFolder, f.data, project, [...segments, file.data].join("/"))
       if (existing) return { ...existing, reused: true as const }
       const imported = await importAsset(userFolder, f.data, segments, file.data)
       if ("error" in imported) return imported
-      await writeProject(userFolder, f.data, { ...project, assets: { ...project.assets, [imported.id]: imported.asset } })
-      return imported
+      // A new project takes its orientation and resolution from its first picture or video.
+      const format = await formatForFirstPicture(userFolder, f.data, project, imported.asset)
+      await writeProject(userFolder, f.data, { ...project, ...format, assets: { ...project.assets, [imported.id]: imported.asset } })
+      return format ? { ...imported, format } : imported
     })
   } catch (error) {
     return { error: errorText(error) }
@@ -156,37 +157,42 @@ export async function deleteAssetAction(folder: string, assetId: string): Promis
   }
 }
 
-type InboxFile = { name: string; size: number; kind: "image" | "video" }
-
-/** Video and image files in each user's Inbox folder; the current user's own folder comes first. */
-export async function listInboxAction(): Promise<{ folder: string; files: InboxFile[] }[]> {
+/** Sets the project's orientation and/or resolution. Not while it exports (the size is part of what an export is made from). */
+export async function setFormatAction(folder: string, change: { orientation?: string; resolution?: string }): Promise<{ width: number; height: number } | { error: string }> {
   const { userFolder } = await requireUserFolder()
-  const root = rootPath("video-inbox")
-  let entries
+  const f = plainName.safeParse(folder)
+  const orientation = ORIENTATIONS.find((o) => o.id === change?.orientation)?.id as Orientation | undefined
+  const resolution = RESOLUTIONS.find((r) => r.id === change?.resolution)?.id as ResolutionId | undefined
+  if (!f.success || (!orientation && !resolution) || (change?.orientation !== undefined && !orientation) || (change?.resolution !== undefined && !resolution)) return { error: "Invalid request." }
+  if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
   try {
-    entries = await fs.readdir(root, { withFileTypes: true })
-  } catch {
-    return []
+    return await withLock(`${userFolder}/${f.data}`, () => setProjectFormat(userFolder, f.data, { orientation, resolution }))
+  } catch (error) {
+    return { error: errorText(error) }
   }
-  const out: { folder: string; files: InboxFile[] }[] = []
-  for (const e of entries) {
-    if (!e.isDirectory() || isSkippedDir(e.name)) continue
-    const files: InboxFile[] = []
-    try {
-      for (const f of await fs.readdir(path.join(root, e.name), { withFileTypes: true })) {
-        const kind = f.isFile() ? mediaKind(f.name) : null
-        if (!kind) continue
-        const st = await fs.stat(path.join(root, e.name, f.name))
-        files.push({ name: f.name, size: st.size, kind })
-      }
-    } catch {
-      continue
-    }
-    files.sort((a, b) => a.name.localeCompare(b.name))
-    out.push({ folder: e.name, files })
+}
+
+export type TempListing = {
+  folders: { name: string; mediaCount: number }[]
+  files: { name: string; size: number; kind: "image" | "video" }[]
+}
+
+/**
+ * One level of Personal Storage for the editor's left panel, loaded when a
+ * folder is opened. At the top level the current user's own folder comes first.
+ */
+export async function listTempFolderAction(segments: string[]): Promise<TempListing | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const parsed = z.array(z.string()).max(16).safeParse(segments)
+  const safe = parsed.success ? safeSegments(parsed.data) : null
+  if (!safe) return { error: "Invalid folder." }
+  const listing = await listDirectory("temp", safe)
+  if (!listing) return { error: "That folder no longer exists." }
+  const own = (name: string) => Number(safe.length === 0 && name === userFolder)
+  return {
+    folders: listing.folders.sort((a, b) => own(b.name) - own(a.name) || a.name.localeCompare(b.name, undefined, { numeric: true })),
+    files: listing.files.map((f) => ({ name: f.name, size: f.size, kind: f.kind })).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
   }
-  out.sort((a, b) => Number(b.folder === userFolder) - Number(a.folder === userFolder) || a.folder.localeCompare(b.folder))
-  return out
 }
 
 export async function startExportAction(folder: string): Promise<{ jobId: string; reused?: true; output?: string } | { error: string }> {

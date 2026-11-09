@@ -99,7 +99,7 @@ async function eachFile(
   return result
 }
 
-/** Moves files from a Mobile Upload, User Temp Storage or Video Editing Inbox folder into the top of Sort Dropoff. */
+/** Moves files from a Mobile Upload or Personal Storage folder into the top of Sort Dropoff. */
 export async function moveToDropoff(rootKey: "upload" | NoteRootKey, folder: string[], names: string[]): Promise<ActionResult> {
   const dropoff = rootPath("dropoff")
   return eachFile(rootKey, folder, names, async (file, name) => {
@@ -136,8 +136,8 @@ async function placeReplacing(src: string, dir: string, name: string, move: bool
 }
 
 /**
- * Moves or copies files into a user's folder in User Temp Storage or the Video
- * Editing Inbox (created if needed). Unlike every other operation here this
+ * Moves or copies files into a user's folder in Personal Storage (created if
+ * needed). Unlike every other operation here this
  * replaces a file of the same name: sending a photo again updates what's there.
  */
 export async function sendToTemp(rootKey: RootKey, folder: string[], names: string[], userFolder: string, mode: "move" | "copy", dest: NoteRootKey = "temp"): Promise<ActionResult> {

@@ -77,14 +77,14 @@ describe("sendToTemp", () => {
     expect(await read(temp, "Jessi", "IMG_1.jpg")).toBe("new photo")
   })
 
-  it("refuses a destination outside User Temp Storage", async () => {
+  it("refuses a destination outside Personal Storage", async () => {
     const r = await sendToTemp("upload", ["trip"], ["IMG_1.jpg"], "..", "copy")
     expect(r.ok).toEqual([])
     expect(await exists(upload, "trip", "IMG_1.jpg")).toBe(true)
   })
 })
 
-describe("moveToDropoff from User Temp Storage", () => {
+describe("moveToDropoff from Personal Storage", () => {
   it("moves into the top of Sort Dropoff", async () => {
     await sendToTemp("upload", ["trip"], ["IMG_1.jpg"], "Jessi", "move")
     const r = await moveToDropoff("temp", ["Jessi"], ["IMG_1.jpg"])

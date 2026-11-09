@@ -10,7 +10,7 @@ import { createProject, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-apreview-${process.pid}-${Date.now()}`)
 process.env.PHOTOS_VIDEO_PROJECTS_DIR = path.join(tmp, "projects")
-process.env.PHOTOS_VIDEO_INBOX_DIR = path.join(tmp, "inbox")
+process.env.PHOTOS_TEMP_DIR = path.join(tmp, "inbox")
 process.env.PHOTOS_CACHE_DIR = path.join(tmp, "cache")
 const assets = path.join(tmp, "projects", "mike", "P", "assets")
 

@@ -157,7 +157,7 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
     const t = clip.transform ?? IDENTITY
     if (isTextClip(clip)) {
       return (
-        <div className="absolute" style={placement(textSize(clip.text, H), W, H, t)}>
+        <div className="absolute" style={placement(textSize(clip.text, Math.min(W, H)), W, H, t)}>
           <TextPicture text={clip.text} ready />
         </div>
       )

@@ -49,7 +49,17 @@ function sendPiece(job: Job, url: string, piece: Blob, onProgress: (sent: number
   })
 }
 
-export function useMediaImport(folder: string, onImported: (id: string, asset: Asset) => void) {
+/** Where files go and what they may be. The default is a project's media; Personal Storage uploads pass their own. */
+export type ImportTarget = {
+  /** The route the pieces are POSTed to (DELETE cancels). */
+  url: string
+  /** Sent with every request, besides the file's name, size and offset. */
+  query?: Record<string, string>
+  /** Why a file can't be sent from its name and size alone, or null. */
+  reject?: (name: string, size: number) => string | null
+}
+
+export function useMediaImport(folder: string, onImported: (id: string, asset: Asset, format?: { width: number; height: number }) => void, target?: ImportTarget) {
   const [items, setItems] = useState<ImportItem[]>([])
   const [announcement, setAnnouncement] = useState("")
   const jobs = useRef(new Map<string, Job>())
@@ -57,9 +67,12 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
   // The batch being announced: how many finished and failed since the queue was last idle.
   const batch = useRef({ done: 0, failed: 0 })
   const onImportedRef = useRef(onImported)
+  const targetRef = useRef(target)
   useEffect(() => {
     onImportedRef.current = onImported
+    targetRef.current = target
   })
+  const rejection = (name: string, size: number) => (targetRef.current?.reject ?? importRejection)(name, size)
 
   const update = useCallback((key: string, patch: Partial<ImportItem>) => {
     const job = jobs.current.get(key)
@@ -68,7 +81,8 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
   }, [])
 
   const pump = useCallback(() => {
-    const base = `/api/video-projects/${encodeURIComponent(folder)}/import`
+    const base = targetRef.current?.url ?? `/api/video-projects/${encodeURIComponent(folder)}/import`
+    const extra = targetRef.current?.query ?? {}
     for (const job of jobs.current.values()) {
       if (running.current >= CONCURRENCY) break
       if (job.item.state !== "queued") continue
@@ -80,7 +94,7 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
         job.upload = null
         for (let at = 0; at < file.size && !job.cancelled; ) {
           const piece = file.slice(at, Math.min(file.size, at + IMPORT_CHUNK_BYTES))
-          const q = new URLSearchParams({ name: file.name, size: String(file.size), offset: String(at), ...(job.upload ? { upload: job.upload } : {}) })
+          const q = new URLSearchParams({ ...extra, name: file.name, size: String(file.size), offset: String(at), ...(job.upload ? { upload: job.upload } : {}) })
           const r = await sendPiece(job, `${base}?${q}`, piece, (sent) => update(job.item.key, { progress: (at + sent) / file.size }))
           if (!r) break
           if (typeof r.error === "string") {
@@ -88,8 +102,8 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
             break
           }
           if (typeof r.upload === "string") job.upload = r.upload
-          if (r.done === true && typeof r.id === "string" && r.asset) {
-            onImportedRef.current(r.id, r.asset as Asset)
+          if (r.done === true && typeof r.id === "string") {
+            onImportedRef.current(r.id, r.asset as Asset, r.format as { width: number; height: number } | undefined)
             at = file.size
             break
           }
@@ -136,7 +150,7 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
       const added: ImportItem[] = []
       for (const file of files) {
         const key = `i${nextKey++}`
-        const rejected = importRejection(file.name, file.size)
+        const rejected = rejection(file.name, file.size)
         const item: ImportItem = { key, name: file.name, progress: 0, state: rejected ? "failed" : "queued", ...(rejected ? { error: rejected, local: true as const } : {}) }
         if (rejected) batch.current.failed++
         jobs.current.set(key, { item, file, xhr: null, upload: null, cancelled: false })
@@ -164,7 +178,7 @@ export function useMediaImport(folder: string, onImported: (id: string, asset: A
   const retry = useCallback(
     (key: string) => {
       const job = jobs.current.get(key)
-      if (!job || job.item.state !== "failed" || importRejection(job.file.name, job.file.size)) return
+      if (!job || job.item.state !== "failed" || rejection(job.file.name, job.file.size)) return
       job.cancelled = false
       update(key, { state: "queued", progress: 0, error: undefined })
       pump()

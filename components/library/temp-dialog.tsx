@@ -11,21 +11,15 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { listTempUsersAction, sendToTempAction, type TempUser } from "@/lib/actions/temp"
 
-// "Move / copy to User Temp Storage" or the Video Editing Inbox: pick move or copy, whose folder, and a
+// "Move / copy to Personal Storage": pick move or copy, whose folder, and a
 // note for them. A file already in that folder is replaced and its note updated.
 
 export type TempTarget = { root: string; folder: string[]; names: string[] }
 
-/** The folders a send can go to. */
-export type TempDest = "temp" | "video-inbox"
-
-const DEST_TITLES: Record<TempDest, string> = { temp: "User Temp Storage", "video-inbox": "Video Editing" }
-
 export function TempDialog({
-  target, dest = "temp", canMove, onDone, onClose,
+  target, canMove, onDone, onClose,
 }: {
   target: TempTarget
-  dest?: TempDest
   /** The source can be changed (not read-only, not being scanned); otherwise only Copy is offered. */
   canMove: boolean
   /** After a successful send, with the names that went and whether they were moved. */
@@ -39,7 +33,7 @@ export function TempDialog({
   const [busy, setBusy] = useState(false)
 
   // A photo already in someone's folder can't be sent to that same folder.
-  const source = target.root === dest ? target.folder.join("/") : null
+  const source = target.root === "temp" ? target.folder.join("/") : null
   const choices = users?.filter((u) => u.folder !== source) ?? []
 
   useEffect(() => {
@@ -59,7 +53,7 @@ export function TempDialog({
     if (!userId || busy) return
     setBusy(true)
     try {
-      const r = await sendToTempAction({ ...target, dest, userId, mode, note })
+      const r = await sendToTempAction({ ...target, userId, mode, note })
       if ("error" in r) {
         toast.error(r.error)
         return
@@ -97,7 +91,7 @@ export function TempDialog({
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Send to {DEST_TITLES[dest]}</DialogTitle>
+          <DialogTitle>Send to Personal Storage</DialogTitle>
           <DialogDescription className="break-all">{what}</DialogDescription>
         </DialogHeader>
         <form

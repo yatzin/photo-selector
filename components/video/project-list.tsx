@@ -3,10 +3,9 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useMemo, useState, useSyncExternalStore, useTransition } from "react"
-import { ArrowDown, ArrowUp, ChevronDown, Clapperboard, FolderPlus, Inbox, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Clapperboard, FolderPlus, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
-import { Button, buttonVariants } from "@/components/ui/button"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Button } from "@/components/ui/button"
 import { FieldHelp } from "@/components/ui/field-help"
 import { Input } from "@/components/ui/input"
 import { createProjectAction, deleteProjectAction, renameProjectAction } from "@/lib/actions/video-projects"
@@ -19,10 +18,8 @@ import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialo
 // Video Editing's start page, laid out like a file browser: each project is a
 // file in a details list (name, modified, clips, length, size), sorted by clicking a column heading (name or date to start with),
 // filtered by the search box, opened by clicking its name. Projects are
-// "Manage inbox" lists the inbox folders, one per user.
 
 type Project = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number }
-type InboxUser = { name: string; files: number }
 type Dialogue = { kind: "new" } | { kind: "rename"; project: Project } | { kind: "delete"; project: Project }
 
 const subscribeNothing = () => () => {}
@@ -36,8 +33,7 @@ const COLUMNS: { key: SortKey | null; label: string; align?: "right" }[] = [
   { key: "size", label: "Size", align: "right" },
 ]
 
-export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inboxUsers: InboxUser[] }) {
-  const router = useRouter()
+export function ProjectList({ projects }: { projects: Project[] }) {
   const [dialog, setDialog] = useState<Dialogue | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "modified", dir: "desc" })
   const [query, setQuery] = useState("")
@@ -79,28 +75,6 @@ export function ProjectList({ projects, inboxUsers }: { projects: Project[]; inb
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger className={cn(buttonVariants({ variant: "outline" }), "gap-2")}>
-              <Inbox className="h-4 w-4" />
-              Manage inbox
-              <ChevronDown className="h-4 w-4 opacity-60" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-56">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>Inbox folders</DropdownMenuLabel>
-              </DropdownMenuGroup>
-              {inboxUsers.length === 0 ? (
-                <DropdownMenuItem disabled>No inbox folders yet</DropdownMenuItem>
-              ) : (
-                inboxUsers.map((u) => (
-                  <DropdownMenuItem key={u.name} onClick={() => router.push(`/library/video-inbox/${encodeURIComponent(u.name)}`)}>
-                    <span className="min-w-0 flex-1 truncate">{u.name}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums">{u.files.toLocaleString()} file{u.files === 1 ? "" : "s"}</span>
-                  </DropdownMenuItem>
-                ))
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
           <Button onClick={() => open({ kind: "new" })}>
             <Plus className="h-4 w-4" />
             New project
@@ -236,7 +210,7 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
       {dialog.kind === "delete" ? (
         <Callout tone="danger" title="This can't be undone">
           <p>
-            &ldquo;{dialog.project.name}&rdquo; is deleted with its clips, settings and exported videos. Source videos in the Inbox are not touched.
+            &ldquo;{dialog.project.name}&rdquo; is deleted with its clips, settings and exported videos. Source files in Personal Storage are not touched.
           </p>
         </Callout>
       ) : (

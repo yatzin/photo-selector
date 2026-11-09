@@ -4,7 +4,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, ChevronDown, Clapperboard, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl, preview } from "@/lib/format"
@@ -19,7 +19,8 @@ import { Lightbox } from "./lightbox"
 import { PhotoImage } from "./photo-image"
 import { useDragSelect } from "./use-drag-select"
 import { PhotoMenu, type PhotoMenuAction } from "./photo-menu"
-import { TempDialog, type TempDest } from "./temp-dialog"
+import { RenameDialog } from "@/components/video/temp-dialogs"
+import { TempDialog } from "./temp-dialog"
 
 // The sorting grid. A click (or tap) toggles a photo in or out of the
 // selection, so picking many is just clicking each one. Shift-click adds the
@@ -31,7 +32,7 @@ import { TempDialog, type TempDest } from "./temp-dialog"
 //
 // Keys: arrows move the focus, Space toggles it, Shift+arrows add a range,
 // Del deletes, M moves to Sort Dropoff, R / Shift+R rotate, Esc clears.
-// Right-click (or the toolbar) also moves or copies to User Temp Storage.
+// Right-click (or the toolbar) also moves or copies to Personal Storage.
 //
 // Sorted by date, photos are grouped under month headers; the circle on a
 // header selects or deselects that whole month, and the chevron collapses it
@@ -43,7 +44,7 @@ import { TempDialog, type TempDest } from "./temp-dialog"
 
 const SIZES = { s: 128, m: 192, l: 288 } as const
 const GAP = 8
-// User Temp Storage: room under each tile for the start of its note (two
+// Personal Storage: room under each tile for the start of its note (two
 // lines of text-xs), cut at NOTE_CHARS characters.
 const CAPTION_H = 36
 const NOTE_CHARS = 60
@@ -63,7 +64,7 @@ type Props = {
   folder: string[]
   files: FileEntry[]
   flags?: QualityFlags
-  /** User Temp Storage: the notes left with these files, by name. */
+  /** Personal Storage: the notes left with these files, by name. */
   notes?: Record<string, TempNoteView>
   canMove: boolean
   canEdit: boolean
@@ -85,7 +86,7 @@ function Tile({
   /** Quality Checks flagged it as a bad photo; `note` says why. */
   flagged: boolean
   note?: string | null
-  /** The note left with it in User Temp Storage. */
+  /** The note left with it in Personal Storage. */
   tempNote?: string
   selected: boolean
   focused: boolean
@@ -93,7 +94,7 @@ function Tile({
   onDoubleClick: () => void
   onToggle: () => void
   onContextMenu: (e: React.MouseEvent) => void
-  /** Show the start of `tempNote` under the tile (User Temp Storage). */
+  /** Show the start of `tempNote` under the tile (Personal Storage). */
   caption?: boolean
 }) {
   const tile = (
@@ -195,9 +196,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   const [viewer, setViewer] = useState<number | null>(null)
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
-  // Names waiting in the "Send to User Temp Storage" dialog.
+  // Names waiting in the "Send to Personal Storage" dialog.
   const [temp, setTemp] = useState<string[] | null>(null)
-  const [tempDest, setTempDest] = useState<TempDest>("temp")
   const [, startTransition] = useTransition()
   // Measured on the client: the grid's width, the scrolling <main>, and how
   // far below the top of the scroll area the grid starts (folders, toolbar).
@@ -403,6 +403,8 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
     setMenu({ x: e.clientX, y: e.clientY, names: selected.has(name) ? chosen.map((f) => f.name) : [name], flagged: flagRun(name) })
   }
   const closeMenu = useCallback(() => setMenu(null), [])
+  // Personal Storage, below a user's own folder: a photo or video can be renamed from its menu.
+  const [renaming, setRenaming] = useState<string | null>(null)
   const menuImages = menu ? menu.names.filter((n) => items[indexOf.get(n) ?? -1]?.kind === "image") : []
   const onMenu = (action: PhotoMenuAction) => {
     if (!menu) return
@@ -410,9 +412,12 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
       if (menu.flagged) router.push(`/ai/runs/${menu.flagged}?tab=found`)
       return
     }
-    if (action === "temp" || action === "video") {
-      setTempDest(action === "video" ? "video-inbox" : "temp")
+    if (action === "temp") {
       setTemp(menu.names)
+      return
+    }
+    if (action === "rename") {
+      setRenaming(menu.names[0])
       return
     }
     void run(action, action.startsWith("rotate") ? menuImages : menu.names)
@@ -532,16 +537,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                   </Button>
                 </>
               )}
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("temp"); setTemp(names) }} title="Move or copy to User Temp Storage">
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => setTemp(names)} title="Move or copy to Personal Storage">
                 <Inbox className="h-4 w-4" />
-                <span className="hidden lg:inline">Temp Storage</span>
+                <span className="hidden lg:inline">Personal Storage</span>
               </Button>
-              {root !== "video-inbox" && root !== "video-projects" && (
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => { setTempDest("video-inbox"); setTemp(names) }} title="Move or copy to Video Editing">
-                  <Clapperboard className="h-4 w-4" />
-                  <span className="hidden lg:inline">Video Editing</span>
-                </Button>
-              )}
               {canMove && (
                 <Button size="sm" disabled={busy} onClick={() => run("move", names)} title="Move to Sort Dropoff (M)">
                   <FolderOutput className="h-4 w-4" />
@@ -691,6 +690,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
           canMove={canMove && !busy}
           canEdit={canEdit && !busy}
           canTemp={!busy}
+          canRename={root === "temp" && folder.length > 0 && canEdit}
           showBadPhotos={!!menu.flagged}
           onAction={onMenu}
           onClose={closeMenu}
@@ -712,14 +712,13 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
           onDelete={(name) => run("delete", [name])}
           onRotate={(name, dir) => run(dir === "cw" ? "rotate-cw" : "rotate-ccw", [name])}
           notes={notes}
-          onTemp={(name) => { setTempDest("temp"); setTemp([name]) }}
-          onVideo={(name) => { setTempDest("video-inbox"); setTemp([name]) }}
+          onTemp={(name) => setTemp([name])}
         />
       )}
+      {renaming !== null && <RenameDialog kind="file" parent={folder} name={renaming} onClose={() => setRenaming(null)} onDone={() => refresh()} />}
       {temp && (
         <TempDialog
           target={{ root, folder, names: temp }}
-          dest={tempDest}
           canMove={canEdit}
           onDone={(ok, moved) => {
             if (moved) hide(ok)
