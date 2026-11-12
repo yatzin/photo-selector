@@ -10,7 +10,7 @@ import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/l
 import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
-import { makeTransparent } from "@/lib/video/transparent-server"
+import { previewRetime, retimeAsset } from "@/lib/video/retime-server"
 import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
 
 // Server actions for video projects. The user's folder always comes from the
@@ -213,22 +213,40 @@ export async function exportStatusAction(jobId: string): Promise<ExportStatus> {
 }
 
 /**
- * Makes the background of project image `assetId` transparent (the picked
- * colour, how close counts, edge-connected or everywhere; lib/video/chroma):
- * a new PNG asset beside the original, which stays. The editor, on { id,
- * asset }, adds the asset to its project and points the clip at it.
+ * Speed / Reverse: a copy of the part of video `assetId` a clip shows (trim
+ * `options.in` to `options.out`) at `options.speed`, reversed or not, as a new
+ * hidden asset the clip can point at; speed 1 forwards gives the original back.
+ * The editor adds the asset to its project and calls retimeClip with the trim
+ * in the reply.
  */
-export async function makeTransparentAction(
+export async function retimeAssetAction(
   folder: string,
   assetId: string,
-  options: { key: [number, number, number]; tolerance: number; contiguous: boolean }
-): Promise<{ id: string; asset: Asset } | { error: string }> {
+  options: { in: number; out: number; speed: number; reverse: boolean }
+): Promise<{ id: string; asset: Asset; in: number; out: number } | { error: string }> {
   const { userFolder } = await requireUserFolder()
   const f = plainName.safeParse(folder)
   const a = z.string().min(1).max(100).safeParse(assetId)
   if (!f.success || !a.success) return { error: "Invalid request." }
   try {
-    return await makeTransparent(userFolder, f.data, a.data, options)
+    return await retimeAsset(userFolder, f.data, a.data, options)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** A short sample (about 6 s from the middle) of what Speed / Reverse would make, to listen to first; nothing is stored. */
+export async function previewRetimeAction(
+  folder: string,
+  assetId: string,
+  options: { in: number; out: number; speed: number; reverse: boolean }
+): Promise<{ dataUrl: string; audioOnly: boolean; seconds: number } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  const a = z.string().min(1).max(100).safeParse(assetId)
+  if (!f.success || !a.success) return { error: "Invalid request." }
+  try {
+    return await previewRetime(userFolder, f.data, a.data, options)
   } catch (error) {
     return { error: errorText(error) }
   }

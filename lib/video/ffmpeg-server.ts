@@ -1,4 +1,5 @@
 import "server-only"
+import { keyHex, videoKeyParams } from "./chroma"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { parsePictureSize, parseStreams, type ProbedStreams } from "./import"
@@ -176,6 +177,8 @@ function textAnimation(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }
 
 /** The key a text clip's rasterised PNG has in buildExportGraph's `files`. */
 export const textFileKey = (c: Clip) => `text:${c.id}`
+/** The key of an image clip's background-cleared picture in the export's file map. */
+export const keyedFileKey = (c: Clip) => `keyed:${c.id}`
 
 /** Largest side (px) a text clip's PNG is drawn at; a bigger box is drawn smaller and scaled up. */
 const MAX_TEXT_RASTER = 8192
@@ -444,8 +447,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
    * plays the footage beyond its in and out points, a still holds its first
    * and last frame (tpad). The sound runs as soundSpan says.
    */
-  /** A still whose picture has transparent areas (a background removed): kept see-through, not flattened onto black. */
-  const keepsAlpha = (c: Clip) => !isTextClip(c) && isImage(c) && p.assets[c.asset]?.alpha === true
+  /** A picture with its background keyed out: kept see-through, not flattened onto black. */
+  const keepsAlpha = (c: Clip) => !isTextClip(c) && c.key !== undefined
+  /** A video's key, ahead of its placing: ffmpeg's colorkey, as the player's shader does it (lib/video/chroma). */
+  const keying = (c: Clip) => {
+    if (!c.key) return ""
+    const { similarity, blend } = videoKeyParams(c.key.tolerance)
+    return `format=rgba,colorkey=${keyHex(c.key.key)}:${frac(similarity)}:${frac(blend)},`
+  }
   const source = (c: Clip, pre = 0, post = 0) => {
     const i = inputs.length
     const file = fileFor(c)
@@ -474,7 +483,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 || keepsAlpha(c) ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
-      parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
+      parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${keying(c)}${place},${shift}[v${i}]`)
       sound(c, i)
     }
     const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
@@ -604,7 +613,7 @@ export function buildExportGraph(project: Project, files: Record<string, string>
   const parts: string[] = []
   const frame = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
   const fileFor = (c: Clip) => {
-    const file = files[isTextClip(c) ? textFileKey(c) : c.asset]
+    const file = files[isTextClip(c) ? textFileKey(c) : c.key && isImage(c) ? keyedFileKey(c) : c.asset]
     if (!file) throw new Error(isTextClip(c) ? "Missing text picture" : "Missing asset file")
     return file
   }
@@ -612,7 +621,7 @@ export function buildExportGraph(project: Project, files: Record<string, string>
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || (!isTextClip(c) && p.assets[c.asset]?.alpha === true) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || (!isTextClip(c) && c.key !== undefined) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 

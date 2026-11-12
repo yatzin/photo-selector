@@ -1,11 +1,11 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, SlidersHorizontal, Type, Volume2, VolumeX, X } from "lucide-react"
+import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Replace, SlidersHorizontal, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, adjoins, allClips, assetKind, assetLabel, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isLooping, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
+  addTrack, adjoins, dropZone, moveOnClip, placeDropped, rippleRemoveClip, type DropOn, allClips, assetKind, assetLabel, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isLooping, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
   MIN_CLIP, moveClip, newClipLength, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipLoop, setClipMuted, setClipText, splitClip, totalLength, trackAt, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
@@ -90,7 +90,11 @@ export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
 export const STOCK_DRAG_TYPE = "application/x-ps-stock"
 
 /** Where a clip lands: a track (one past the top makes a new layer; AUDIO_TRACK the audio layer) and its start there; `refused` when it can't go there. */
-export type DropTarget = { track: number; start: number; refused?: boolean }
+/** Where a paste goes: layer, time and, over a clip, in front of or behind it. */
+export type PasteAt = { track: number; start: number; on?: { clip: string; mode: "before" | "after" } }
+
+/** `on`: the clip the media was dropped on and what the drop does to it (before it, after it, in its place); `start` is where the new clip begins (the clip's start, its end for after). */
+export type DropTarget = { track: number; start: number; refused?: boolean; on?: DropOn }
 
 /** What the audio layer refuses. */
 const AUDIO_ONLY = "Only sound files go on the audio layer."
@@ -134,7 +138,7 @@ const secs = (n: number) => String(Number(n.toFixed(2)))
 
 export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE) || dt.types.includes(STOCK_DRAG_TYPE))
 
-const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start && a.refused === b.refused)
+const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start && a.refused === b.refused && a.on?.clip === b.on?.clip && a.on?.mode === b.on?.mode)
 
 /** 0, the playhead and both edges of every clip but `ignore` (on every track but `skipTrack`): where a dragged clip or edge snaps. */
 function snapPoints(p: Project, playhead: number, ignore?: string, skipTrack?: number): number[] {
@@ -202,7 +206,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null,
+  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null, onCopy, onPaste, canPaste, onSpeed, pasteAt,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -229,6 +233,16 @@ export function Timeline({
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
   /** A Stock tab result was dropped: download it, then add it at `target`. */
   onDropStock: (ref: StockRef, target: DropTarget) => void
+  /** The timeline fills this with a function giving where a paste goes: under the mouse (its row, the time under it, and the clip under it), or null when the mouse isn't over the rows. */
+  pasteAt: React.MutableRefObject<(() => PasteAt | null) | null>
+  /** Open the Speed / Reverse dialog for video clip `id`. */
+  onSpeed: (id: string) => void
+  /** Copy clip `id` (with every setting) for pasting. */
+  onCopy: (id: string) => void
+  /** Paste the copied clip at the playhead. */
+  onPaste: () => void
+  /** Whether a clip has been copied. */
+  canPaste: boolean
   /** Open a text clip's Edit text dialog (on its Animation tab for "animation"). */
   onEditText: (id: string, section?: "text" | "animation") => void
   /** Open the Transition dialog for the cut before clip `id`. */
@@ -260,6 +274,8 @@ export function Timeline({
   const [storedRowZoom, setStoredRowZoom] = useStoredValue(ROW_ZOOM_KEY)
   const rowZoom = clampRowZoom(storedRowZoom ? Number(storedRowZoom) : 1)
   const scroller = useRef<HTMLDivElement>(null)
+  // The mouse's last position over the timeline (viewport px), for where a paste goes.
+  const lastPointer = useRef<{ x: number; y: number } | null>(null)
   const origin = useRef<HTMLDivElement>(null)
   const rowEls = useRef<(HTMLDivElement | null)[]>([])
   const audioRowEl = useRef<HTMLDivElement | null>(null)
@@ -268,7 +284,7 @@ export function Timeline({
   // Auto-pan while a drag is near an edge: the pointer's x, what to redo after each scroll step, and the rAF loop.
   const pan = useRef<{ x: number; onPan: () => void; frame: number | null; last: number; carry: number } | null>(null)
   // The last file drag over a row, so auto-pan can move its ghost along (with Alt, snapping off).
-  const fileDrag = useRef<{ clientX: number; track: number; alt: boolean } | null>(null)
+  const fileDrag = useRef<{ clientX: number; track: number; alt: boolean; over: string | null } | null>(null)
   // A wheel zoom asked for but not rendered yet: the zoom and the scrollLeft that keeps the pointer's time in place.
   const pendingZoom = useRef<{ zoom: number; scrollLeft: number } | null>(null)
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
@@ -895,7 +911,10 @@ export function Timeline({
           return
         }
         const newLeft = Math.max(0, left + dx / live.current.zoom)
-        const r = targetFor(rowAt(ev.clientY), newLeft, length, clip.id, timeAt(ev.clientX), !off, audio)
+        const row = rowAt(ev.clientY)
+        // Over another clip: in front of it, behind it or in its place (the dragged block ignores the pointer, so it isn't what's under it).
+        const onClip = onClipTarget(row, ev.clientX, clipUnder(ev.clientX, ev.clientY, clip.id), audio)
+        const r = onClip ? { to: onClip, guide: null } : targetFor(row, newLeft, length, clip.id, timeAt(ev.clientX), !off, audio)
         to = r.to
         setDrag({ id: clip.id, length, dx, dy, target: r.to, end: Math.max(newLeft, r.to.start) + length })
         setSnap(snapState(r.to.track, off, r.guide))
@@ -920,6 +939,14 @@ export function Timeline({
           return onChange((p) => moveGroup(p, clip.id, magnetic ? g.at : t.start, t.track))
         }
         if (!t) return
+        if (t.on) {
+          const on = t.on
+          // In front of or behind a clip: not in between two clips a transition or audio overlap links there (replacing parts none).
+          const parted = on.mode === "replace" ? null : linkedCutAt(t.track, t.start, clip.id)
+          if (parted) return refuse(clip.id, linkedNotice(parted, {}, true))
+          setLanded([clip.id])
+          return onChange((p) => moveOnClip(p, clip.id, on))
+        }
         const stays = t.track === track && Math.abs(t.start - left) < 1e-9
         if (stays) return setLanded([clip.id])
         if (t.refused) return refuse(clip.id, { text: AUDIO_ONLY })
@@ -963,11 +990,39 @@ export function Timeline({
     return { to: { track, start }, guide: s && Math.abs(start - snapped) < 1e-9 ? s.at : null }
   }
 
-  /** The ghost of a file dragged over `track` with the pointer at `clientX` (Alt held: no snapping). */
-  function placeGhost(clientX: number, track: number, alt: boolean) {
-    const { to: next, guide } = targetFor(track, timeAt(clientX), live.current.outside?.length ?? DEFAULT_IMAGE, undefined, undefined, !alt, live.current.outside?.audio)
-    setDrop((prev) => (sameTarget(prev, next) ? prev : next))
-    const s = snapState(track, alt, guide)
+  /**
+   * Media over a clip (`overId`, the clip under the pointer): the left 40% of it
+   * goes in front of it, the right 40% behind it, the middle 20% replaces it
+   * (dropZone). Null when there's no clip there, or it can't take this media
+   * (a sound goes only on the audio layer's clips and nothing else does).
+   */
+  function onClipTarget(track: number, clientX: number, overId: string | null, audio: boolean): DropTarget | null {
+    if (!overId) return null
+    const at = trackAt(live.current.project, track)?.clips.find((c) => c.id === overId)
+    const el = clipEl(overId)
+    if (!at || !el || (track === AUDIO_TRACK) !== audio) return null
+    const r = el.getBoundingClientRect()
+    if (!(r.width > 0)) return null
+    const mode = dropZone((clientX - r.left) / r.width)
+    return { track, start: mode === "after" ? clipEnd(at) : at.start, on: { clip: overId, mode } }
+  }
+
+  /** The id of the clip under the screen point (not `except`, the one being dragged), or null. */
+  function clipUnder(clientX: number, clientY: number, except: string): string | null {
+    for (const el of document.elementsFromPoint(clientX, clientY)) {
+      const id = el instanceof HTMLElement ? el.dataset.clipId : undefined
+      if (id && id !== except && scroller.current?.contains(el)) return id
+    }
+    return null
+  }
+
+  /** The ghost of a file dragged over `track` with the pointer at `clientX` (Alt held: no snapping), or what the drop does to the clip under it. */
+  function placeGhost(clientX: number, track: number, alt: boolean, over: string | null = null) {
+    const { outside: o } = live.current
+    const onClip = onClipTarget(track, clientX, over, o?.audio === true)
+    const { to: found, guide } = onClip ? { to: onClip, guide: null } : targetFor(track, timeAt(clientX), o?.length ?? DEFAULT_IMAGE, undefined, undefined, !alt, o?.audio)
+    setDrop((prev) => (sameTarget(prev, found) ? prev : found))
+    const s = onClip ? null : snapState(track, alt, guide)
     setSnap((prev) => (prev?.off === s?.off && prev?.at === s?.at ? prev : s))
   }
 
@@ -977,8 +1032,9 @@ export function Timeline({
     e.preventDefault()
     // The audio layer takes sound files only: anything else shows the not-allowed cursor there (and can't drop).
     e.dataTransfer.dropEffect = track === AUDIO_TRACK && !live.current.outside?.audio ? "none" : "copy"
-    fileDrag.current = { clientX: e.clientX, track, alt: e.altKey }
-    placeGhost(e.clientX, track, e.altKey)
+    const over = (e.target as HTMLElement).closest<HTMLElement>("[data-clip-id]")?.dataset.clipId ?? null
+    fileDrag.current = { clientX: e.clientX, track, alt: e.altKey, over }
+    placeGhost(e.clientX, track, e.altKey, over)
   }
 
   function dragLeave(e: React.DragEvent) {
@@ -994,7 +1050,7 @@ export function Timeline({
     if (!hasMediaDrag(e.dataTransfer)) return
     panAt(e.clientX, () => {
       const f = fileDrag.current
-      if (f) placeGhost(f.clientX, f.track, f.alt)
+      if (f) placeGhost(f.clientX, f.track, f.alt, f.over)
     })
   }
 
@@ -1015,16 +1071,19 @@ export function Timeline({
     e.preventDefault()
     const t = timeAt(e.clientX)
     const snapOn = !e.altKey
-    // Not in between two clips a transition or audio overlap links.
-    const cut = linkedCutAt(track, t)
+    // On a clip: in front of it, behind it or in its place (what the indicator showed).
+    const over = (e.target as HTMLElement).closest<HTMLElement>("[data-clip-id]")?.dataset.clipId ?? null
+    const onClip = onClipTarget(track, e.clientX, over, live.current.outside?.audio === true)
+    // Not in between two clips a transition or audio overlap links (replacing a clip parts none).
+    const cut = onClip?.on?.mode === "replace" ? null : linkedCutAt(track, onClip ? onClip.start : t)
     if (cut) return refuse(null, linkedNotice(cut, {}, true))
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
-      const { to } = targetFor(track, t, newClipLength(asset), undefined, undefined, snapOn, assetKind(asset) === "audio")
+      const to = onClip && (track === AUDIO_TRACK) === (assetKind(asset) === "audio") ? onClip : targetFor(track, t, newClipLength(asset), undefined, undefined, snapOn, assetKind(asset) === "audio").to
       if (to.refused) return refuse(null, { text: AUDIO_ONLY })
       const id = newId()
-      onChange((p) => addClip(p, assetId, to.track, to, id))
+      onChange((p) => placeDropped(p, assetId, to.track, to, id))
       return
     }
     if (stockData) {
@@ -1032,7 +1091,7 @@ export function Timeline({
       if (!stock) return
       // Like a media item: a sound lands on the audio layer, anything else is refused there.
       // The clip's real length is known after the download; addClip slides it clear of overlaps again then.
-      const { to } = targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn, stock.kind === "audio")
+      const to = onClip && (track === AUDIO_TRACK) === (stock.kind === "audio") ? onClip : targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn, stock.kind === "audio").to
       if (to.refused) return refuse(null, { text: AUDIO_ONLY })
       onDropStock({ source: stock.source, id: stock.id, kind: stock.kind }, to)
       return
@@ -1040,7 +1099,7 @@ export function Timeline({
     try {
       const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
       // The clip's real length is known after the import; addClip slides it clear of overlaps again then.
-      const to = targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn).to
+      const to = onClip ?? targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn).to
       if (to.refused) return refuse(null, { text: AUDIO_ONLY })
       if (typeof folder === "string" && typeof name === "string") onDropInbox(folder, name, to)
     } catch {
@@ -1099,6 +1158,17 @@ export function Timeline({
           onSelect(null)
         },
       },
+      {
+        label: "Ripple delete",
+        hint: "Shift+Delete",
+        destructive: true,
+        onSelect: () => {
+          onChange((p) => rippleRemoveClip(p, id))
+          onSelect(null)
+        },
+      },
+      { label: "Copy", hint: "Ctrl+C", onSelect: () => onCopy(id) },
+      { label: "Paste", hint: "Ctrl+V", disabled: !canPaste, onSelect: () => onPaste() },
     ]
     if (audible) {
       items.push({ label: clip.muted ? "Unmute" : "Mute", hint: "M", onSelect: () => onChange((p) => setClipMuted(p, id, !clip.muted)) })
@@ -1113,8 +1183,13 @@ export function Timeline({
       },
     })
     // A video clip can repeat its source to fill a longer length; a looping clip isn't split (turn Loop off first).
+    if (asset !== undefined && assetKind(asset) === "audio") {
+      items.push({ label: "Speed / Reverse...", dot: asset.retime !== undefined, onSelect: () => onSpeed(id) })
+    }
     if (asset !== undefined && assetKind(asset) === "video") {
       items.push({ label: "Loop", checked: isLooping(project, clip), onSelect: () => onChange((p) => setClipLoop(p, id, !isLooping(p, clip))) })
+      // A looping clip repeats its source: turn Loop off before changing its speed.
+      items.push({ label: "Speed / Reverse...", dot: asset.retime !== undefined, disabled: isLooping(project, clip), hint: isLooping(project, clip) ? "Loop is on" : undefined, onSelect: () => onSpeed(id) })
     }
     if (isTextClip(clip)) {
       const text = clip.text
@@ -1164,6 +1239,32 @@ export function Timeline({
   const insertLine = (start: number) => (
     <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: start * zoom }} />
   )
+  // Over a clip's middle fifth: the clip is outlined and a Replace icon says the drop takes its place.
+  const replaceMarker = (id: string, track: { clips: Clip[] }) => {
+    const c = track.clips.find((x) => x.id === id)
+    if (!c) return null
+    // The icon is fixed to the screen at the clip's centre, above everything (the dragged block too).
+    const box = document.querySelector<HTMLElement>(`[data-clip-id="${CSS.escape(id)}"]`)?.getBoundingClientRect()
+    return (
+      <>
+        <div
+          data-replace-marker
+          className={cn("pointer-events-none absolute z-30 rounded-lg border-2 border-dashed border-editor-accent bg-editor-accent/15", inset)}
+          style={{ left: c.start * zoom, width: Math.max(clipLength(c) * zoom - 2, 8) }}
+        />
+        {box && (
+          <span
+            data-replace-icon
+            title="Replace"
+            className="pointer-events-none fixed z-[100] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-editor-accent text-editor-accent-foreground shadow-lg ring-2 ring-white"
+            style={{ left: box.left + box.width / 2, top: box.top + box.height / 2 }}
+          >
+            <Replace aria-hidden className="h-4 w-4" />
+          </span>
+        )}
+      </>
+    )
+  }
   const magnetic = isMagnetic(project)
   // A group being dragged takes its transitions and audio overlap bands along.
   const groupShift = (id: string) => (drag?.group?.includes(id) ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined)
@@ -1176,6 +1277,27 @@ export function Timeline({
   const allEmpty = project.tracks.every((t) => t.clips.length === 0) && !hasAudioClips
   // The audio layer, below the base, while it has clips or a sound file is dragged in.
   const showAudioRow = hasAudioClips || outside?.audio === true
+  useEffect(() => {
+    pasteAt.current = () => {
+      const pt = lastPointer.current
+      const box = scroller.current?.getBoundingClientRect()
+      if (!pt || !box) return null
+      // Over the layer rows (not the ruler, the layer names or past the edge).
+      if (pt.x < box.left + live.current.header || pt.x > box.right || pt.y < box.top + 24 || pt.y > box.bottom) return null
+      const track = rowAt(pt.y)
+      const start = timeAt(pt.x)
+      const over = clipUnder(pt.x, pt.y, "")
+      const el = over ? clipEl(over) : null
+      if (over && el && trackAt(live.current.project, track)?.clips.some((c) => c.id === over)) {
+        const r = el.getBoundingClientRect()
+        return { track, start, on: { clip: over, mode: pt.x < r.left + r.width / 2 ? "before" : "after" } }
+      }
+      return { track, start }
+    }
+    return () => {
+      pasteAt.current = null
+    }
+  })
   const rows = [...shown.tracks.map((_, i) => i).reverse(), ...(showAudioRow ? [AUDIO_TRACK] : [])]
   const setRowZoom = (z: number) => setStoredRowZoom(String(clampRowZoom(z)))
 
@@ -1187,6 +1309,8 @@ export function Timeline({
         data-panning={panning ? "" : undefined}
         className="relative min-h-0 min-w-0 flex-1 overflow-auto"
         onPointerDown={startPanDrag}
+        onPointerMove={(e) => (lastPointer.current = { x: e.clientX, y: e.clientY })}
+        onPointerLeave={() => (lastPointer.current = null)}
         onDragOver={panDragOver}
         onDragLeave={panDragLeave}
       >
@@ -1645,7 +1769,7 @@ export function Timeline({
                       )
                     })
                   })()}
-                  {target?.track === i && (isBase && magnetic ? insertLine(target.start) : ghost(target.start, 0, target.refused))}
+                  {target?.track === i && (target.on?.mode === "replace" ? replaceMarker(target.on.clip, track) : target.on ? insertLine(target.start) : isBase && magnetic ? insertLine(target.start) : ghost(target.start, 0, target.refused))}
                 </div>
               </div>
             )

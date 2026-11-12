@@ -9,6 +9,7 @@ import { isTransitionType } from "@/lib/video/transition-types"
 import { fontById, fontFamily } from "@/lib/video/fonts"
 import { textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
+import type { KeyOptions } from "@/lib/video/chroma"
 import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
@@ -16,6 +17,7 @@ import { parseStockDrag } from "@/lib/stock/drag"
 import type { StockRef } from "@/lib/stock/types"
 import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE, STOCK_DRAG_TYPE } from "./timeline"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
+import { KeyedVideo } from "./keyed-video"
 import { TransformOverlay, type GestureState, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
 
@@ -54,8 +56,9 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
  * transform it fills the canvas, letterboxed in black (object-contain); a
  * text's box (`{ w, h }`) is placed at its own size, centred, even then.
  */
-export function placement(aspect: Content, W: number, H: number, t: Transform): CSSProperties {
-  if (isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
+export function placement(aspect: Content, W: number, H: number, t: Transform, exact = false): CSSProperties {
+  // `exact`: always the picture's own box (a keyed video's canvas, which has no letterboxing of its own).
+  if (!exact && isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
   const r = clipRect(aspect, W, H, t)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
@@ -200,7 +203,7 @@ export function Preview({
 }: {
   player: PreviewPlayer
   project: Project
-  imageUrl: (assetId: string) => string
+  imageUrl: (assetId: string, key?: KeyOptions) => string
   selectedId: string | null
   onSelect: (id: string | null) => void
   /** Applies an edit to the current project; `group` merges quick repeats into one undo step. */
@@ -218,6 +221,8 @@ export function Preview({
   const [aspects, setAspects] = useState<Record<string, number>>({})
   // The transform being dragged, shown instead of the clip's until it's committed.
   const [draft, setDraft] = useState<{ id: string; transform: Transform } | null>(null)
+  // WebGL is missing: keyed videos show unkeyed rather than not at all.
+  const [keyFailed, setKeyFailed] = useState(false)
   // The canvas box's size on screen: the project's shape fit inside the area.
   const area = useRef<HTMLDivElement>(null)
   // `below`: the px between the canvas's bottom and the pane's (the gray margin and the padding); `side` the same to the left or right.
@@ -302,7 +307,7 @@ export function Preview({
         </div>
       )
     } else {
-      const still = isImage(clip) ? imageUrl(clip.asset) : ""
+      const still = isImage(clip) ? imageUrl(clip.asset, clip.key) : ""
       if (!still) return null
       inner = (
         // eslint-disable-next-line @next/next/no-img-element
@@ -331,7 +336,7 @@ export function Preview({
   // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
   const textFonts = [...new Set(playback.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
   const loadedFonts = useLoadedFonts(textFonts)
-  const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset) : ""
+  const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset, top.clip.key) : ""
 
   const target = (clip: Clip, lane: number): TransformTarget => ({
     id: loopSourceId(clip.id),
@@ -361,7 +366,7 @@ export function Preview({
       const starts = trackStarts(track)
       const next = hit ? track.clips[hit.index + 1] : track.clips[starts.findIndex((s) => s > look)]
       const a = next && !isTextClip(next) ? project.assets[next.asset] : undefined
-      return next && a && assetKind(a) === "image" ? imageUrl(next.asset) : ""
+      return next && a && assetKind(a) === "image" ? imageUrl(next.asset, next.key) : ""
     })
     .filter(Boolean)
     .join("\n")
@@ -460,6 +465,8 @@ export function Preview({
                 const shown = held !== undefined && (held === clip || outgoing) ? held : undefined
                 const z = outgoing ? outgoingZ(lane, fx) : laneZ(lane, "incoming")
                 const videoStyle = shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined
+                // A keyed clip is drawn by a canvas (the shader); its video plays unseen.
+                const keyed = shown?.key && !keyFailed ? shown.key : undefined
                 return (
                   <Fragment key={`${lane}-${slot}`}>
                     <div className="absolute inset-0" style={shown ? { zIndex: z, ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
@@ -471,9 +478,18 @@ export function Preview({
                         onError={() => player.onVideoError(lane, slot)}
                         onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                         onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                        className={cn("absolute max-w-none object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
+                        className={cn("absolute max-w-none object-contain", shown && !keyed ? "opacity-100" : shown ? "opacity-0" : "inset-0 h-full w-full opacity-0")}
                         style={videoStyle}
                       />
+                      {shown && keyed && (
+                        <KeyedVideo
+                          video={() => player.videoAt(lane, slot)}
+                          keyColour={keyed.key}
+                          tolerance={keyed.tolerance}
+                          style={placement(aspectOf(shown.asset), W, H, transformOf(shown), true)}
+                          onUnsupported={() => setKeyFailed(true)}
+                        />
+                      )}
                     </div>
                     {shown && (
                       <FxCopies styles={outgoing ? fx?.fromCopies : fx?.toCopies} zIndex={z} id={`${lane}-${slot}`}>

@@ -16,6 +16,17 @@ export type KeyOptions = {
 }
 
 export const MAX_TOLERANCE = 100
+
+/** A stored key setting that is well formed (a colour of whole 0-255 channels, a tolerance in range, a flag). */
+export function isValidKey(v: unknown): v is KeyOptions {
+  if (typeof v !== "object" || v === null) return false
+  const k = v as Record<string, unknown>
+  return (
+    Array.isArray(k.key) && k.key.length === 3 && k.key.every((c) => Number.isInteger(c) && c >= 0 && c <= 255) &&
+    typeof k.tolerance === "number" && Number.isFinite(k.tolerance) && k.tolerance >= 0 && k.tolerance <= MAX_TOLERANCE &&
+    typeof k.contiguous === "boolean"
+  )
+}
 const SOFT = 0.6 // the edge ramps from `tolerance` to tolerance * (1 + SOFT)
 
 const toLinear = new Float32Array(256).map((_, i) => {
@@ -125,5 +136,33 @@ export function removeBackground(rgba: ArrayLike<number>, w: number, h: number, 
     out[i + 3] = clampByte(out[i + 3] * a)
   }
   for (let p = 0; p < n; p++) if (bg[p]) out[p * 4 + 3] = 0
+  return out
+}
+
+// A video clip's key is the plain colour key ffmpeg's `colorkey` filter does
+// (the export) and the player's shader repeats (the preview): a pixel's
+// distance from the key colour, as a fraction of the longest possible RGB
+// distance, below `similarity` goes transparent and fades in over `blend`.
+// KeyOptions.tolerance (0-100) sets the similarity; `contiguous` isn't used.
+
+const VIDEO_BLEND = 0.08
+const MAX_RGB_DISTANCE = 255 * Math.sqrt(3)
+
+/** ffmpeg colorkey's (and the shader's) similarity and blend for a tolerance. */
+export function videoKeyParams(tolerance: number): { similarity: number; blend: number } {
+  return { similarity: Math.min(MAX_TOLERANCE, Math.max(0, tolerance)) / 200, blend: VIDEO_BLEND }
+}
+
+/** The key colour as ffmpeg writes it, "0xRRGGBB". */
+export const keyHex = (key: Rgb): string => `0x${key.map((c) => c.toString(16).padStart(2, "0")).join("")}`
+
+/** A copy of the RGBA frame with the key colour cleared the way the export does it. */
+export function keyVideoPixels(rgba: ArrayLike<number>, o: Pick<KeyOptions, "key" | "tolerance">): Uint8ClampedArray {
+  const out = Uint8ClampedArray.from(rgba)
+  const { similarity, blend } = videoKeyParams(o.tolerance)
+  for (let i = 0; i + 3 < out.length; i += 4) {
+    const d = Math.hypot(out[i] - o.key[0], out[i + 1] - o.key[1], out[i + 2] - o.key[2]) / MAX_RGB_DISTANCE
+    out[i + 3] = Math.round(out[i + 3] * Math.min(1, Math.max(0, (d - similarity) / blend)))
+  }
   return out
 }

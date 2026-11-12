@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { pixelAt, removeBackground, rgbToLab } from "./chroma"
+import { isValidKey, keyHex, keyVideoPixels, pixelAt, removeBackground, rgbToLab, videoKeyParams } from "./chroma"
 
 const COLOURS: Record<string, [number, number, number]> = { w: [255, 255, 255], r: [220, 20, 30], g: [30, 200, 60] }
 /** A RGBA picture from rows of single-letter colours. */
@@ -79,5 +79,45 @@ describe("pixelAt", () => {
     expect(pixelAt(d, w, h, 2, 0)).toBeNull()
     d[3] = 0
     expect(pixelAt(d, w, h, 0, 0)).toBeNull()
+  })
+})
+
+describe("isValidKey", () => {
+  const ok = { key: [1, 2, 3], tolerance: 10, contiguous: false }
+  it("accepts a good setting and rejects bad ones", () => {
+    expect(isValidKey(ok)).toBe(true)
+    expect(isValidKey({ ...ok, key: [1, 2] })).toBe(false)
+    expect(isValidKey({ ...ok, key: [1, 2, 256] })).toBe(false)
+    expect(isValidKey({ ...ok, key: [1, 2, 1.5] })).toBe(false)
+    expect(isValidKey({ ...ok, tolerance: -1 })).toBe(false)
+    expect(isValidKey({ ...ok, tolerance: NaN })).toBe(false)
+    expect(isValidKey({ ...ok, contiguous: "yes" })).toBe(false)
+    expect(isValidKey(null)).toBe(false)
+  })
+})
+
+describe("the video key (ffmpeg colorkey's maths)", () => {
+  it("videoKeyParams maps the tolerance to a similarity", () => {
+    expect(videoKeyParams(0).similarity).toBe(0)
+    expect(videoKeyParams(20).similarity).toBeCloseTo(0.1)
+    expect(videoKeyParams(500).similarity).toBe(0.5)
+  })
+  it("keyHex writes ffmpeg's colour", () => {
+    expect(keyHex([0, 255, 16])).toBe("0x00ff10")
+  })
+  it("keyVideoPixels clears the key, keeps a far colour and fades between", () => {
+    const px = Uint8ClampedArray.from([0, 255, 0, 255, 0, 250, 0, 255, 255, 0, 0, 255, 60, 230, 40, 255])
+    const out = keyVideoPixels(px, { key: [0, 255, 0], tolerance: 20 })
+    expect(out[3]).toBe(0)
+    expect(out[7]).toBe(0)
+    expect(out[11]).toBe(255)
+    expect(out[15]).toBeGreaterThan(0)
+    expect(out[15]).toBeLessThan(255)
+    expect(px[3]).toBe(255)
+  })
+  it("matches ffmpeg: grey 128 against black at similarity 0.4, blend 0.2 gives alpha 130", () => {
+    // diff = 128 / 255 = 0.502; (0.502 - 0.4) / 0.2 = 0.51
+    const d = Math.hypot(128, 128, 128) / (255 * Math.sqrt(3))
+    expect(Math.round(255 * ((d - 0.4) / 0.2))).toBeGreaterThanOrEqual(129)
   })
 })

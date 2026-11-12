@@ -27,6 +27,11 @@ describe("contentSecurityPolicy", () => {
     expect(imgSrc).not.toContain("http:")
   })
 
+  it("lets video and sound play from this site and from the Speed / Reverse sample, and nowhere else", () => {
+    const media = contentSecurityPolicy(false).split("; ").find((d) => d.startsWith("media-src ")) ?? ""
+    expect(media.split(" ").slice(1).sort()).toEqual(["'self'", "blob:", "data:"])
+  })
+
   it("allows eval only in development, where React needs it", () => {
     expect(contentSecurityPolicy(false)).not.toContain("unsafe-eval")
     expect(contentSecurityPolicy(true)).toContain("'unsafe-eval'")

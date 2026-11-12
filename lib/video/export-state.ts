@@ -43,7 +43,7 @@ export function exportFingerprint(p: Project): string {
   const trackKey = (t: Track) => ({
     id: t.id,
     clips: t.clips.map((c) => ({
-      id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start, transform: transformKey(c.transform), muted: c.muted === true, text: c.text, transition: c.transition, cutAudio: c.cutAudio, edgeIn: c.edgeIn, edgeOut: c.edgeOut, audio: c.audio,
+      id: c.id, asset: c.asset, in: c.in, out: c.out, start: c.start, transform: transformKey(c.transform), muted: c.muted === true, text: c.text, transition: c.transition, cutAudio: c.cutAudio, edgeIn: c.edgeIn, edgeOut: c.edgeOut, audio: c.audio, key: c.key,
     })),
   })
   const tracks = p.tracks.map(trackKey)

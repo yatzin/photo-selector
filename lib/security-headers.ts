@@ -21,6 +21,8 @@ export function contentSecurityPolicy(isDev: boolean): string {
     `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' blob: data: ${STOCK_THUMBNAIL_HOSTS.join(" ")}`,
+    // Video and sound from the site, and the Speed / Reverse dialog's short sample (a data: URL).
+    "media-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",

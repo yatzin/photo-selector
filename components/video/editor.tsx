@@ -7,7 +7,7 @@ import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Pane
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { deleteAssetAction, exportStatusAction, importAssetAction, makeTransparentAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, exportStatusAction, importAssetAction, previewRetimeAction, retimeAssetAction, startExportAction } from "@/lib/actions/video-projects"
 import { importStockAction } from "@/lib/actions/stock"
 import { stockKey } from "@/lib/stock/drag"
 import type { StockRef } from "@/lib/stock/types"
@@ -16,8 +16,8 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
-  removeClip, resolveStart, setClipAsset, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
+  addClip, addTextClip, allClips, placeDropped, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  pasteClip, removeClip, resolveStart, retimeClip, rippleRemoveClip, setClipAudio, setClipKey, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { withStockDropSize } from "@/lib/video/stock-drop"
 import { DEFAULT_TEXT } from "@/lib/video/text"
@@ -26,6 +26,7 @@ import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity, withScale } from "@/lib/video/transform"
 import { ZoomControl } from "./zoom-control"
 import { TransparentDialog } from "./transparent-dialog"
+import { SpeedDialog } from "./speed-dialog"
 import type { KeyOptions } from "@/lib/video/chroma"
 import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
@@ -39,7 +40,7 @@ import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
-import { Timeline, type DropTarget } from "./timeline"
+import { Timeline, type DropTarget, type PasteAt } from "./timeline"
 import { TransitionDialog, type TransitionTarget } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 import { useMediaImport } from "./use-media-import"
@@ -106,6 +107,8 @@ export function Editor({
   const [audioFor, setAudioFor] = useState<string | null>(null)
   // The image clip whose background the Make background transparent dialog is working on.
   const [transparentFor, setTransparentFor] = useState<string | null>(null)
+  // The video clip whose Speed / Reverse dialog is open.
+  const [speedFor, setSpeedFor] = useState<string | null>(null)
   const audioClip = audioFor ? allClips(project).find((c) => c.id === audioFor) : undefined
   // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
   const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
@@ -221,9 +224,12 @@ export function Editor({
 
   /** A still shown in the preview while an image clip is current (the converted preview, so HEIC and DNG show too). */
   const imageUrl = useCallback(
-    (assetId: string) => {
+    (assetId: string, key?: KeyOptions) => {
       const asset = project.assets[assetId]
-      return asset && assetKind(asset) === "image" ? mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "preview", assetId) : ""
+      if (!asset || assetKind(asset) !== "image") return ""
+      // A keyed clip shows its background-cleared picture, made on the server from the same image.
+      if (key) return `/api/video-keyed/${encodeURIComponent(folder)}?asset=${encodeURIComponent(assetId)}&r=${key.key[0]}&g=${key.key[1]}&b=${key.key[2]}&tol=${key.tolerance}&c=${key.contiguous ? 1 : 0}`
+      return mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "preview", assetId)
     },
     [project.assets, userFolder, folder]
   )
@@ -328,8 +334,9 @@ export function Editor({
     const id = newId()
     // Clips may have changed while importing; addClip slides the clip clear of the others, and a layer
     // removed meanwhile makes the clip a new top layer rather than dropping it.
-    edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    edit((p) => placeDropped(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
     // The ghost had a guessed length before the import: say so when the real length slid the clip along.
+    if (target.on) return
     const p = latest.current
     const track = Math.min(target.track, p.tracks.length)
     const length = newClipLength(imported.asset)
@@ -387,7 +394,8 @@ export function Editor({
     }
     const id = newId()
     // As dropFromInbox: addClip slides the clip clear of clips added meanwhile, and puts a sound on the audio layer.
-    edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    edit((p) => placeDropped(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    if (target.on) return
     const p = latest.current
     const length = newClipLength(imported.asset)
     const start = audio
@@ -607,6 +615,52 @@ export function Editor({
     return true
   }
 
+  /** Ripple delete (Shift+Delete, or the clip's menu): removes the selected clip and closes the gap on its layer; false with no selection. One undo step. */
+  function rippleDeleteSelected(): boolean {
+    if (!selectedId) return false
+    const id = selectedId
+    edit((p) => rippleRemoveClip(p, id))
+    setSelectedId(null)
+    return true
+  }
+
+  // The copied clip (every setting with it) and the layer it came from; Ctrl+C / Ctrl+V and the clip's menu.
+  const [clipboard, setClipboard] = useState<{ clip: Clip; track: number } | null>(null)
+
+  /** Copies clip `id` (default: the selected one) for pasting; false when there's none. */
+  function copyClip(id: string | null = selectedId): boolean {
+    if (!id) return false
+    const p = latest.current
+    const clip = allClips(p).find((c) => c.id === id)
+    if (!clip) return false
+    const track = trackAt(p, AUDIO_TRACK)?.clips.some((c) => c.id === id) ? AUDIO_TRACK : p.tracks.findIndex((t) => t.clips.some((c) => c.id === id))
+    setClipboard({ clip: JSON.parse(JSON.stringify(clip)) as Clip, track })
+    toast.success("Copied. Paste puts it at the playhead.")
+    return true
+  }
+
+  // Filled by the timeline: where the mouse is over it (layer, time, the clip under it).
+  const pasteAt = useRef<(() => PasteAt | null) | null>(null)
+
+  /**
+   * Pastes the copied clip under the mouse: on the layer it's over, at the time
+   * under it, in front of or behind a clip it's over, the clips after it moving
+   * later to make room. With the mouse elsewhere it goes at the playhead on the
+   * layer it came from. False with nothing copied. One undo step.
+   */
+  function pasteCopied(): boolean {
+    if (!clipboard) return false
+    const id = newId()
+    const at = pasteAt.current?.() ?? null
+    // A picture clip can't go on the audio layer: it keeps its own layer there.
+    const track = at && at.track !== AUDIO_TRACK ? at.track : clipboard.track
+    const start = at ? at.start : playhead
+    edit((p) => pasteClip(p, clipboard.clip, track, start, id, at?.on))
+    if (allClips(latest.current).some((c) => c.id === id)) setSelectedId(id)
+    else toast.info("There's no room to paste it there.")
+    return true
+  }
+
   /** Removes the selected clip (Delete, or the toolbar); false with no selection. One undo step. */
   function deleteSelected(): boolean {
     if (!selectedId) return false
@@ -643,22 +697,31 @@ export function Editor({
 
   /** The selected image or video clip, whose picture the toolbar's zoom scales (not a text or a sound). */
   const zoomClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) !== "audio" ? selectedClip : undefined
-  /** The selected image clip (not a video, text or sound): the toolbar's Transparency button works on it. */
-  const imageClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) === "image" ? selectedClip : undefined
   const transparentClip = transparentFor ? allClips(project).find((c) => c.id === transparentFor) : undefined
 
-  /** Makes a transparent-background copy of the clip's image and points the clip at it (the original stays in Project media). One undo step. Resolves to an error message, or null. */
-  async function applyTransparent(clip: Clip, options: KeyOptions): Promise<string | null> {
+  const speedClip = speedFor ? allClips(project).find((c) => c.id === speedFor) : undefined
+
+  /** Speed / Reverse: the server makes the retimed copy (or gives the original back), then the clip points at it. One undo step. Resolves to an error message, or null. */
+  async function applySpeed(clip: Clip, speed: number, reverse: boolean): Promise<string | null> {
     try {
-      const r = await makeTransparentAction(folder, clip.asset, options)
+      const r = await retimeAssetAction(folder, clip.asset, { in: clip.in, out: clip.out, speed, reverse })
       if ("error" in r) return r.error
       setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
       const id = clip.id
-      edit((p) => setClipAsset(p, id, r.id))
+      // Checked on the project as it is now plus the new asset (the edit itself lands on the next render).
+      const now = latest.current
+      const probe = { ...now, assets: { ...now.assets, [r.id]: r.asset } }
+      if (retimeClip(probe, id, r.id, r.in, r.out) === probe) return "There isn't room on the timeline for that length."
+      edit((p) => retimeClip(p, id, r.id, r.in, r.out))
       return null
     } catch {
-      return "Something went wrong making the background transparent."
+      return "Something went wrong changing the speed."
     }
+  }
+
+  /** Sets (or clears) the clip's transparent background; the image file is untouched and the player and export draw it keyed. One undo step. */
+  function applyKey(clipId: string, key: KeyOptions | undefined) {
+    edit((p) => setClipKey(p, clipId, key))
   }
 
   /** Sets the selected picture's zoom (1 = fit the frame) about its centre. One undo step. */
@@ -696,6 +759,10 @@ export function Editor({
         if (key === "z" || (key === "y" && e.ctrlKey && !e.shiftKey)) {
           e.preventDefault()
           step(key === "z" && !e.shiftKey ? "undo" : "redo")
+        } else if (key === "c" && !e.shiftKey) {
+          if (copyClip()) e.preventDefault()
+        } else if (key === "v" && !e.shiftKey) {
+          if (pasteCopied()) e.preventDefault()
         }
         return
       }
@@ -716,7 +783,7 @@ export function Editor({
       } else if (e.key === "s" || e.key === "S") {
         if (splitAtPlayhead()) e.preventDefault()
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (deleteSelected()) e.preventDefault()
+        if (e.shiftKey ? rippleDeleteSelected() : deleteSelected()) e.preventDefault()
       } else if (e.key === "m" || e.key === "M") {
         if (toggleMuteSelected()) e.preventDefault()
       } else if (e.key === "Escape" && selectedId) {
@@ -730,7 +797,7 @@ export function Editor({
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
-      <div className="grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-border/60 px-4">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="flex min-w-0 items-center gap-3">
         <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
           <ArrowLeft className="h-4 w-4" />
@@ -746,13 +813,68 @@ export function Editor({
           </span>
         </span>
         <ImportButton importer={importer} />
+        <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
+        <div role="toolbar" aria-label="Edit tools" className="flex min-w-0 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
+          <Undo2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
+          <Redo2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
+          <SquareSplitHorizontal className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
+          <Type className="h-4 w-4" /> Add text
+        </Button>
+        {selectedCuts && selectedClip &&
+          (["before", "after"] as const).map((side) => {
+            // A neighbour there: the cut's dialog; a free edge: the clip's own in or out transition (a text's animation).
+            const holder = selectedCuts[side]
+            const edge: Edge = side === "before" ? "in" : "out"
+            const set = holder ? null : (edge === "in" ? selectedClip.edgeIn : selectedClip.edgeOut)
+            const what = holder
+              ? `Transition ${side}${isAudioClip(project, selectedClip) ? "" : " / audio overlap"}`
+              : isTextClip(selectedClip)
+                ? `${edge === "in" ? "In" : "Out"} animation (Edit text)`
+                : `Transition ${edge}${set ? `: ${edgeTransitionName(set.type, edge)}, ${Number(set.duration.toFixed(2))} s` : ""}`
+            return (
+              <Button
+                key={side}
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => (holder ? openTransition(holder) : openEdge(selectedClip.id, edge))}
+                title={what}
+                aria-label={holder ? `Transition ${side}` : `Transition ${edge}`}
+                className={cn(side === "after" && "[&_svg]:-scale-x-100", set && "text-editor-accent")}
+              >
+                <Blend className="h-4 w-4" />
+              </Button>
+            )
+          })}
+        {zoomClip && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => { player.pause(); setTransparentFor(zoomClip.id) }} title={zoomClip.key ? "Change or remove the transparent background" : "Make the background transparent"} aria-label="Make background transparent">
+            <Eraser className={cn("h-4 w-4", zoomClip.key && "text-editor-accent")} /> Transparency
+          </Button>
+        )}
+        {zoomClip && <ZoomControl scale={zoomClip.transform?.scale ?? 1} onChange={zoomSelected} />}
+        {transformed && (
+          <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
+            <RotateCcw className="h-4 w-4" /> Reset
+          </Button>
+        )}
         </div>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-3">
         <FormatMenus width={project.width} height={project.height} folder={folder} disabled={exportProgress !== null} onChanged={(size) => {
           // Turning the video to the other orientation turns the preview layout with it.
           if (orientationOf(size.width, size.height) !== orientationOf(project.width, project.height)) setStoredLayout(orientationOf(size.width, size.height))
           applySize(size)
         }} layout={layout} onLayout={setStoredLayout} />
-        <div className="flex justify-end">
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
@@ -836,59 +958,6 @@ export function Editor({
             >
               <div className="flex h-full min-w-0 items-center gap-1 overflow-hidden px-0.5">
                 <span className="shrink-0 tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
-                <div aria-hidden className="mx-2 h-5 w-px bg-border" />
-                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
-                  <Undo2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
-                  <Redo2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
-                  <SquareSplitHorizontal className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
-                  <Type className="h-4 w-4" /> Add text
-                </Button>
-                {selectedCuts && selectedClip &&
-                  (["before", "after"] as const).map((side) => {
-                    // A neighbour there: the cut's dialog; a free edge: the clip's own in or out transition (a text's animation).
-                    const holder = selectedCuts[side]
-                    const edge: Edge = side === "before" ? "in" : "out"
-                    const set = holder ? null : (edge === "in" ? selectedClip.edgeIn : selectedClip.edgeOut)
-                    const what = holder
-                      ? `Transition ${side}${isAudioClip(project, selectedClip) ? "" : " / audio overlap"}`
-                      : isTextClip(selectedClip)
-                        ? `${edge === "in" ? "In" : "Out"} animation (Edit text)`
-                        : `Transition ${edge}${set ? `: ${edgeTransitionName(set.type, edge)}, ${Number(set.duration.toFixed(2))} s` : ""}`
-                    return (
-                      <Button
-                        key={side}
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        onClick={() => (holder ? openTransition(holder) : openEdge(selectedClip.id, edge))}
-                        title={what}
-                        aria-label={holder ? `Transition ${side}` : `Transition ${edge}`}
-                        className={cn(side === "after" && "[&_svg]:-scale-x-100", set && "text-editor-accent")}
-                      >
-                        <Blend className="h-4 w-4" />
-                      </Button>
-                    )
-                  })}
-                {imageClip && (
-                  <Button type="button" size="sm" variant="ghost" onClick={() => { player.pause(); setTransparentFor(imageClip.id) }} title="Make the image's background transparent" aria-label="Make background transparent">
-                    <Eraser className="h-4 w-4" /> Transparency
-                  </Button>
-                )}
-                {zoomClip && <ZoomControl scale={zoomClip.transform?.scale ?? 1} onChange={zoomSelected} />}
-                {transformed && (
-                  <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
-                    <RotateCcw className="h-4 w-4" /> Reset
-                  </Button>
-                )}
               </div>
               <Button
                 type="button"
@@ -921,7 +990,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
           </div>
         </div>
       </div>
@@ -945,12 +1014,38 @@ export function Editor({
           onClose={() => setTransitionTarget(null)}
         />
       )}
+      {speedClip && !isTextClip(speedClip) && project.assets[speedClip.asset] && (
+        <SpeedDialog
+          key={speedClip.id}
+          assetId={speedClip.asset}
+          asset={project.assets[speedClip.asset]}
+          trimIn={speedClip.in}
+          trimOut={speedClip.out}
+          name={assetLabel(project.assets[speedClip.asset])}
+          onApply={(speed, reverse) => applySpeed(speedClip, speed, reverse)}
+          onPreview={async (speed, reverse) => {
+            try {
+              return await previewRetimeAction(folder, speedClip.asset, { in: speedClip.in, out: speedClip.out, speed, reverse })
+            } catch {
+              return { error: "Something went wrong making the preview." }
+            }
+          }}
+          onClose={() => setSpeedFor(null)}
+        />
+      )}
       {transparentClip && (
         <TransparentDialog
           key={transparentClip.id}
           imageUrl={imageUrl(transparentClip.asset)}
+          video={
+            assetKind(project.assets[transparentClip.asset]) === "video"
+              ? { url: videoUrl(transparentClip.asset), at: transparentClip.in + Math.min(Math.max(0, playhead - transparentClip.start), Math.max(0, clipLength(transparentClip) - 0.05)) % Math.max(0.1, project.assets[transparentClip.asset].duration) }
+              : undefined
+          }
           name={assetLabel(project.assets[transparentClip.asset])}
-          onApply={(options) => applyTransparent(transparentClip, options)}
+          initial={transparentClip.key}
+          onApply={(options) => applyKey(transparentClip.id, options)}
+          onRemove={() => applyKey(transparentClip.id, undefined)}
           onClose={() => setTransparentFor(null)}
         />
       )}

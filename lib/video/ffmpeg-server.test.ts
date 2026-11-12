@@ -1485,13 +1485,14 @@ describe("export honours loops", () => {
   })
 })
 
-describe("a still with a transparent background (asset.alpha)", () => {
-  const p = (alpha: boolean): Project => ({
+describe("an image clip with its background keyed out (clip.key)", () => {
+  const key = { key: [255, 255, 255] as [number, number, number], tolerance: 18, contiguous: true }
+  const p = (keyed: boolean): Project => ({
     ...newProject("P"),
-    assets: { i: { file: "i.png", duration: 5, hasAudio: false, kind: "image", ...(alpha ? { alpha: true as const } : {}) } },
-    tracks: base([{ id: "c1", asset: "i", in: 0, out: 3 }]),
+    assets: { i: { file: "i.png", duration: 5, hasAudio: false, kind: "image" } },
+    tracks: base([{ id: "c1", asset: "i", in: 0, out: 3, ...(keyed ? { key } : {}) }]),
   })
-  const g = (alpha: boolean) => buildExportGraph(p(alpha), { i: "/x/i.png" }).graph
+  const g = (keyed: boolean) => buildExportGraph(p(keyed), { i: "/x/i.png", "keyed:c1": "/x/keyed.png" }).graph
 
   it("is fitted without black padding, kept see-through and overlaid on the canvas", () => {
     const graph = g(true)
@@ -1500,7 +1501,34 @@ describe("a still with a transparent background (asset.alpha)", () => {
     expect(graph).toContain("overlay=")
   })
 
+  it("reads the keyed picture, not the original", () => {
+    const args = buildExportArgs(p(true), { i: "/x/i.png", "keyed:c1": "/x/keyed.png" }, "o")
+    expect(args).toContain("/x/keyed.png")
+    expect(args).not.toContain("/x/i.png")
+  })
+
   it("a plain image still takes the flat, padded path", () => {
     expect(g(false)).toContain("pad=")
+  })
+})
+
+describe("a video clip with its background keyed out", () => {
+  const key = { key: [0, 255, 0] as [number, number, number], tolerance: 20, contiguous: true }
+  const p = (keyed: boolean): Project => ({
+    ...newProject("P"),
+    assets: { v: { file: "v.mp4", duration: 5, hasAudio: false } },
+    tracks: base([{ id: "c1", asset: "v", in: 0, out: 3, ...(keyed ? { key } : {}) }]),
+  })
+  const g = (keyed: boolean) => buildExportGraph(p(keyed), { v: "/x/v.mp4" }).graph
+
+  it("runs ffmpeg's colorkey on the clip, unpadded, and overlays it on the canvas", () => {
+    const graph = g(true)
+    expect(graph).toContain("format=rgba,colorkey=0x00ff00:0.1:0.08,")
+    expect(graph).not.toContain("pad=")
+    expect(graph).toContain("overlay=")
+  })
+
+  it("an unkeyed video has no colorkey", () => {
+    expect(g(false)).not.toContain("colorkey")
   })
 })

@@ -377,7 +377,8 @@ export function FileTree({
   const [confirm, setConfirm] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const closeMenu = useCallback(() => setMenu(null), [])
-  const assets = Object.entries(project.assets)
+  // A retimed copy (Speed / Reverse) belongs to its clip, not to the media list.
+  const assets = Object.entries(project.assets).filter(([, a]) => a.retime === undefined)
   // An item whose Personal Storage file is being imported again can't be deleted until that's done.
   const locked = (id: string) => importing !== null && project.assets[id]?.source === importing
   const confirmAsset = confirm === null ? undefined : project.assets[confirm]
