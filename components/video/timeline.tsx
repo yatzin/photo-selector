@@ -5,8 +5,8 @@ import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Sliders
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addClip, addTrack, adjoins, allClips, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
-  MIN_CLIP, moveClip, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipMuted, setClipText, splitClip, totalLength, trackAt, trackStarts, trimClip, type Clip, type Project,
+  addClip, addTrack, adjoins, allClips, assetKind, assetLabel, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isLooping, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
+  MIN_CLIP, moveClip, newClipLength, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipLoop, setClipMuted, setClipText, splitClip, totalLength, trackAt, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
 import { beginMove, chainIds, chainKey, createLockState, isUnlocked, lock, reconcile, remainingMs, requestUnlock, UNLOCK_WINDOW_MS, type LockState } from "@/lib/video/group-lock"
@@ -15,6 +15,8 @@ import { audioSummary, dbToGain } from "@/lib/video/audio-levels"
 import { isAudioTransitionType, type Edge } from "@/lib/video/transition-types"
 import { edgeTransitionName, linkedChain, moveGroup, transitionName, unlinkClip, unlinkCut } from "@/lib/video/transitions"
 import { newId } from "@/lib/video/ids"
+import { parseStockDrag } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
 import {
   autoPanSpeed, clampRowZoom, clampZoom, MAX_ROW_ZOOM, MIN_ROW_ZOOM, panScroll, pannedPast, rowHeight, snapEdges, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
 } from "@/lib/video/timeline-math"
@@ -83,6 +85,8 @@ import { Thumb } from "./thumb"
 export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 /** An Inbox file being dragged: JSON { folder, name }. */
 export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
+/** A stock search result being dragged: JSON { source, id, kind, duration? }. */
+export const STOCK_DRAG_TYPE = "application/x-ps-stock"
 
 /** Where a clip lands: a track (one past the top makes a new layer; AUDIO_TRACK the audio layer) and its start there; `refused` when it can't go there. */
 export type DropTarget = { track: number; start: number; refused?: boolean }
@@ -127,7 +131,7 @@ type Notice = {
 /** Seconds, without trailing zeros (0.65, 1, 1.5). */
 const secs = (n: number) => String(Number(n.toFixed(2)))
 
-export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE))
+export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE) || dt.types.includes(STOCK_DRAG_TYPE))
 
 const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start && a.refused === b.refused)
 
@@ -197,7 +201,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null,
+  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -222,6 +226,8 @@ export function Timeline({
   onChange: (edit: (p: Project) => Project) => void
   /** An Inbox file was dropped: import it, then add it at `target`. */
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
+  /** A Stock tab result was dropped: download it, then add it at `target`. */
+  onDropStock: (ref: StockRef, target: DropTarget) => void
   /** Open a text clip's Edit text dialog (on its Animation tab for "animation"). */
   onEditText: (id: string, section?: "text" | "animation") => void
   /** Open the Transition dialog for the cut before clip `id`. */
@@ -426,13 +432,18 @@ export function Timeline({
       let length = DEFAULT_IMAGE
       const assetId = dt.getData(ASSET_DRAG_TYPE)
       const known = assetId ? p.assets[assetId] : undefined
-      if (known) length = assetKind(known) === "image" ? DEFAULT_IMAGE : known.duration
-      const audio = known !== undefined && assetKind(known) === "audio"
-      if (!assetId) {
+      if (known) length = newClipLength(known)
+      let audio = known !== undefined && assetKind(known) === "audio"
+      const stock = !assetId ? parseStockDrag(dt.getData(STOCK_DRAG_TYPE)) : null
+      if (stock) {
+        // A stock result: its length is known only for video and audio (a GIF becomes a 5 s looping clip).
+        if ((stock.kind === "video" || stock.kind === "audio") && stock.duration !== undefined) length = stock.duration
+        audio = stock.kind === "audio"
+      } else if (!assetId) {
         try {
           const { folder, name } = JSON.parse(dt.getData(INBOX_DRAG_TYPE)) as { folder?: unknown; name?: unknown }
           const copy = typeof folder === "string" && typeof name === "string" ? findAssetsBySource(p, `${folder}/${name}`)[0]?.asset : undefined
-          if (copy && assetKind(copy) === "video") length = copy.duration
+          if (copy && assetKind(copy) === "video") length = newClipLength(copy)
         } catch {
           // Not our drag after all; the default length will do for the ghost.
         }
@@ -994,11 +1005,12 @@ export function Timeline({
   function dropOn(e: React.DragEvent, track: number) {
     const assetId = e.dataTransfer.getData(ASSET_DRAG_TYPE)
     const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
+    const stockData = e.dataTransfer.getData(STOCK_DRAG_TYPE)
     setDrop(null)
     setSnap(null)
     fileDrag.current = null
     stopPan()
-    if (!assetId && !inbox) return
+    if (!assetId && !inbox && !stockData) return
     e.preventDefault()
     const t = timeAt(e.clientX)
     const snapOn = !e.altKey
@@ -1008,10 +1020,20 @@ export function Timeline({
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
-      const { to } = targetFor(track, t, assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration, undefined, undefined, snapOn, assetKind(asset) === "audio")
+      const { to } = targetFor(track, t, newClipLength(asset), undefined, undefined, snapOn, assetKind(asset) === "audio")
       if (to.refused) return refuse(null, { text: AUDIO_ONLY })
       const id = newId()
       onChange((p) => addClip(p, assetId, to.track, to, id))
+      return
+    }
+    if (stockData) {
+      const stock = parseStockDrag(stockData)
+      if (!stock) return
+      // Like a media item: a sound lands on the audio layer, anything else is refused there.
+      // The clip's real length is known after the download; addClip slides it clear of overlaps again then.
+      const { to } = targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn, stock.kind === "audio")
+      if (to.refused) return refuse(null, { text: AUDIO_ONLY })
+      onDropStock({ source: stock.source, id: stock.id, kind: stock.kind }, to)
       return
     }
     try {
@@ -1060,7 +1082,7 @@ export function Timeline({
       {
         label: "Split at playhead",
         hint: "S",
-        disabled: !(local >= MIN_CLIP && clipLength(clip) - local >= MIN_CLIP),
+        disabled: isLooping(project, clip) || !(local >= MIN_CLIP && clipLength(clip) - local >= MIN_CLIP),
         onSelect: () => {
           const at = live.current.playhead
           const splitId = newId()
@@ -1089,6 +1111,10 @@ export function Timeline({
         setLengthFor(id)
       },
     })
+    // A video clip can repeat its source to fill a longer length; a looping clip isn't split (turn Loop off first).
+    if (asset !== undefined && assetKind(asset) === "video") {
+      items.push({ label: "Loop", checked: isLooping(project, clip), onSelect: () => onChange((p) => setClipLoop(p, id, !isLooping(p, clip))) })
+    }
     if (isTextClip(clip)) {
       const text = clip.text
       items.push(
@@ -1285,7 +1311,7 @@ export function Timeline({
                     const moving = drag !== null && (drag.id === clip.id || drag.group?.includes(clip.id) === true)
                     const text = isTextClip(clip) ? clip.text : null
                     const asset = text ? undefined : project.assets[clip.asset]
-                    const file = asset?.file
+                    const file = asset ? assetLabel(asset) : undefined
                     const image = asset !== undefined && assetKind(asset) === "image"
                     const audio = asset !== undefined && assetKind(asset) === "audio"
                     // Only a video or sound file with sound can be muted or show a waveform.

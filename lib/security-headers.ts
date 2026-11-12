@@ -6,12 +6,21 @@
 // bootstrapping; nonces would force every page to render per request. See
 // node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md.
 
+// Where the Stock tab's search-result thumbnails are served from. Only these
+// hosts may load images off-site; everything else stays blocked.
+const STOCK_THUMBNAIL_HOSTS = [
+  "https://api.openverse.org", // Openverse /images/<id>/thumb/
+  "https://cdn.pixabay.com",
+  "https://i.vimeocdn.com", // Pixabay video thumbnails
+  "https://images.pexels.com",
+]
+
 export function contentSecurityPolicy(isDev: boolean): string {
   return [
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' blob: data:",
+    `img-src 'self' blob: data: ${STOCK_THUMBNAIL_HOSTS.join(" ")}`,
     "font-src 'self'",
     "connect-src 'self'",
     "object-src 'none'",

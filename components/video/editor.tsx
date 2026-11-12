@@ -8,14 +8,18 @@ import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { deleteAssetAction, exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
+import { importStockAction } from "@/lib/actions/stock"
+import { stockKey } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
 import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  addClip, addTextClip, allClips, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
   removeClip, resolveStart, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
+import { withStockDropSize } from "@/lib/video/stock-drop"
 import { DEFAULT_TEXT } from "@/lib/video/text"
 import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
@@ -323,16 +327,75 @@ export function Editor({
     // The ghost had a guessed length before the import: say so when the real length slid the clip along.
     const p = latest.current
     const track = Math.min(target.track, p.tracks.length)
-    const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
+    const length = newClipLength(imported.asset)
     const start = landing(p, track, length, target.start, id)
+    if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+  }
+
+  /**
+   * Downloads a Stock tab result into Project media (or finds the asset made from it before); its asset id and
+   * asset, or null when it failed. Shares importFile's one-at-a-time guard: a second drop while one is
+   * downloading is turned away with the same notice, not queued.
+   */
+  async function importStock(ref: StockRef): Promise<{ id: string; asset: Asset } | null> {
+    if (importingRef.current) {
+      toast.info("Wait for the current import to finish.")
+      return null
+    }
+    importingRef.current = true
+    setImporting(stockKey(ref))
+    try {
+      const r = await importStockAction(folder, ref)
+      if ("error" in r) {
+        toast.error(r.error)
+        return null
+      }
+      // The server owns assets: take the new (or reused) one from its reply.
+      setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
+      if (r.format) applySize(r.format, true)
+      return { id: r.id, asset: r.asset }
+    } catch {
+      toast.error("Something went wrong downloading that file.")
+      return null
+    } finally {
+      importingRef.current = false
+      setImporting(null)
+    }
+  }
+
+  /** A Stock tab result dropped on Project media: downloaded in, not placed. */
+  async function stockToMedia(ref: StockRef) {
+    const known = Object.values(latest.current.assets).some((a) => a.source === stockKey(ref))
+    const imported = await importStock(ref)
+    if (imported) toast.success(known ? `${assetLabel(imported.asset)} is already in Project media` : `Added ${assetLabel(imported.asset)} to Project media`)
+  }
+
+  /** A Stock tab result dropped on the timeline: download it, then put it where it was dropped (a sound on the audio layer). */
+  async function dropFromStock(ref: StockRef, target: DropTarget) {
+    const imported = await importStock(ref)
+    if (!imported) return
+    const audio = assetKind(imported.asset) === "audio"
+    // Dropped on the audio layer as an audio result, but the file isn't a sound file: the layer takes sound only.
+    if (target.track === AUDIO_TRACK && !audio) {
+      toast.info("Only sound files go on the audio layer. The file is in Project media.")
+      return
+    }
+    const id = newId()
+    // As dropFromInbox: addClip slides the clip clear of clips added meanwhile, and puts a sound on the audio layer.
+    edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    const p = latest.current
+    const length = newClipLength(imported.asset)
+    const start = audio
+      ? resolveStart(trackAt(p, AUDIO_TRACK)?.clips ?? [], length, target.start, id)
+      : landing(p, Math.min(target.track, p.tracks.length), length, target.start, id)
     if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
   }
 
   /**
    * A file dropped on the player: a clip at the playhead (as it was at the
    * drop) on the lowest layer free for its whole length there, a new layer when
-   * none is (up to MAX_TRACKS), selected so its frame shows. A Personal Storage file is
-   * imported first and placed in the project as it is then. One undo step.
+   * none is (up to MAX_TRACKS), selected so its frame shows. A Personal Storage file (or a
+   * Stock tab result) is imported first and placed in the project as it is then. One undo step.
    */
   async function dropOnPlayer(drop: MediaDrop) {
     const at = playhead
@@ -344,12 +407,12 @@ export function Editor({
       assetId = drop.id
       asset = known
     } else {
-      const imported = await importFile(drop.folder, drop.name)
+      const imported = drop.kind === "stock" ? await importStock(drop.ref) : await importFile(drop.folder, drop.name)
       if (!imported) return
       assetId = imported.id
       asset = imported.asset
     }
-    const length = assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration
+    const length = newClipLength(asset)
     if (assetKind(asset) === "audio") {
       // A sound file goes on the audio layer at the playhead (slid clear of its clips there).
       const id = newId()
@@ -366,9 +429,13 @@ export function Editor({
     }
     const id = newId()
     // Placed on the layer free in the project the edit applies to (it may be newer than `latest`).
+    // A stock result dropped on the scene comes in small and centred, not full frame.
+    const small = drop.kind === "stock"
     edit((p) => {
       const free = freeTrackFor(p, at, length)
-      return free === null ? p : addClip(p, assetId, free, { start: at }, id)
+      if (free === null) return p
+      const added = addClip(p, assetId, free, { start: at }, id)
+      return small ? withStockDropSize(added, id) : added
     })
     setSelectedId(id)
     // A free layer takes it at the playhead; only the timeline's end limit could move it.
@@ -384,7 +451,7 @@ export function Editor({
    */
   async function deleteMedia(assetId: string): Promise<boolean> {
     const before = latest.current
-    const file = before.assets[assetId]?.file ?? "the file"
+    const file = Object.hasOwn(before.assets, assetId) ? assetLabel(before.assets[assetId]) : "the file"
     try {
       const r = await deleteAssetAction(folder, assetId)
       if ("error" in r) {
@@ -518,9 +585,12 @@ export function Editor({
   const playheadHits = clipsAt(project, playhead)
   // The audio layer isn't among the picture layers clipsAt sees: a selected audio clip under the playhead splits too.
   const selectedAudio = selectedId ? project.audioTrack?.clips.find((c) => c.id === selectedId) : undefined
-  const splitTarget = selectedId
+  const splitCandidate = selectedId
     ? (playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? (selectedAudio && playhead >= selectedAudio.start && playhead < clipEnd(selectedAudio) ? selectedAudio.id : null))
     : (playheadHits.top?.clip.id ?? null)
+  // A looping clip isn't split (splitClip isn't loop-aware): turn Loop off first.
+  const splitClipFound = splitCandidate ? allClips(project).find((c) => c.id === splitCandidate) : undefined
+  const splitTarget = splitClipFound && isLooping(project, splitClipFound) ? null : splitCandidate
 
   /** Splits at the playhead (S, or the toolbar); false when there's no clip under it. One undo step. */
   function splitAtPlayhead(): boolean {
@@ -674,7 +744,7 @@ export function Editor({
           </div>
           {/* Kept mounted while folded, so open folders and what was loaded are still there on reopening. */}
           <div className={cn("min-h-0 flex-1", mediaCollapsed && "hidden")}>
-            <FileTree temp={temp} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} onCopyTemp={(f, n) => void copyToMedia(f, n)} />
+            <FileTree temp={temp} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} onCopyTemp={(f, n) => void copyToMedia(f, n)} onImportStock={(r) => void stockToMedia(r)} />
           </div>
         </aside>
         <div ref={column} className={cn("flex min-w-0 flex-1", sideBySide ? "flex-row-reverse" : "flex-col")}>
@@ -810,7 +880,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} />
           </div>
         </div>
       </div>

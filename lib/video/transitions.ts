@@ -1,5 +1,5 @@
 import {
-  addTrack, adjoins, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixEdges, fixTransitions, hasSound, headHandle, isAudioClip, isMagnetic, isStill, isTextClip, linksBefore, MAX_TIMELINE, MIN_CLIP,
+  addTrack, adjoins, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixEdges, fixTransitions, hasSound, headHandle, isAudioClip, isLooping, isMagnetic, isStill, isTextClip, linksBefore, MAX_TIMELINE, MIN_CLIP,
   resolveStart, tailHandle, trackAt, trackClipAt, transitionFits, withTrack,
   type Clip, type Project, type Track,
 } from "./project"
@@ -131,6 +131,8 @@ type CutContext = {
   track: number; index: number; clips: Clip[]; prev: Clip; clip: Clip
   /** Spare footage past the outgoing clip's out and before the incoming clip's in (a still: Infinity; a missing file: 0, and no trim makes more). */
   tail: number; head: number; trimOut: boolean; trimIn: boolean
+  /** Either clip loops: a looping clip takes no transition or audio overlap on either side (reason "loop"). */
+  loop: boolean
   /** The clips' lengths, and how much their other cuts take of them. */
   outLength: number; inLength: number; otherOut: number; otherIn: number
 }
@@ -145,6 +147,7 @@ function cutContext(p: Project, clipId: string): CutContext | null {
   return {
     track: at.track, index: at.index, clips, prev, clip: at.clip,
     tail: tailHandle(p, prev), head: headHandle(p, at.clip), trimOut: has(prev), trimIn: has(at.clip),
+    loop: isLooping(p, prev) || isLooping(p, at.clip),
     outLength: clipLength(prev), inLength: clipLength(at.clip), otherOut: cutReach(clips, at.index - 1).trail, otherIn: cutReach(clips, at.index + 1).lead,
   }
 }
@@ -195,7 +198,8 @@ function longest(x: CutContext, shape: (d: number) => CutShape, min: number, cap
  */
 export type CutRange = {
   max: number
-  reason: "ok" | "not-adjoining" | "no-audio" | "too-short"
+  /** "loop": either clip loops (a looping clip takes no transition or audio overlap on either side). */
+  reason: "ok" | "not-adjoining" | "no-audio" | "too-short" | "loop"
   limit: "cap" | "outgoing" | "incoming" | null
   lengths: { outgoing: number; incoming: number }
 }
@@ -214,6 +218,7 @@ const noRange = (reason: CutRange["reason"], x: CutContext | null): CutRange => 
 export function transitionRange(p: Project, clipId: string): CutRange {
   const x = cutContext(p, clipId)
   if (!x) return noRange("not-adjoining", null)
+  if (x.loop) return noRange("loop", x)
   const base = shapeOf(x.clip)
   const { max, limit } = longest(x, (d) => ({ ...base, half: d / 2 }), MIN_TRANSITION, MAX_TRANSITION)
   return max < MIN_TRANSITION - 1e-9 ? noRange("too-short", x) : { max, reason: "ok", limit, lengths: { outgoing: x.outLength, incoming: x.inLength } }
@@ -224,6 +229,7 @@ export function cutAudioRange(p: Project, clipId: string): Record<CutAudio["mode
   const x = cutContext(p, clipId)
   // The audio layer's clips have no picture for the sound to lead or trail.
   if (!x || x.track === AUDIO_TRACK) return { j: noRange("not-adjoining", null), l: noRange("not-adjoining", null) }
+  if (x.loop) return { j: noRange("loop", x), l: noRange("loop", x) }
   const half = x.clip.transition ? x.clip.transition.duration / 2 : 0
   const range = (mode: CutAudio["mode"]): CutRange => {
     if (!hasSound(p, mode === "j" ? x.clip : x.prev)) return noRange("no-audio", x)

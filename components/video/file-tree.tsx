@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { ChevronDown, ChevronRight, Copy, Folder, FolderPlus, Loader2, Music, Pencil, Play, Plus, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { formatBytes, mediaUrl } from "@/lib/format"
@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 
 import { formatTimecode } from "@/lib/video/time"
-import { allClips, assetKind, type Project } from "@/lib/video/project"
+import { allClips, assetKind, assetLabel, type Project } from "@/lib/video/project"
 import { listTempFolderAction, type TempListing } from "@/lib/actions/video-projects"
 import { Thumb } from "./thumb"
 import { Callout } from "./ui/callout"
@@ -17,7 +17,10 @@ import { ResizeHandle } from "./resize-handle"
 import { DeleteTempDialog, NewFolderDialog, RenameDialog, TempPreviewDialog, type DeleteTarget, type TempFile } from "./temp-dialogs"
 import { useTempUpload } from "./use-temp-upload"
 import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialog } from "./ui/editor-dialog"
-import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE } from "./timeline"
+import { isStockKey, parseStockDrag } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
+import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE, STOCK_DRAG_TYPE } from "./timeline"
+import { StockPanel } from "./stock-panel"
 
 // Left panel: the project's own media (already imported) above Personal
 // Storage (folders closed until opened), with a draggable bar between them that
@@ -273,17 +276,58 @@ const MIN_STORAGE = 120
 /** True for a drag of a Personal Storage file. */
 const isTempDrag = (dt: DataTransfer) => dt.types.includes(INBOX_DRAG_TYPE)
 
-/** True for a drag of files from the computer (not one of the app's own drags: a Personal Storage file, a media item, a clip). */
-const isFileDrag = (dt: DataTransfer) => dt.types.includes("Files") && !dt.types.includes(ASSET_DRAG_TYPE) && !dt.types.includes(INBOX_DRAG_TYPE)
+/** True for a drag of a Stock tab result. */
+const isStockDrag = (dt: DataTransfer) => dt.types.includes(STOCK_DRAG_TYPE)
+
+/** True for a drag of files from the computer (not one of the app's own drags: a Personal Storage file, a stock result, a media item, a clip). */
+const isFileDrag = (dt: DataTransfer) => dt.types.includes("Files") && !dt.types.includes(ASSET_DRAG_TYPE) && !dt.types.includes(INBOX_DRAG_TYPE) && !dt.types.includes(STOCK_DRAG_TYPE)
+
+type LowerTab = "storage" | "stock"
+const LOWER_TABS: { id: LowerTab; label: string }[] = [
+  { id: "storage", label: "Personal Storage" },
+  { id: "stock", label: "Stock" },
+]
+const TAB_KEY = "ps.video.mediaTab"
+const TAB_EVENT = "ps-media-tab"
+
+/** The lower half's tab, remembered for the browser session (sessionStorage, which may be unavailable: the tab still switches). */
+function useLowerTab(): [LowerTab, (t: LowerTab) => void] {
+  const [local, setLocal] = useState<LowerTab | null>(null)
+  const stored = useSyncExternalStore(
+    (cb) => {
+      window.addEventListener(TAB_EVENT, cb)
+      return () => window.removeEventListener(TAB_EVENT, cb)
+    },
+    () => {
+      try {
+        return window.sessionStorage.getItem(TAB_KEY)
+      } catch {
+        return null
+      }
+    },
+    () => null
+  )
+  const tab: LowerTab = local ?? (stored === "stock" ? "stock" : "storage")
+  const set = useCallback((t: LowerTab) => {
+    setLocal(t)
+    try {
+      window.sessionStorage.setItem(TAB_KEY, t)
+    } catch {
+      // not remembered; the tab still switches
+    }
+    window.dispatchEvent(new Event(TAB_EVENT))
+  }, [])
+  return [tab, set]
+}
 
 export function FileTree({
-  temp, project, thumbUrl, importing, onAdd, onDelete, onImportFiles, onCopyTemp,
+  temp, project, thumbUrl, importing, onAdd, onDelete, onImportFiles, onCopyTemp, onImportStock,
 }: {
   /** The top-level folders of Personal Storage, one per user; their contents load when opened. */
   temp: TempFolder[]
   project: Project
   thumbUrl: (assetId: string) => string
-  /** "folder/name" of the Personal Storage file being imported, if any. */
+  /** "folder/name" of the Personal Storage file being imported, or the stockKey of a stock result downloading, if any. */
   importing: string | null
   /** Puts an imported asset on the end of the timeline. */
   onAdd: (assetId: string) => void
@@ -293,7 +337,22 @@ export function FileTree({
   onImportFiles: (files: File[]) => void
   /** A Personal Storage file (folder path, name) to copy into Project media: dropped on it, or chosen from a menu. */
   onCopyTemp: (folder: string, name: string) => void
+  /** A Stock tab result dropped on Project media: download it into it, not placed. */
+  onImportStock: (ref: StockRef) => void
 }) {
+  const [lowerTab, setLowerTab] = useLowerTab()
+  const tabRefs = useRef<Partial<Record<LowerTab, HTMLButtonElement | null>>>({})
+  /** Left/Right move to the neighbouring tab (wrapping), Home/End to the first/last; the tab is activated and focused. */
+  function onTabKey(e: React.KeyboardEvent, id: LowerTab) {
+    const i = LOWER_TABS.findIndex((t) => t.id === id)
+    const last = LOWER_TABS.length - 1
+    const to = e.key === "ArrowRight" ? (i + 1) % LOWER_TABS.length : e.key === "ArrowLeft" ? (i + last) % LOWER_TABS.length : e.key === "Home" ? 0 : e.key === "End" ? last : -1
+    if (to < 0) return
+    e.preventDefault()
+    const next = LOWER_TABS[to].id
+    setLowerTab(next)
+    tabRefs.current[next]?.focus()
+  }
   // Files from the computer over Project media: its drop outline.
   const [fileOver, setFileOver] = useState(false)
   // Project media's height: none stored (the default) fits its items, up to half the panel.
@@ -345,7 +404,7 @@ export function FileTree({
         style={mediaHeight === null ? undefined : { height: mediaHeight }}
         className={cn("relative shrink-0 overflow-y-auto rounded-md pb-1", mediaHeight === null && "max-h-[50%]", fileOver && "outline-2 -outline-offset-2 outline-dashed outline-sky-500 bg-sky-500/10 dark:outline-editor-accent dark:bg-editor-accent/10")}
         onDragOver={(e) => {
-          if (!isFileDrag(e.dataTransfer) && !isTempDrag(e.dataTransfer)) return
+          if (!isFileDrag(e.dataTransfer) && !isTempDrag(e.dataTransfer) && !isStockDrag(e.dataTransfer)) return
           e.preventDefault()
           e.dataTransfer.dropEffect = "copy"
           setFileOver(true)
@@ -366,6 +425,12 @@ export function FileTree({
             }
             return
           }
+          if (isStockDrag(e.dataTransfer)) {
+            e.preventDefault()
+            const r = parseStockDrag(e.dataTransfer.getData(STOCK_DRAG_TYPE))
+            if (r) onImportStock({ source: r.source, id: r.id, kind: r.kind })
+            return
+          }
           if (!isFileDrag(e.dataTransfer)) return
           e.preventDefault()
           onImportFiles(Array.from(e.dataTransfer.files))
@@ -378,13 +443,16 @@ export function FileTree({
             <span className="flex items-center gap-1.5 rounded-md bg-neutral-900/80 px-2.5 py-1 text-xs text-white shadow"><Upload className="h-3.5 w-3.5" /> Drop to import</span>
           </div>
         )}
+        {isStockKey(importing) && (
+          <p className="flex items-center gap-1.5 px-3 pb-1 text-xs text-muted-foreground" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Downloading…</p>
+        )}
         <ul className="px-2">
           {assets.map(([id, a]) => (
             <li
               key={id}
               draggable
               tabIndex={0}
-              aria-label={`${a.file}, press Delete to remove it from the project`}
+              aria-label={`${assetLabel(a)}, press Delete to remove it from the project`}
               onDragStart={(e) => {
                 e.dataTransfer.setData(ASSET_DRAG_TYPE, id)
                 e.dataTransfer.effectAllowed = "copy"
@@ -412,14 +480,14 @@ export function FileTree({
                 <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
               )}
               <span className="min-w-0 flex-1">
-                <span className="block truncate" title={a.file}>{a.file}</span>
+                <span className="block truncate" title={assetLabel(a)}>{assetLabel(a)}</span>
                 <span className="block text-[11px] text-muted-foreground tabular-nums">
                   {assetKind(a) === "image" ? `Image · ${formatTimecode(a.duration)}` : assetKind(a) === "audio" ? `Audio · ${formatTimecode(a.duration)}` : formatTimecode(a.duration)}
                 </span>
               </span>
               <Button type="button" size="icon-sm" variant="ghost" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => onAdd(id)} title="Add to timeline">
                 <Plus className="h-4 w-4" />
-                <span className="sr-only">Add {a.file} to timeline</span>
+                <span className="sr-only">Add {assetLabel(a)} to timeline</span>
               </Button>
             </li>
           ))}
@@ -442,27 +510,69 @@ export function FileTree({
         }}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-        <p className="mt-2 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Personal Storage</p>
-        <p className="px-3 pb-1 text-xs text-muted-foreground">Drag media to Project media or the timeline. Right-click for more.</p>
-        {temp.length === 0 && <p className="px-3 text-xs text-muted-foreground">Nothing in Personal Storage yet.</p>}
-        {temp.map((f) => (
-          <TempFolderNode key={f.name} segments={[f.name]} count={f.mediaCount} importing={importing} onCopy={onCopyTemp} />
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div role="tablist" aria-label="Media sources" className="flex shrink-0 gap-0.5 border-b px-2 pt-1">
+          {LOWER_TABS.map((t) => (
+            <button
+              key={t.id}
+              ref={(el) => {
+                tabRefs.current[t.id] = el
+              }}
+              type="button"
+              role="tab"
+              id={`media-tab-${t.id}`}
+              aria-selected={lowerTab === t.id}
+              aria-controls={`media-panel-${t.id}`}
+              tabIndex={lowerTab === t.id ? 0 : -1}
+              onClick={() => setLowerTab(t.id)}
+              onKeyDown={(e) => onTabKey(e, t.id)}
+              className={cn(
+                "-mb-px rounded-t-md border-b-2 px-2.5 py-1 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                lowerTab === t.id ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div
+          role="tabpanel"
+          id="media-panel-storage"
+          aria-labelledby="media-tab-storage"
+          hidden={lowerTab !== "storage"}
+          className="min-h-0 flex-1 overflow-y-auto pb-2"
+        >
+          <p className="mt-2 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Personal Storage</p>
+          <p className="px-3 pb-1 text-xs text-muted-foreground">Drag media to Project media or the timeline. Right-click for more.</p>
+          {temp.length === 0 && <p className="px-3 text-xs text-muted-foreground">Nothing in Personal Storage yet.</p>}
+          {temp.map((f) => (
+            <TempFolderNode key={f.name} segments={[f.name]} count={f.mediaCount} importing={importing} onCopy={onCopyTemp} />
+          ))}
+        </div>
+        {/* Kept mounted (hidden) while another tab shows, so a search isn't lost. */}
+        <div
+          role="tabpanel"
+          id="media-panel-stock"
+          aria-labelledby="media-tab-stock"
+          hidden={lowerTab !== "stock"}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          <StockPanel project={project} />
+        </div>
       </div>
 
       {menu && project.assets[menu.id] && (
         <RowMenu
           x={menu.x}
           y={menu.y}
-          file={project.assets[menu.id].file}
+          file={assetLabel(project.assets[menu.id])}
           disabled={locked(menu.id)}
           onDelete={() => setConfirm(menu.id)}
           onClose={closeMenu}
         />
       )}
       {confirm !== null && confirmAsset && (
-        <DeleteAssetDialog file={confirmAsset.file} uses={uses} busy={busy} locked={locked(confirm)} onConfirm={() => void deleteConfirmed()} onClose={() => setConfirm(null)} />
+        <DeleteAssetDialog file={assetLabel(confirmAsset)} uses={uses} busy={busy} locked={locked(confirm)} onConfirm={() => void deleteConfirmed()} onClose={() => setConfirm(null)} />
       )}
     </div>
   )

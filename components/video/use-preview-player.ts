@@ -1,9 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
 import { audioCutState, audioEdgeState, combineFx, PLAIN, pictureEdgeGain } from "@/lib/video/audio-fx"
-import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { clipLength, expandLoops, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { isAudioTransitionType, isTransitionType } from "@/lib/video/transition-types"
 import { cutGains, edgeAt, entrySourceTime, laneClipAt, laneElementAt, overlapAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
 import { applyFx, offSpeed, setLevels, setVolume } from "./audio-graph"
@@ -82,7 +82,9 @@ function sameClips(a: Clip[][], b: Clip[][]): boolean {
   return true
 }
 
-export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => string, audioUrlFor: (assetId: string) => string) {
+export function usePreviewPlayer(stored: Project, urlFor: (assetId: string) => string, audioUrlFor: (assetId: string) => string) {
+  // A looping clip plays as back-to-back copies (expandLoops); the editor's own project is never changed.
+  const project = useMemo(() => expandLoops(stored), [stored])
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
   // The audio layer's two elements, the clip each holds (id and asset), the one playing and the clip at the playhead (-1: none).
   const audioEls = useRef<(HTMLAudioElement | null)[]>([null, null])
@@ -777,7 +779,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
+  return { playback: project, attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
 
 }
 

@@ -206,3 +206,13 @@ model AiShot {
   @@index([root, folder, status])
   @@index([runId, status])
 }
+
+model StockSettings {
+  id                      String   @id @default("singleton")
+  /// AES-256-GCM via lib/secret-box.ts. Never leaves the server.
+  pixabayKeyEnc           String?
+  pexelsKeyEnc            String?
+  openverseClientId       String?
+  openverseClientSecretEnc String?
+  updatedAt               DateTime @updatedAt
+}

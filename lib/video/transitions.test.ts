@@ -4,9 +4,10 @@ import { commit, createHistory, redo, undo } from "./history"
 import {
   addClip, brokenLinks, mergeClientProject, moveClip, newProject, parseProject, removeClip, setBaseMagnetic, splitClip, trimClip, type Clip, type Edit, type Project,
 } from "./project"
+import { buildExportGraph } from "./ffmpeg-server"
 import { MAX_TRANSITION, TRANSITION_TYPES } from "./transition-types"
 import {
-  cutsOf, entrySourceTime, isLinked, laneClipAt, linkedChain, moveGroup, setCutAudio, setTransition, TRANSITION_GROUPS, TRANSITION_INFO, transitionAt, transitionLimits, unlinkClip,
+  cutsOf, entrySourceTime, isLinked, laneClipAt, linkedChain, moveGroup, setCutAudio, setTransition, TRANSITION_GROUPS, TRANSITION_INFO, transitionAt, transitionLimits, transitionRange, cutAudioRange, unlinkClip,
 } from "./transitions"
 
 /**
@@ -376,5 +377,65 @@ describe("playback helpers", () => {
     expect(laneClipAt(track, 2)).toEqual({ index: 0, start: 0, sourceTime: 4 })
     expect(entrySourceTime(track, track.clips[1])).toBe(7.5)
     expect(entrySourceTime(track, track.clips[0])).toBe(2)
+  })
+})
+
+describe("cuts at a looping clip", () => {
+  /** A 10 s video `a`, a looping clip `b` (`out` long, on a `d` s source; `sound`: its file has audio), then a 6 s video `c`. */
+  function loopy(out = 5, sound = false, d = 1): Project {
+    return {
+      ...newProject("l"),
+      assets: { v: { file: "v.mp4", duration: 10, hasAudio: true }, g: { file: "g.mp4", duration: d, hasAudio: sound } },
+      tracks: [{
+        id: "t1",
+        clips: [
+          { id: "a", asset: "v", in: 0, out: 10, start: 0 },
+          { id: "b", asset: "g", in: 0, out, start: 10, loop: true },
+          { id: "c", asset: "v", in: 2, out: 8, start: 10 + out },
+        ],
+      }],
+    }
+  }
+  const roundTrip = (r: Project) => parseProject(JSON.parse(JSON.stringify(r)))
+  const clip = (r: Project, id: string) => r.tracks[0].clips.find((c) => c.id === id)!
+
+  for (const [side, id] of [["into", "b"], ["out of", "c"]] as const) {
+    it(`a transition ${side} a looping clip is refused with reason "loop"`, () => {
+      const base = loopy()
+      expect(transitionRange(base, id).reason).toBe("loop")
+      expect(transitionLimits(base, id)).toEqual({ max: 0, reason: "loop" })
+      expect(setTransition(base, id, { type: "fade", duration: 1 })).toBe(base)
+    })
+    it(`a J-cut or L-cut ${side} a looping clip with sound is refused with reason "loop"`, () => {
+      const base = loopy(5, true)
+      const range = cutAudioRange(base, id)
+      expect([range.j.reason, range.l.reason]).toEqual(["loop", "loop"])
+      expect(setCutAudio(base, id, { mode: "j", duration: 1 })).toBe(base)
+      expect(setCutAudio(base, id, { mode: "l", duration: 1 })).toBe(base)
+    })
+  }
+  it("a stored transition or audio overlap at a looping clip is dropped on parse, and saves", () => {
+    const stored = loopy(4.4, true)
+    stored.tracks[0].clips[1] = { ...stored.tracks[0].clips[1], transition: { type: "fade", duration: 1 } }
+    stored.tracks[0].clips[2] = { ...stored.tracks[0].clips[2], transition: { type: "fade", duration: 1 }, cutAudio: { mode: "l", duration: 0.4 } }
+    const parsed = roundTrip(stored)!
+    expect(parsed).not.toBeNull()
+    for (const c of parsed.tracks[0].clips) {
+      expect(c).not.toHaveProperty("transition")
+      expect(c).not.toHaveProperty("cutAudio")
+    }
+    expect(mergeClientProject(JSON.parse(JSON.stringify(stored)), stored)).not.toBeNull()
+  })
+  it("a stored 1 s fade out of a 4.4 s loop exports with no negative xfade offset once parsed", () => {
+    const stored = loopy(4.4)
+    stored.tracks[0].clips[2] = { ...stored.tracks[0].clips[2], transition: { type: "fade", duration: 1 } }
+    const graph = buildExportGraph(roundTrip(stored)!, { v: "v.mp4", g: "g.mp4" }).graph
+    const offsets = [...graph.matchAll(/offset=(-?[\d.]+)/g)].map((m) => Number(m[1]))
+    for (const o of offsets) expect(o).toBeGreaterThanOrEqual(0)
+  })
+  it("a transition between two plain clips beside a loop still works", () => {
+    const base = loopy()
+    const r = setTransition({ ...base, tracks: [{ id: "t1", clips: [base.tracks[0].clips[2], { id: "d", asset: "v", in: 2, out: 8, start: 21 }] }] }, "d", { type: "fade", duration: 1 })
+    expect(clip(r, "d").transition).toEqual({ type: "fade", duration: 1 })
   })
 })

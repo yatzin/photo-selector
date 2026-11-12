@@ -5,7 +5,7 @@ import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport, textRaster } from "./ffmpeg-server"
-import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
+import { endToEnd, expandLoops, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
 import { textSize, type ClipText } from "./text"
 import { animationState } from "./text-animation"
 import { rasteriseText } from "./text-raster-server"
@@ -1456,5 +1456,31 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       expect(isRed((await frame(out, 0.05))(320, 180))).toBe(true)
       expect(isBlue((await frame(out, 5.9))(320, 180))).toBe(true)
     }, 60_000)
+  })
+})
+describe("export honours loops", () => {
+  const looped = (): Project => ({
+    ...newProject("P"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", start: 0, in: 0, out: 25, loop: true }] }],
+  })
+  const lf = { a: "/x/a.mp4" }
+
+  it("builds the graph of the expanded copies (a 25 s loop of a 10 s clip is three segments)", () => {
+    const expanded = expandLoops(looped())
+    expect(expanded.tracks[0].clips).toHaveLength(3)
+    expect(buildExportGraph(looped(), lf)).toEqual(buildExportGraph(expanded, lf))
+    expect(buildExportGraph(looped(), lf).graph).toContain("concat=n=3:v=1:a=1")
+    expect(totalLength(expanded)).toBeCloseTo(25)
+  })
+
+  it("buildExportArgs gets the same three segments", () => {
+    const args = buildExportArgs(looped(), lf, "/o.mp4")
+    expect(args).toEqual(buildExportArgs(expandLoops(looped()), lf, "/o.mp4"))
+    expect(graph(args)).toContain("concat=n=3:v=1:a=1")
+  })
+
+  it("leaves a project with nothing to loop alone", () => {
+    expect(buildExportGraph(twoClips(), files)).toEqual(buildExportGraph(expandLoops(twoClips()), files))
   })
 })

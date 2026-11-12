@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
+import { assetKind, assetLabel, clipLength, isStill, isTextClip, loopSourceId, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
 import { edgeLook, transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
 import { edgeAt, laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { isTransitionType } from "@/lib/video/transition-types"
@@ -12,13 +12,15 @@ import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/li
 import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
 import { cn } from "@/lib/utils"
-import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
+import { parseStockDrag } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
+import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE, STOCK_DRAG_TYPE } from "./timeline"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
 import { TransformOverlay, type GestureState, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
 
 /** A file from the left panel dropped on the canvas: a Project media item, or an Inbox file to import first. */
-export type MediaDrop = { kind: "asset"; id: string } | { kind: "inbox"; folder: string; name: string }
+export type MediaDrop = { kind: "asset"; id: string } | { kind: "inbox"; folder: string; name: string } | { kind: "stock"; ref: StockRef }
 
 const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 
@@ -241,19 +243,21 @@ export function Preview({
     return () => ro.disconnect()
   }, [W, H])
 
-  const total = totalLength(project)
+  // The copies a looping clip plays as (the player's own expansion), so lanes, clip indexes and the player's slots line up; ids map back with loopSourceId.
+  const playback = player.playback
+  const total = totalLength(playback)
   const hasClips = total > 0
   // At the end the last frame stays up.
   const look = player.time >= total ? Math.max(0, total - 0.001) : player.time
   // The clip each track shows (through a transition, the incoming one), the topmost of them, and each track's running transition.
-  const hits: (ActiveClip | null)[] = project.tracks.map((t, track) => {
+  const hits: (ActiveClip | null)[] = playback.tracks.map((t, track) => {
     const at = laneClipAt(t, look)
     return at && { track, ...at, clip: t.clips[at.index] }
   })
   const top = hits.reduce<ActiveClip | null>((above, h) => h ?? above, null)
-  const windows = project.tracks.map((t) => transitionAt(t, look))
+  const windows = playback.tracks.map((t) => transitionAt(t, look))
   // Each lane's look: its running transition's, else its clip's running edge transition's (against nothing, lib/video/transition-preview edgeLook).
-  const looks = project.tracks.map((_, lane): TransitionLook | null => {
+  const looks = playback.tracks.map((_, lane): TransitionLook | null => {
     const w = windows[lane]
     if (w) return isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
     const hit = hits[lane]
@@ -268,7 +272,7 @@ export function Preview({
     const asset = clip && !isTextClip(clip) ? project.assets[clip.asset] : undefined
     return asset !== undefined && assetKind(asset) === "image"
   }
-  const transformOf = (clip: Clip) => (draft?.id === clip.id ? draft.transform : clip.transform ?? IDENTITY)
+  const transformOf = (clip: Clip) => (draft?.id === loopSourceId(clip.id) ? draft.transform : clip.transform ?? IDENTITY)
   const aspectOf = (assetId: string) => aspects[assetId] ?? W / H
   /** What clipRect places for a clip: a text's content box, else its picture's aspect. */
   const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, Math.min(W, H)) : aspectOf(clip.asset))
@@ -323,19 +327,20 @@ export function Preview({
     )
   }
 
-  const lanes = project.tracks.slice(0, MAX_TRACKS)
+  const lanes = playback.tracks.slice(0, MAX_TRACKS)
   // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
-  const textFonts = [...new Set(project.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
+  const textFonts = [...new Set(playback.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
   const loadedFonts = useLoadedFonts(textFonts)
   const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset) : ""
 
   const target = (clip: Clip, lane: number): TransformTarget => ({
-    id: clip.id,
-    label: `Layer ${lane + 1}, ${isTextClip(clip) ? `text "${clip.text.content}"` : (project.assets[clip.asset]?.file ?? "missing file")}`,
+    id: loopSourceId(clip.id),
+    label: `Layer ${lane + 1}, ${isTextClip(clip) ? `text "${clip.text.content}"` : (Object.hasOwn(project.assets, clip.asset) ? assetLabel(project.assets[clip.asset]) : "missing file")}`,
     aspect: contentOf(clip),
     transform: transformOf(clip),
+    canFill: !isTextClip(clip),
   })
-  const selectedHit = hits.find((h) => h?.clip.id === selectedId)
+  const selectedHit = hits.find((h) => h && loopSourceId(h.clip.id) === selectedId)
   const selected = selectedHit ? target(selectedHit.clip, selectedHit.track) : null
   /** The topmost clip at the playhead that covers canvas point x, y (its visible strip as it shows, turned too; with no transform, the whole canvas, but a text only its box). */
   const hitTest = (x: number, y: number): TransformTarget | null => {
@@ -350,7 +355,7 @@ export function Preview({
   }
 
   // The next clip on each track, when it's an image: fetched before the cut so a cut to it doesn't flash black.
-  const nextStills = project.tracks
+  const nextStills = playback.tracks
     .map((track, i) => {
       const hit = hits[i]
       const starts = trackStarts(track)
@@ -392,9 +397,15 @@ export function Preview({
     setDropOver(false)
     const id = e.dataTransfer.getData(ASSET_DRAG_TYPE)
     const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
-    if (!id && !inbox) return
+    const stock = e.dataTransfer.getData(STOCK_DRAG_TYPE)
+    if (!id && !inbox && !stock) return
     e.preventDefault()
     if (id) return onDrop({ kind: "asset", id })
+    if (stock) {
+      const r = parseStockDrag(stock)
+      if (r) onDrop({ kind: "stock", ref: { source: r.source, id: r.id, kind: r.kind } })
+      return
+    }
     try {
       const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
       if (typeof folder === "string" && typeof name === "string") onDrop({ kind: "inbox", folder, name })
@@ -523,7 +534,7 @@ export function Preview({
               onCommit={(id, t, group) => onChange((p) => setTransform(p, id, t), group)}
               onGesture={setGesture}
               onDoubleClickClip={(id) => {
-                if (hits.some((h) => h?.clip.id === id && isTextClip(h.clip))) onEditText(id)
+                if (hits.some((h) => h && loopSourceId(h.clip.id) === id && isTextClip(h.clip))) onEditText(id)
               }}
             />
           )}

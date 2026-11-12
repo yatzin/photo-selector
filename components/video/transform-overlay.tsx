@@ -1,10 +1,10 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { FlipHorizontal2, FlipVertical2, RotateCw } from "lucide-react"
+import { FlipHorizontal2, FlipVertical2, Maximize2, RotateCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
-  angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
+  angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
   snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
 } from "@/lib/video/transform"
 
@@ -34,7 +34,14 @@ const FLOAT_OFFSET = 22 // screen px out from a frame corner, along the frame's 
 const FLOAT_SIZE = 24 // screen px, a floating button's diameter
 
 /** `aspect`: the picture's aspect, or a text's content box (lib/video/transform's Content). */
-export type TransformTarget = { id: string; label: string; aspect: Content; transform: Transform }
+export type TransformTarget = {
+  id: string
+  label: string
+  aspect: Content
+  transform: Transform
+  /** A picture clip (not text): it can be sent back to filling the frame. */
+  canFill?: boolean
+}
 
 type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge } | { kind: "rotate" }
 
@@ -336,7 +343,10 @@ export function TransformOverlay({
     return pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))
   }
   const corners = v && pivot ? rotatedCorners(v, pivot, rot) : null
-  const rotateAt = corners ? floating(corners[1], [{ x: FLOAT_OFFSET, y: -FLOAT_OFFSET }])?.[0] ?? null : null
+  // The rotate handle and, to its left, the fill-the-frame button (shown while the clip isn't at its fitted, centred size). They shift together to stay in view.
+  const topRight = corners ? floating(corners[1], [{ x: FLOAT_OFFSET, y: -FLOAT_OFFSET }, { x: FLOAT_OFFSET - FLOAT_SIZE - 4, y: -FLOAT_OFFSET }]) : null
+  const rotateAt = topRight?.[0] ?? null
+  const fillAt = selected?.canFill && !isIdentity(selected.transform) ? topRight?.[1] ?? null : null
   const flips = corners ? floating(corners[0], [{ x: -FLOAT_OFFSET, y: -FLOAT_OFFSET }, { x: FLOAT_SIZE + 4 - FLOAT_OFFSET, y: -FLOAT_OFFSET }]) : null
   const flipHAt = flips?.[0] ?? null
   const flipVAt = flips?.[1] ?? null
@@ -424,6 +434,19 @@ export function TransformOverlay({
             </div>
           )}
         </>
+      )}
+      {selected && fillAt && (
+        <button
+          type="button"
+          aria-label="Fill the frame"
+          title="Fill the frame (resets size, position, crop and rotation)"
+          className={cn(floatClass, "cursor-pointer")}
+          style={{ left: fillAt.x, top: fillAt.y, width: FLOAT_SIZE, height: FLOAT_SIZE }}
+          onPointerDown={own}
+          onClick={() => onCommit(selected.id, IDENTITY)}
+        >
+          <Maximize2 className="h-3.5 w-3.5" strokeWidth={2.5} />
+        </button>
       )}
       {selected && flipHAt && flipVAt && (
         <>

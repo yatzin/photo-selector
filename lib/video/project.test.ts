@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTextClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  addClip, addTextClip, assetLabel, clipLength, newClipLength, expandLoops, maxLoopLength, MAX_LOOP_COPIES, isLooping, setClipLoop, showsSourceWindow, tailHandle, headHandle, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
   MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipMuted, setClipText, setTransform,
-  splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
+  splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Asset, type Clip, type Edit, type Project,
 } from "./project"
 import { commit, createHistory, undo } from "./history"
 import { IDENTITY, type Transform } from "./transform"
@@ -1581,5 +1581,235 @@ describe("text clips", () => {
       const added = addTextClip(withText([]), { ...text, animIn: { ...animIn, duration: 9 } }, 0, {}, "x")
       expect(added.tracks[0].clips[0].text?.animIn?.duration).toBe(DEFAULT_IMAGE)
     })
+  })
+})
+
+describe("loop flag", () => {
+  const loopProject = (clip: Partial<Clip>, asset: Record<string, unknown> = {}): Project => ({
+    ...newProject("l"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: false, ...asset } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 3, start: 0, ...clip }] }],
+  })
+  const roundTrip = (p: Project) => parseProject(JSON.parse(JSON.stringify(p)))
+
+  it("parseProject round-trips a looping clip longer than its source", () => {
+    const p = roundTrip(loopProject({ out: 25, loop: true }))
+    expect(p?.tracks[0].clips[0]).toMatchObject({ out: 25, loop: true })
+  })
+  it("still rejects a longer-than-source clip without loop", () => {
+    expect(roundTrip(loopProject({ out: 25 }))).toBeNull()
+  })
+  it("rejects a looping clip with in > 0, or past MAX_TIMELINE", () => {
+    expect(roundTrip(loopProject({ in: 1, out: 25, loop: true }))).toBeNull()
+    expect(roundTrip(loopProject({ out: MAX_TIMELINE + 1, loop: true }))).toBeNull()
+  })
+  it("keeps loop and loopByDefault only when true", () => {
+    expect(roundTrip(loopProject({ loop: false } as never))?.tracks[0].clips[0]).not.toHaveProperty("loop")
+    const p = roundTrip(loopProject({}, { loopByDefault: true }))
+    expect(p?.assets.a.loopByDefault).toBe(true)
+    expect(roundTrip(loopProject({}))?.assets.a).not.toHaveProperty("loopByDefault")
+  })
+  it("setClipLoop(true) moves in to 0 keeping the length", () => {
+    const c = setClipLoop(loopProject({ in: 2, out: 6 }), "c1", true).tracks[0].clips[0]
+    expect([c.in, c.out, c.loop]).toEqual([0, 4, true])
+  })
+  it("setClipLoop(false) clamps out to the source duration", () => {
+    const c = setClipLoop(loopProject({ out: 25, loop: true }), "c1", false).tracks[0].clips[0]
+    expect(c.out).toBe(10)
+    expect(c).not.toHaveProperty("loop")
+  })
+  it("setClipLoop leaves an image clip unchanged", () => {
+    const p = loopProject({ out: 5 }, { kind: "image" })
+    expect(setClipLoop(p, "c1", true)).toBe(p)
+  })
+  it("addClip with loopByDefault makes a 5 s looping clip", () => {
+    const p = { ...newProject("x"), assets: { g: { file: "g.mp4", duration: 2, hasAudio: false, loopByDefault: true as const } } }
+    expect(addClip(p, "g", 0, {}, "n").tracks[0].clips[0]).toMatchObject({ loop: true, out: 5, in: 0 })
+  })
+  it("a looping clip has no head handle, and as tail what its source has left after the last copy", () => {
+    const p = loopProject({ in: 0, out: 3, loop: true })
+    const c = p.tracks[0].clips[0]
+    expect(isLooping(p, c)).toBe(true)
+    expect(tailHandle(p, c)).toBeCloseTo(7)
+    expect(headHandle(p, c)).toBe(0)
+    const gif = (out: number) => { const q = loopProject({ out, loop: true }, { duration: 1 }); return tailHandle(q, q.tracks[0].clips[0]) }
+    expect(gif(5)).toBe(0)
+    expect(gif(4.4)).toBeCloseTo(0.6)
+    expect(gif(1)).toBe(0)
+    expect(gif(0.25)).toBeCloseTo(0.75)
+    expect(gif(5 + 5e-7)).toBe(0)
+  })
+  it("showsSourceWindow: a video with sound does, a looping one or a silent one doesn't", () => {
+    const at = (p: Project) => showsSourceWindow(p, p.tracks[0].clips[0])
+    expect(at(loopProject({ out: 3 }, { hasAudio: true }))).toBe(true)
+    expect(at(loopProject({ out: 25, loop: true }, { hasAudio: true }))).toBe(false)
+    expect(at(loopProject({ out: 3 }))).toBe(false)
+  })
+  it("trimClip stretches a looping clip past its source", () => {
+    const p = loopProject({ out: 3, loop: true })
+    expect(trimClip(p, "c1", "out", 40).tracks[0].clips[0]).toMatchObject({ in: 0, out: 40, loop: true })
+  })
+})
+
+describe("expandLoops", () => {
+  const mk = (clips: Clip[], extra: Partial<Project> = {}): Project => ({
+    ...newProject("l"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } },
+    tracks: [{ id: "t1", clips }],
+    ...extra,
+  })
+  const loopClip = (o: Partial<Clip> = {}): Clip => ({ id: "c1", asset: "a", in: 0, out: 25, start: 3, loop: true, ...o })
+
+  it("expands a 22 s loop at start 3 on a 10 s source into three clips", () => {
+    const clips = expandLoops(mk([loopClip({ out: 22 })])).tracks[0].clips
+    expect(clips.map((c) => [c.id, c.start, c.in, c.out])).toEqual([["c1", 3, 0, 10], ["c1~1", 13, 0, 10], ["c1~2", 23, 0, 2]])
+    expect(clips.some((c) => "loop" in c)).toBe(false)
+    expect(new Set(clips.map((c) => c.id)).size).toBe(3)
+    const p = mk([loopClip({ out: 22 })])
+    expect(totalLength(expandLoops(p))).toBe(totalLength(p))
+  })
+  it("returns the same reference when nothing loops past its source", () => {
+    const plain = mk([{ id: "c1", asset: "a", in: 0, out: 5, start: 0 }])
+    expect(expandLoops(plain)).toBe(plain)
+    const short = mk([loopClip({ out: 10 }), loopClip({ id: "c2", out: 4, start: 20 })])
+    expect(expandLoops(short)).toBe(short)
+    expect(expandLoops(short).tracks[0].clips).toHaveLength(2)
+  })
+  it("does not mutate its input", () => {
+    const p = mk([loopClip()])
+    const copy = JSON.parse(JSON.stringify(p))
+    expandLoops(p)
+    expect(p).toEqual(copy)
+  })
+  it("leaves other clips and tracks untouched and in order", () => {
+    const other: Clip = { id: "x", asset: "a", in: 1, out: 3, start: 0 }
+    const after: Clip = { id: "y", asset: "a", in: 0, out: 2, start: 40 }
+    const t2: Clip = { id: "z", asset: "a", in: 0, out: 2, start: 0 }
+    const p = mk([other, loopClip(), after])
+    const withT2 = { ...p, tracks: [...p.tracks, { id: "t2", clips: [t2] }] }
+    const r = expandLoops(withT2)
+    expect(r.tracks[0].clips.map((c) => c.id)).toEqual(["x", "c1", "c1~1", "c1~2", "y"])
+    expect(r.tracks[0].clips[0]).toBe(other)
+    expect(r.tracks[0].clips[4]).toBe(after)
+    expect(r.tracks[1]).toBe(withT2.tracks[1])
+  })
+  it("puts in-side fields on the first copy, edgeOut on the last, the rest on all", () => {
+    const tr = { x: 0.1, y: 0.2, scale: 1.5, cropTop: 0, cropBottom: 0 } as unknown as Transform
+    const edgeIn = { type: "fade", duration: 1 } as never
+    const edgeOut = { type: "fade", duration: 1 } as never
+    const transition = { type: "fade", duration: 0.5 } as never
+    const cutAudio = { mode: "j", duration: 0.5 } as never
+    const audio = { gain: 3 } as never
+    const clips = expandLoops(mk([loopClip({ edgeIn, edgeOut, transition, cutAudio, audio, muted: true, transform: tr })])).tracks[0].clips
+    expect(clips[0]).toMatchObject({ edgeIn, transition, cutAudio })
+    expect(clips[0]).not.toHaveProperty("edgeOut")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("edgeIn")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("transition")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("cutAudio")
+    expect(clips[1]).not.toHaveProperty("edgeOut")
+    expect(clips[2].edgeOut).toBe(edgeOut)
+    for (const c of clips) expect(c).toMatchObject({ audio, muted: true, transform: tr })
+  })
+  it("an exact multiple of the source gives full copies only", () => {
+    const r = expandLoops(mk([loopClip({ out: 20 })]))
+    expect(r.tracks[0].clips.map((c) => [c.start, c.out])).toEqual([[3, 10], [13, 10]])
+  })
+  const tiny = (clip: Partial<Clip>): Project => mk([{ id: "c1", asset: "a", in: 0, out: 3, start: 0, loop: true, ...clip }], { assets: { a: { file: "a.mp4", duration: 0.1, hasAudio: false } } })
+  it("maxLoopLength is 500 source lengths, capped at the timeline", () => {
+    expect(MAX_LOOP_COPIES).toBe(500)
+    expect(maxLoopLength({ file: "a", duration: 0.1, hasAudio: false })).toBeCloseTo(50)
+    expect(maxLoopLength({ file: "a", duration: 100, hasAudio: false })).toBe(MAX_TIMELINE)
+  })
+  it("trimClip clamps a loop on a 0.1 s source to 50 s", () => {
+    expect(trimClip(tiny({}), "c1", "out", 10000).tracks[0].clips[0].out).toBeCloseTo(50)
+  })
+  it("parseProject rejects a looping clip beyond maxLoopLength", () => {
+    const rt = (p: Project) => parseProject(JSON.parse(JSON.stringify(p)))
+    expect(rt(tiny({ out: 50 }))).not.toBeNull()
+    expect(rt(tiny({ out: 51 }))).toBeNull()
+  })
+  it("setClipLoop(true) clamps the length", () => {
+    const p = tiny({ out: 400, loop: undefined })
+    delete (p.tracks[0].clips[0] as Partial<Clip>).loop
+    const q = { ...p, assets: { a: { ...p.assets.a, duration: 0.1 } } }
+    expect(setClipLoop(q, "c1", true).tracks[0].clips[0].out).toBeCloseTo(50)
+  })
+  it("expandLoops never emits more than MAX_LOOP_COPIES copies", () => {
+    const p = tiny({ out: 20000 })
+    expect(expandLoops(p).tracks[0].clips.length).toBeLessThanOrEqual(MAX_LOOP_COPIES)
+  })
+  it("a length a hair above a multiple of the source gives a last out <= d", () => {
+    const clips = expandLoops(mk([loopClip({ out: 20 + 5e-7 })])).tracks[0].clips
+    expect(clips).toHaveLength(2)
+    expect(clips[1].out).toBeLessThanOrEqual(10)
+  })
+  it("caps a loop's edge effects to the copy they land on", () => {
+    const gif = (clip: Partial<Clip>) => mk([loopClip({ out: 5, ...clip })], { assets: { a: { file: "g.mp4", duration: 1, hasAudio: false } } })
+    const clips = expandLoops(gif({ out: 4.4, edgeIn: { type: "fade", duration: 2 }, edgeOut: { type: "fade", duration: 2 } })).tracks[0].clips
+    expect(clips[0].edgeIn?.duration).toBe(1)
+    expect(clips.at(-1)!.edgeOut?.duration).toBeCloseTo(0.4)
+    for (const c of clips) {
+      expect(c.edgeIn?.duration ?? 0).toBeLessThanOrEqual(c.out - c.in + 1e-9)
+      expect(c.edgeOut?.duration ?? 0).toBeLessThanOrEqual(c.out - c.in + 1e-9)
+    }
+  })
+  it("a NaN length leaves the clip in place", () => {
+    const p = mk([loopClip({ out: NaN })])
+    expect(expandLoops(p)).toBe(p)
+  })
+})
+
+describe("newClipLength", () => {
+  const cases: [string, Asset, number][] = [
+    ["image", { file: "i.jpg", duration: 1, hasAudio: false, kind: "image" }, DEFAULT_IMAGE],
+    ["looping 2 s video (a GIF)", { file: "g.mp4", duration: 2, hasAudio: false, loopByDefault: true }, DEFAULT_IMAGE],
+    ["ordinary 7 s video", { file: "v.mp4", duration: 7, hasAudio: true }, 7],
+    ["audio", { file: "s.mp3", duration: 12, hasAudio: true, kind: "audio" }, 12],
+  ]
+  for (const [name, asset, want] of cases) {
+    it(`${name}: ${want} s, the length addClip gives it`, () => {
+      expect(newClipLength(asset)).toBe(want)
+      const p = addClip({ ...sample(), assets: { x: asset } }, "x", 0, { start: 0 }, "n")
+      const c = allClips(p).find((k) => k.id === "n")!
+      expect(clipLength(c)).toBe(newClipLength(asset))
+    })
+  }
+})
+
+describe("asset titles", () => {
+  const withAsset = (a: Record<string, unknown>) => ({ ...newProject("P"), assets: { a1: { file: "u.mp3", duration: 10, hasAudio: true, kind: "audio", ...a } } })
+  const title = (a: Record<string, unknown>) => parseProject(withAsset(a))?.assets.a1.title
+
+  it("assetLabel: the title wins, a blank or missing one falls back to the file", () => {
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "Rain" })).toBe("Rain")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "  " })).toBe("u.mp3")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "" })).toBe("u.mp3")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true })).toBe("u.mp3")
+  })
+
+  it("keeps a valid title, trimmed with whitespace collapsed and capped at 120", () => {
+    expect(title({ title: "Rain" })).toBe("Rain")
+    expect(title({ title: "  Soft \n rain\t\tat  night " })).toBe("Soft rain at night")
+    expect(title({ title: "x".repeat(300) })).toBe("x".repeat(120))
+  })
+
+  it("drops a non-string or empty title without rejecting the project", () => {
+    for (const t of [5, null, {}, ["a"], "", "  \n "]) {
+      const p = parseProject(withAsset({ title: t }))
+      expect(p).not.toBeNull()
+      expect(p!.assets.a1).not.toHaveProperty("title")
+    }
+  })
+
+  it("an old project without titles round-trips unchanged", () => {
+    const old = withAsset({})
+    expect(parseProject(old)).toEqual(old)
+    expect(parseProject(parseProject(old))).toEqual(old)
+  })
+
+  it("mergeClientProject keeps a stored asset's title and ignores the client's", () => {
+    const stored = withAsset({ title: "Rain" }) as unknown as Project
+    const client = { ...stored, assets: { a1: { ...stored.assets.a1, title: "Evil" } }, tracks: [{ id: "t1", clips: [] }] }
+    expect(mergeClientProject(client, stored)?.assets.a1.title).toBe("Rain")
   })
 })

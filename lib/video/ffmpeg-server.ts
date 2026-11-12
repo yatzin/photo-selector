@@ -4,14 +4,16 @@ import fs from "fs/promises"
 import { parsePictureSize, parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
 import { audioLevelFilters, type ClipAudio } from "./audio-levels"
-import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { adjoins, allClips, clipLength, expandLoops, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
 import { customExpr, stepsFor, whipBlurFilters } from "./transition-expr"
 import { CUT_AUDIO_FADE, isAudioCurve, isAudioTransitionType, isCustomTransition, isTransitionType, type AudioCurve, type EdgeTransition, type TransitionType } from "./transition-types"
 
-const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
+/** The ffmpeg binary to run: FFMPEG_PATH, or "ffmpeg" on the PATH. */
+export const ffmpegPath = () => process.env.FFMPEG_PATH || "ffmpeg"
+const ffmpeg = ffmpegPath
 
 /** Parses `ffmpeg -i` stderr: "Duration: 00:01:02.50" and an "Audio:" stream line. */
 export function parseProbe(stderr: string): { duration: number; hasAudio: boolean } {
@@ -591,7 +593,9 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * audio levels (Clip.audio) or a clip on the audio layer always takes the
  * uniform graph.
  */
-export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
+export function buildExportGraph(project: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
+  // A looping clip exports as its back-to-back copies; everything below sees plain clips.
+  const p = expandLoops(project)
   if (allClips(p).length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
   const inputs: string[][] = []

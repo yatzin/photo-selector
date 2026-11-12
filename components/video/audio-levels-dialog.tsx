@@ -8,7 +8,7 @@ import {
   type AudioFx, type AudioFxType, type ClipAudio,
 } from "@/lib/video/audio-levels"
 import { PREVIEW_CAP } from "@/lib/video/audio-preview"
-import { clipEnd, type Clip, type Project } from "@/lib/video/project"
+import { assetLabel, clipEnd, type Clip, type Project } from "@/lib/video/project"
 import { formatClock } from "@/lib/video/source-precision"
 import { cn } from "@/lib/utils"
 import { dbText, levelsSummary } from "@/lib/video/dialog-ui"
@@ -211,7 +211,7 @@ export function AudioLevelsDialog({ project, folder, clip, playhead, mediaUrl, o
   const [describe, setDescribe] = useState("")
   const gainDb = parseDb(gainText)
   const audio = gainDb === null ? null : normalizeClipAudio({ gainDb, fx })
-  const name = project.assets[clip.asset]?.file ?? "Missing file"
+  const name = Object.hasOwn(project.assets, clip.asset) ? assetLabel(project.assets[clip.asset]) : "Missing file"
 
   const el = useRef<HTMLAudioElement>(null)
   const graph = useRef<{ ctx: AudioContext; source: MediaElementAudioSourceNode; levels: LevelsChain | null } | null>(null)

@@ -17,6 +17,16 @@ describe("contentSecurityPolicy", () => {
     expect(csp).toContain("object-src 'none'")
   })
 
+  it("lets the Stock tab show thumbnails from the stock providers and nothing else off-site", () => {
+    const imgSrc = contentSecurityPolicy(false).split("; ").find((d) => d.startsWith("img-src ")) ?? ""
+    for (const host of ["https://api.openverse.org", "https://cdn.pixabay.com", "https://i.vimeocdn.com", "https://images.pexels.com"]) {
+      expect(imgSrc.split(" ")).toContain(host)
+    }
+    expect(imgSrc).toContain("'self'")
+    expect(imgSrc).not.toContain("*")
+    expect(imgSrc).not.toContain("http:")
+  })
+
   it("allows eval only in development, where React needs it", () => {
     expect(contentSecurityPolicy(false)).not.toContain("unsafe-eval")
     expect(contentSecurityPolicy(true)).toContain("'unsafe-eval'")
