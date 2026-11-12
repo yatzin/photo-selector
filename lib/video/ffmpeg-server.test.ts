@@ -1484,3 +1484,23 @@ describe("export honours loops", () => {
     expect(buildExportGraph(twoClips(), files)).toEqual(buildExportGraph(expandLoops(twoClips()), files))
   })
 })
+
+describe("a still with a transparent background (asset.alpha)", () => {
+  const p = (alpha: boolean): Project => ({
+    ...newProject("P"),
+    assets: { i: { file: "i.png", duration: 5, hasAudio: false, kind: "image", ...(alpha ? { alpha: true as const } : {}) } },
+    tracks: base([{ id: "c1", asset: "i", in: 0, out: 3 }]),
+  })
+  const g = (alpha: boolean) => buildExportGraph(p(alpha), { i: "/x/i.png" }).graph
+
+  it("is fitted without black padding, kept see-through and overlaid on the canvas", () => {
+    const graph = g(true)
+    expect(graph).toContain("format=yuva420p")
+    expect(graph).not.toContain("pad=")
+    expect(graph).toContain("overlay=")
+  })
+
+  it("a plain image still takes the flat, padded path", () => {
+    expect(g(false)).toContain("pad=")
+  })
+})

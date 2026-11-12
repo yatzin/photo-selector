@@ -13,9 +13,11 @@ import {
  * `source` is the Personal Storage path it was copied from ("<folder>/<name>"), so a
  * second import reuses it, or the original name of a file uploaded with Import.
  * `loopByDefault` (a video, e.g. an imported GIF) makes its new clips loop.
+ * `alpha` (an image) says the picture has transparent areas (a background
+ * removed): it is composited, not flattened, in the export.
  * `title` is a human title (e.g. a stock result's), shown instead of the file name.
  */
-export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string }
+export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string; alpha?: true }
 /** The name to show for an asset: its human title (a stock result's) when it has one, else its file name. */
 export const assetLabel = (a: Asset): string => (a.title !== undefined && a.title.trim() !== "" ? a.title : a.file)
 /**
@@ -642,6 +644,14 @@ export function removeTrack(p: Project, id: string): Project {
   return { ...p, tracks: p.tracks.filter((t) => t.id !== id) }
 }
 
+/** Points an image clip at another image asset (a version with its background removed); the same project for any other clip or asset. */
+export function setClipAsset(p: Project, clipId: string, assetId: string): Project {
+  const at = find(p, clipId)
+  const to = Object.hasOwn(p.assets, assetId) ? p.assets[assetId] : undefined
+  if (!at || isTextClip(at.clip) || !to || assetKind(to) !== "image" || at.clip.asset === assetId || !isStill(p, at.clip)) return p
+  return withTrack(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? { ...c, asset: assetId } : c)))
+}
+
 /** Mutes or unmutes one clip's sound (preview and export); unmuted stores no field. The same project when nothing changes. */
 export function setClipMuted(p: Project, clipId: string, muted: boolean): Project {
   const at = find(p, clipId)
@@ -1048,6 +1058,7 @@ export function parseProject(json: unknown): Project | null {
     if (a.kind !== undefined) parsedAssets[key].kind = a.kind
     if (a.source !== undefined) parsedAssets[key].source = a.source
     if (a.loopByDefault === true) parsedAssets[key].loopByDefault = true
+    if (a.alpha === true) parsedAssets[key].alpha = true
     // A title is cosmetic: anything unusable is dropped rather than rejecting the project.
     const title = typeof a.title === "string" ? a.title.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE).trim() : ""
     if (title) parsedAssets[key].title = title

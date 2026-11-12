@@ -3,11 +3,11 @@
 import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { deleteAssetAction, exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, exportStatusAction, importAssetAction, makeTransparentAction, startExportAction } from "@/lib/actions/video-projects"
 import { importStockAction } from "@/lib/actions/stock"
 import { stockKey } from "@/lib/stock/drag"
 import type { StockRef } from "@/lib/stock/types"
@@ -17,13 +17,16 @@ import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
   addClip, addTextClip, allClips, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
-  removeClip, resolveStart, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
+  removeClip, resolveStart, setClipAsset, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { withStockDropSize } from "@/lib/video/stock-drop"
 import { DEFAULT_TEXT } from "@/lib/video/text"
 import { usedTextColours } from "@/lib/video/text-colours"
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
-import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
+import { dragMove, IDENTITY, isIdentity, withScale } from "@/lib/video/transform"
+import { ZoomControl } from "./zoom-control"
+import { TransparentDialog } from "./transparent-dialog"
+import type { KeyOptions } from "@/lib/video/chroma"
 import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
 import type { Edge } from "@/lib/video/transition-types"
@@ -101,6 +104,8 @@ export function Editor({
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
   // The clip whose Audio levels dialog is open.
   const [audioFor, setAudioFor] = useState<string | null>(null)
+  // The image clip whose background the Make background transparent dialog is working on.
+  const [transparentFor, setTransparentFor] = useState<string | null>(null)
   const audioClip = audioFor ? allClips(project).find((c) => c.id === audioFor) : undefined
   // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
   const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
@@ -636,6 +641,36 @@ export function Editor({
     edit((p) => setTransform(p, id, IDENTITY))
   }
 
+  /** The selected image or video clip, whose picture the toolbar's zoom scales (not a text or a sound). */
+  const zoomClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) !== "audio" ? selectedClip : undefined
+  /** The selected image clip (not a video, text or sound): the toolbar's Transparency button works on it. */
+  const imageClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) === "image" ? selectedClip : undefined
+  const transparentClip = transparentFor ? allClips(project).find((c) => c.id === transparentFor) : undefined
+
+  /** Makes a transparent-background copy of the clip's image and points the clip at it (the original stays in Project media). One undo step. Resolves to an error message, or null. */
+  async function applyTransparent(clip: Clip, options: KeyOptions): Promise<string | null> {
+    try {
+      const r = await makeTransparentAction(folder, clip.asset, options)
+      if ("error" in r) return r.error
+      setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
+      const id = clip.id
+      edit((p) => setClipAsset(p, id, r.id))
+      return null
+    } catch {
+      return "Something went wrong making the background transparent."
+    }
+  }
+
+  /** Sets the selected picture's zoom (1 = fit the frame) about its centre. One undo step. */
+  function zoomSelected(scale: number) {
+    if (!zoomClip) return
+    const id = zoomClip.id
+    edit((p) => {
+      const clip = allClips(p).find((c) => c.id === id)
+      return clip ? setTransform(p, id, withScale(clip.transform ?? IDENTITY, scale)) : p
+    })
+  }
+
   /** Moves the clip selected on the canvas by fractions of the canvas (arrow keys); quick repeats make one undo step. */
   function nudge(dx: number, dy: number): boolean {
     if (!canvasSelected) return false
@@ -843,6 +878,12 @@ export function Editor({
                       </Button>
                     )
                   })}
+                {imageClip && (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => { player.pause(); setTransparentFor(imageClip.id) }} title="Make the image's background transparent" aria-label="Make background transparent">
+                    <Eraser className="h-4 w-4" /> Transparency
+                  </Button>
+                )}
+                {zoomClip && <ZoomControl scale={zoomClip.transform?.scale ?? 1} onChange={zoomSelected} />}
                 {transformed && (
                   <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
                     <RotateCcw className="h-4 w-4" /> Reset
@@ -902,6 +943,15 @@ export function Editor({
             if (edge) edit((p) => setEdgeTransition(p, id, edge, spec), undefined, true)
           }}
           onClose={() => setTransitionTarget(null)}
+        />
+      )}
+      {transparentClip && (
+        <TransparentDialog
+          key={transparentClip.id}
+          imageUrl={imageUrl(transparentClip.asset)}
+          name={assetLabel(project.assets[transparentClip.asset])}
+          onApply={(options) => applyTransparent(transparentClip, options)}
+          onClose={() => setTransparentFor(null)}
         />
       )}
       {audioClip && (

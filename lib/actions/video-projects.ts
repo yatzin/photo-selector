@@ -10,6 +10,7 @@ import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/l
 import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
+import { makeTransparent } from "@/lib/video/transparent-server"
 import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
 
 // Server actions for video projects. The user's folder always comes from the
@@ -209,4 +210,26 @@ export async function startExportAction(folder: string): Promise<{ jobId: string
 export async function exportStatusAction(jobId: string): Promise<ExportStatus> {
   const { userFolder } = await requireUserFolder()
   return exportStatus(userFolder, String(jobId))
+}
+
+/**
+ * Makes the background of project image `assetId` transparent (the picked
+ * colour, how close counts, edge-connected or everywhere; lib/video/chroma):
+ * a new PNG asset beside the original, which stays. The editor, on { id,
+ * asset }, adds the asset to its project and points the clip at it.
+ */
+export async function makeTransparentAction(
+  folder: string,
+  assetId: string,
+  options: { key: [number, number, number]; tolerance: number; contiguous: boolean }
+): Promise<{ id: string; asset: Asset } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  const a = z.string().min(1).max(100).safeParse(assetId)
+  if (!f.success || !a.success) return { error: "Invalid request." }
+  try {
+    return await makeTransparent(userFolder, f.data, a.data, options)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
 }

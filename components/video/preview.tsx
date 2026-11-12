@@ -310,7 +310,7 @@ export function Preview({
           src={still}
           alt=""
           draggable={false}
-          className="absolute object-contain"
+          className="absolute max-w-none object-contain"
           style={placement(aspectOf(clip.asset), W, H, transformOf(clip))}
           onLoad={(e) => learnAspect(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setBrokenImage(still)}
@@ -417,7 +417,7 @@ export function Preview({
   // The Alt hint: below the canvas when the gray margin has room for it, else inside at the bottom.
   // The overlay (and any drag on it) goes when the last clip does.
   if (!hasClips && gesture) setGesture(null)
-  const hint = hasClips && gesture ? (gesture.snapping ? "Hold Alt to turn snapping off" : "Snapping off") : null
+  const hint = hasClips && gesture ? (gesture.snapping ? (gesture.hundred ? "Snapped to 100% — hold Alt to turn snapping off" : "Hold Alt to turn snapping off") : "Snapping off") : null
   const hintOutside = box !== null && box.below >= HINT_ROOM
   const hintPill = (className: string) => (
     <div aria-hidden className={cn("pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow dark:bg-neutral-100/90 dark:text-neutral-900", className)}>
@@ -471,7 +471,7 @@ export function Preview({
                         onError={() => player.onVideoError(lane, slot)}
                         onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                         onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                        className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
+                        className={cn("absolute max-w-none object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
                         style={videoStyle}
                       />
                     </div>

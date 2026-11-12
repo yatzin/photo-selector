@@ -24,6 +24,7 @@ import { formatTimecode } from "@/lib/video/time"
 import { ClipMenu, type ClipMenuItem } from "./clip-menu"
 import { ClipWaveform } from "./clip-waveform"
 import { EditLengthDialog } from "./edit-length-dialog"
+import { FilmStrip } from "./film-strip"
 import { Thumb } from "./thumb"
 
 // The bottom timeline: a ruler and stacked tracks (layers), the top layer at
@@ -1421,7 +1422,19 @@ export function Timeline({
                             <Type aria-hidden className="h-3 w-3 shrink-0" />
                             <span className="truncate">{text.content.replace(/\s+/g, " ")}</span>
                           </span>
-                        ) : audio ? null : (
+                        ) : audio ? null : asset && !image && asset.duration > 0 ? (
+                          <FilmStrip
+                            url={mediaUrl(clip.asset)}
+                            poster={thumbUrl(clip.asset)}
+                            inSec={clip.in}
+                            outSec={clip.out}
+                            duration={asset.duration}
+                            loop={clip.loop}
+                            zoom={zoom}
+                            height={row - (tight ? 8 : 16) - 2}
+                            className={isBase ? "opacity-80" : "opacity-70"}
+                          />
+                        ) : (
                           <Thumb src={thumbUrl(clip.asset)} className={cn("pointer-events-none h-full w-full object-cover", isBase ? "opacity-80" : "opacity-70")} />
                         )}
                         {waveforms && audible && (

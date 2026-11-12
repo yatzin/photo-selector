@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   addClip, addTextClip, assetLabel, clipLength, newClipLength, expandLoops, maxLoopLength, MAX_LOOP_COPIES, isLooping, setClipLoop, showsSourceWindow, tailHandle, headHandle, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
-  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipMuted, setClipText, setTransform,
+  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipAsset, setClipMuted, setClipText, setTransform,
   splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Asset, type Clip, type Edit, type Project,
 } from "./project"
 import { commit, createHistory, undo } from "./history"
@@ -1811,5 +1811,29 @@ describe("asset titles", () => {
     const stored = withAsset({ title: "Rain" }) as unknown as Project
     const client = { ...stored, assets: { a1: { ...stored.assets.a1, title: "Evil" } }, tracks: [{ id: "t1", clips: [] }] }
     expect(mergeClientProject(client, stored)?.assets.a1.title).toBe("Rain")
+  })
+})
+
+describe("setClipAsset and alpha assets", () => {
+  const img = (alpha = false): Asset => ({ file: "a.png", duration: 5, hasAudio: false, kind: "image", ...(alpha ? { alpha: true as const } : {}) })
+  const base = (): Project => ({
+    ...newProject("P"),
+    assets: { i: img(), j: img(true), v: { file: "v.mp4", duration: 4, hasAudio: false } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "i", in: 0, out: 3, start: 0 }] }],
+  })
+
+  it("points an image clip at another image asset, and refuses a video, a missing asset or the same one", () => {
+    const p = base()
+    expect(setClipAsset(p, "c1", "j").tracks[0].clips[0].asset).toBe("j")
+    expect(setClipAsset(p, "c1", "v")).toBe(p)
+    expect(setClipAsset(p, "c1", "nope")).toBe(p)
+    expect(setClipAsset(p, "c1", "i")).toBe(p)
+    expect(setClipAsset(p, "zzz", "j")).toBe(p)
+  })
+
+  it("keeps the alpha flag through parseProject", () => {
+    const parsed = parseProject(JSON.parse(JSON.stringify({ ...base(), version: 3 })))
+    expect(parsed?.assets.j.alpha).toBe(true)
+    expect(parsed?.assets.i.alpha).toBeUndefined()
   })
 })

@@ -5,7 +5,7 @@ import { FlipHorizontal2, FlipVertical2, Maximize2, RotateCw } from "lucide-reac
 import { cn } from "@/lib/utils"
 import {
   angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
-  snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
+  snapCorner, snapEdge, snapScale, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
 } from "@/lib/video/transform"
 
 // The layer over the preview canvas that edits where a clip's picture sits.
@@ -46,7 +46,7 @@ export type TransformTarget = {
 type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge } | { kind: "rotate" }
 
 /** A canvas drag in progress, for the preview's hint: whether snapping is on (Alt held turns it off). */
-export type GestureState = { snapping: boolean } | null
+export type GestureState = { snapping: boolean; /** The drag is held at the picture's 100% size. */ hundred?: boolean } | null
 
 const CORNERS: { corner: Corner; label: string; cursor: string; left: string; top: string }[] = [
   { corner: "tl", label: "Resize from top left", cursor: "cursor-nwse-resize", left: "0%", top: "0%" },
@@ -144,6 +144,7 @@ export function TransformOverlay({
       const threshold = SNAP_PX * k
       let t: Transform
       let g: Guides | null = null
+      let hundred = false
       if (gesture.kind === "move") {
         t = dragMove(t0, dx / W, dy / H)
         if (snap) {
@@ -156,6 +157,15 @@ export function TransformOverlay({
         // dragCorner takes the drag in the clip's own axes and keeps the opposite corner where it shows.
         t = dragCorner(t0, gesture.corner, aspect, W, H, dx, dy, { anchor: "opposite" })
         if (snap && rot0 === 0) ({ t, guides: g } = snapCorner(t0, gesture.corner, aspect, W, H, t, threshold))
+        // The picture's 100% size pulls too (a turned one included).
+        if (snap) {
+          const s = snapScale(t0, gesture.corner, aspect, W, H, t, threshold)
+          if (s.snapped) {
+            t = s.t
+            g = null
+            hundred = true
+          }
+        }
       } else if (gesture.kind === "edge") {
         // Along the clip's own axis: a turned clip's crop handle follows its side.
         const local = toLocal(dx, dy, rot0)
@@ -170,7 +180,7 @@ export function TransformOverlay({
       current = t
       onDraft({ id, transform: t })
       setGuides(g)
-      onGesture?.({ snapping: snap })
+      onGesture?.({ snapping: snap, hundred })
     }
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return

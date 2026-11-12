@@ -366,6 +366,22 @@ export function snapEdge(
 }
 
 /**
+ * `t1` (a corner drag of `t0`) pulled back to the picture's 100% size (scale 1,
+ * as it fits the canvas) when its visible width is within `thresholdPx` of that
+ * size, still scaled about the opposite corner; otherwise `t1`. Works for a
+ * turned picture too. `snapped` says whether it pulled.
+ */
+export function snapScale(
+  t0: Transform, corner: Corner, contentAspect: Content, canvasW: number, canvasH: number, t1: Transform, thresholdPx: number
+): { t: Transform; snapped: boolean } {
+  if (!(t1.scale > 0) || !(t0.scale > 0)) return { t: t1, snapped: false }
+  const w = clipRect(contentAspect, canvasW, canvasH, t1).visible.w
+  const at100 = w / t1.scale
+  if (!(Math.abs(w - at100) <= thresholdPx)) return { t: t1, snapped: false }
+  return { t: scaleAbout(t0, contentAspect, canvasW, canvasH, corner, 1 / t0.scale), snapped: true }
+}
+
+/**
  * `t1` (a corner drag of `t0`) adjusted so the dragged corner lands on the
  * nearest canvas edge or centre line within `thresholdPx`, still scaled about
  * the opposite corner; and the lines the corner sits on.
@@ -387,4 +403,25 @@ export function snapCorner(
   else return { t: t1, guides: { x: [], y: [] } }
   const p = cornerOf(clipRect(contentAspect, canvasW, canvasH, t).visible, corner)
   return { t, guides: { x: xs.filter((l) => Math.abs(l - p.x) < 0.5), y: ys.filter((l) => Math.abs(l - p.y) < 0.5) } }
+}
+
+const ZOOM_FACTOR = 1.25
+
+/** `t` at `scale` (clamped), about the picture's own centre: it stays where it is. */
+export function withScale(t: Transform, scale: number): Transform {
+  return normalizeTransform({ ...t, scale: Number.isFinite(scale) ? scale : t.scale })
+}
+
+/** The scale one zoom step in (+1) or out (-1) from `scale`: 25% steps to whole percents, landing on 100% when a step would cross it. */
+export function zoomedScale(scale: number, dir: 1 | -1): number {
+  const next = scale * ZOOM_FACTOR ** dir
+  const stepped = (scale - 1) * (next - 1) < 0 ? 1 : Math.round(next * 100) / 100
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, stepped === scale ? scale + dir * 0.01 : stepped))
+}
+
+/** A typed zoom ("150", "150%") as a scale (1.5), clamped to the limits; null when it isn't a number. */
+export function parseZoomPercent(text: string): number | null {
+  const m = /^\s*(\d+(?:\.\d+)?|\.\d+)\s*%?\s*$/.exec(text)
+  if (!m) return null
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(m[1]) / 100))
 }

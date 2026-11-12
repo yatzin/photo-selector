@@ -444,6 +444,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
    * plays the footage beyond its in and out points, a still holds its first
    * and last frame (tpad). The sound runs as soundSpan says.
    */
+  /** A still whose picture has transparent areas (a background removed): kept see-through, not flattened onto black. */
+  const keepsAlpha = (c: Clip) => !isTextClip(c) && isImage(c) && p.assets[c.asset]?.alpha === true
   const source = (c: Clip, pre = 0, post = 0) => {
     const i = inputs.length
     const file = fileFor(c)
@@ -457,7 +459,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
           ...transformFilters(t, anim ? { ...(anim.alpha ? { afterFlips: [anim.alpha] } : {}), ...(anim.angle ? { angle: anim.angle } : {}) } : {}),
           ...(anim?.scale ? [anim.scale] : []),
         ].join(",")
-      : isIdentity(c.transform)
+      : isIdentity(c.transform) && !keepsAlpha(c)
       ? frame
       : [
           `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
@@ -469,7 +471,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
       const hold = pre > 0 || post > 0 ? `,tpad=start_duration=${num(pre)}:stop_duration=${num(post)}:start_mode=clone:stop_mode=clone` : ""
       // A turned still keeps its transparent corners, and text its transparency.
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 || keepsAlpha(c) ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
       parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
@@ -610,7 +612,7 @@ export function buildExportGraph(project: Project, files: Record<string, string>
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || (!isTextClip(c) && p.assets[c.asset]?.alpha === true) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 
