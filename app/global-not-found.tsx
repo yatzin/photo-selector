@@ -1,11 +1,8 @@
 import type { Metadata } from "next"
-import { Poppins, Open_Sans } from "next/font/google"
+import { openSans, poppins } from "./fonts"
 import Link from "next/link"
 import { Images, SearchX } from "lucide-react"
 import "./globals.css"
-
-const openSans = Open_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-open-sans" })
-const poppins = Poppins({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-poppins" })
 
 export const metadata: Metadata = {
   title: "Not Found — Photo Selector",

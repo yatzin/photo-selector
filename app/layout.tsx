@@ -1,13 +1,9 @@
 import type { Metadata } from "next";
-import { Poppins, Open_Sans, Geist_Mono } from "next/font/google";
+import { openSans, poppins, geistMono } from "./fonts";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
 import { DragGhost } from "@/components/drag-ghost";
 import "./globals.css";
-
-const openSans = Open_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-open-sans" });
-const poppins = Poppins({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-poppins" });
-const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
   title: "Photo Selector",
