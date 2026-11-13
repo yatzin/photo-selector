@@ -53,7 +53,6 @@ export function FormatMenus({ width, height, disabled, folder, onChanged, layout
       <DropdownMenu>
         <DropdownMenuTrigger disabled={off} className={trigger} aria-label={`Orientation: ${ORIENTATIONS.find((o) => o.id === orientation)!.label}`} title={disabled ? "Not while exporting" : "Wide or tall video"}>
           <OrientationIcon className="h-4 w-4" />
-          <span className="hidden sm:inline">{ORIENTATIONS.find((o) => o.id === orientation)!.label}</span>
           <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="center" className="min-w-72">
@@ -81,7 +80,6 @@ export function FormatMenus({ width, height, disabled, folder, onChanged, layout
         <DropdownMenuTrigger disabled={off} className={trigger} aria-label={`Resolution: ${current?.label ?? sizeText(width, height)}`} title={disabled ? "Not while exporting" : "How sharp the exported video is"}>
           <Monitor className="h-4 w-4" />
           <span className="hidden sm:inline">{current?.label ?? "Custom"}</span>
-          <span className="hidden text-xs tabular-nums text-muted-foreground lg:inline">{sizeText(width, height)}</span>
           <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="center" className="min-w-80">
