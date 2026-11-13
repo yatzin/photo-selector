@@ -3,23 +3,32 @@
 import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Layers, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, Repeat, RotateCcw, SkipBack, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { deleteAssetAction, exportStatusAction, importAssetAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, exportStatusAction, createTemplateAction, importAssetAction, previewRetimeAction, retimeAssetAction, saveTemplateSlotsAction, startExportAction } from "@/lib/actions/video-projects"
+import { importStockAction } from "@/lib/actions/stock"
+import { stockKey } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
 import { mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
-  removeClip, resolveStart, setClipAudio, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
+  addClip, addTextClip, allClips, placeDropped, placeDroppedText, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  pasteClip, removeClip, resolveStart, retimeClip, rippleRemoveClip, setClipAudio, setClipKey, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
+import { withStockDropSize } from "@/lib/video/stock-drop"
 import { DEFAULT_TEXT } from "@/lib/video/text"
-import { usedTextColours } from "@/lib/video/text-colours"
-import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
-import { dragMove, IDENTITY, isIdentity } from "@/lib/video/transform"
+import { usedTextColors } from "@/lib/video/text-colors"
+import { DEFAULT_ZOOM, sliderToZoom, zoomToSlider } from "@/lib/video/timeline-math"
+import { dragMove, IDENTITY, isIdentity, withScale } from "@/lib/video/transform"
+import { ZoomControl } from "./zoom-control"
+import { TransparentDialog } from "./transparent-dialog"
+import { SpeedDialog } from "./speed-dialog"
+import { TemplateSetupDialog } from "./template-setup-dialog"
+import type { KeyOptions } from "@/lib/video/chroma"
 import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
 import type { Edge } from "@/lib/video/transition-types"
@@ -32,7 +41,7 @@ import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
-import { Timeline, type DropTarget } from "./timeline"
+import { TEXT_DRAG_TYPE, Timeline, type DropTarget, type PasteAt } from "./timeline"
 import { TransitionDialog, type TransitionTarget } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 import { useMediaImport } from "./use-media-import"
@@ -97,6 +106,12 @@ export function Editor({
   const textClip = textFor ? allClips(project).find((c) => c.id === textFor) : undefined
   // The clip whose Audio levels dialog is open.
   const [audioFor, setAudioFor] = useState<string | null>(null)
+  // The image clip whose background the Make background transparent dialog is working on.
+  const [transparentFor, setTransparentFor] = useState<string | null>(null)
+  // The video clip whose Speed / Reverse dialog is open.
+  const [speedFor, setSpeedFor] = useState<string | null>(null)
+  // The template setup dialog: create one from this project, or change this template's slots.
+  const [templateSetup, setTemplateSetup] = useState<"create" | "edit" | null>(null)
   const audioClip = audioFor ? allClips(project).find((c) => c.id === audioFor) : undefined
   // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
   const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
@@ -212,9 +227,12 @@ export function Editor({
 
   /** A still shown in the preview while an image clip is current (the converted preview, so HEIC and DNG show too). */
   const imageUrl = useCallback(
-    (assetId: string) => {
+    (assetId: string, key?: KeyOptions) => {
       const asset = project.assets[assetId]
-      return asset && assetKind(asset) === "image" ? mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "preview", assetId) : ""
+      if (!asset || assetKind(asset) !== "image") return ""
+      // A keyed clip shows its background-cleared picture, made on the server from the same image.
+      if (key) return `/api/video-keyed/${encodeURIComponent(folder)}?asset=${encodeURIComponent(assetId)}&r=${key.key[0]}&g=${key.key[1]}&b=${key.key[2]}&tol=${key.tolerance}&c=${key.contiguous ? 1 : 0}`
+      return mediaUrl("video-projects", [userFolder, folder, "assets"], asset.file, "preview", assetId)
     },
     [project.assets, userFolder, folder]
   )
@@ -228,7 +246,9 @@ export function Editor({
   )
   /** A video's or a sound file's URL, for the Edit length dialog's preview. */
   const lengthMediaUrl = useCallback((assetId: string) => videoUrl(assetId) || audioUrl(assetId), [videoUrl, audioUrl])
-  const player = usePreviewPlayer(project, videoUrl, audioUrl)
+  const [storedLoop, setStoredLoop] = useStoredValue("ps.video.loop")
+  const loop = storedLoop === "1"
+  const player = usePreviewPlayer(project, videoUrl, audioUrl, loop)
   // Import: files from the computer land in Project media as each one finishes (the server owns assets: take the new one from its reply).
   /** The project's size changed (chosen in the format menus, or taken from a new project's first picture). */
   const applySize = useCallback((size: { width: number; height: number }, announce = false) => {
@@ -319,20 +339,81 @@ export function Editor({
     const id = newId()
     // Clips may have changed while importing; addClip slides the clip clear of the others, and a layer
     // removed meanwhile makes the clip a new top layer rather than dropping it.
-    edit((p) => addClip(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    edit((p) => placeDropped(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
     // The ghost had a guessed length before the import: say so when the real length slid the clip along.
+    if (target.on) return
     const p = latest.current
     const track = Math.min(target.track, p.tracks.length)
-    const length = assetKind(imported.asset) === "image" ? DEFAULT_IMAGE : imported.asset.duration
+    const length = newClipLength(imported.asset)
     const start = landing(p, track, length, target.start, id)
+    if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
+  }
+
+  /**
+   * Downloads a Stock tab result into Project media (or finds the asset made from it before); its asset id and
+   * asset, or null when it failed. Shares importFile's one-at-a-time guard: a second drop while one is
+   * downloading is turned away with the same notice, not queued.
+   */
+  async function importStock(ref: StockRef): Promise<{ id: string; asset: Asset } | null> {
+    if (importingRef.current) {
+      toast.info("Wait for the current import to finish.")
+      return null
+    }
+    importingRef.current = true
+    setImporting(stockKey(ref))
+    try {
+      const r = await importStockAction(folder, ref)
+      if ("error" in r) {
+        toast.error(r.error)
+        return null
+      }
+      // The server owns assets: take the new (or reused) one from its reply.
+      setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
+      if (r.format) applySize(r.format, true)
+      return { id: r.id, asset: r.asset }
+    } catch {
+      toast.error("Something went wrong downloading that file.")
+      return null
+    } finally {
+      importingRef.current = false
+      setImporting(null)
+    }
+  }
+
+  /** A Stock tab result dropped on Project media: downloaded in, not placed. */
+  async function stockToMedia(ref: StockRef) {
+    const known = Object.values(latest.current.assets).some((a) => a.source === stockKey(ref))
+    const imported = await importStock(ref)
+    if (imported) toast.success(known ? `${assetLabel(imported.asset)} is already in Project media` : `Added ${assetLabel(imported.asset)} to Project media`)
+  }
+
+  /** A Stock tab result dropped on the timeline: download it, then put it where it was dropped (a sound on the audio layer). */
+  async function dropFromStock(ref: StockRef, target: DropTarget) {
+    const imported = await importStock(ref)
+    if (!imported) return
+    const audio = assetKind(imported.asset) === "audio"
+    // Dropped on the audio layer as an audio result, but the file isn't a sound file: the layer takes sound only.
+    if (target.track === AUDIO_TRACK && !audio) {
+      toast.info("Only sound files go on the audio layer. The file is in Project media.")
+      return
+    }
+    const id = newId()
+    // As dropFromInbox: addClip slides the clip clear of clips added meanwhile, and puts a sound on the audio layer.
+    edit((p) => placeDropped(p, imported.id, Math.min(target.track, p.tracks.length), target, id))
+    if (target.on) return
+    const p = latest.current
+    const length = newClipLength(imported.asset)
+    const start = audio
+      ? resolveStart(trackAt(p, AUDIO_TRACK)?.clips ?? [], length, target.start, id)
+      : landing(p, Math.min(target.track, p.tracks.length), length, target.start, id)
     if (Math.abs(start - target.start) > 0.05) toast.info(`Placed at ${formatTimecode(start)} to avoid overlap`)
   }
 
   /**
    * A file dropped on the player: a clip at the playhead (as it was at the
    * drop) on the lowest layer free for its whole length there, a new layer when
-   * none is (up to MAX_TRACKS), selected so its frame shows. A Personal Storage file is
-   * imported first and placed in the project as it is then. One undo step.
+   * none is (up to MAX_TRACKS), selected so its frame shows. A Personal Storage file (or a
+   * Stock tab result) is imported first and placed in the project as it is then. One undo step.
    */
   async function dropOnPlayer(drop: MediaDrop) {
     const at = playhead
@@ -344,12 +425,12 @@ export function Editor({
       assetId = drop.id
       asset = known
     } else {
-      const imported = await importFile(drop.folder, drop.name)
+      const imported = drop.kind === "stock" ? await importStock(drop.ref) : await importFile(drop.folder, drop.name)
       if (!imported) return
       assetId = imported.id
       asset = imported.asset
     }
-    const length = assetKind(asset) === "image" ? DEFAULT_IMAGE : asset.duration
+    const length = newClipLength(asset)
     if (assetKind(asset) === "audio") {
       // A sound file goes on the audio layer at the playhead (slid clear of its clips there).
       const id = newId()
@@ -366,9 +447,13 @@ export function Editor({
     }
     const id = newId()
     // Placed on the layer free in the project the edit applies to (it may be newer than `latest`).
+    // A stock result dropped on the scene comes in small and centred, not full frame.
+    const small = drop.kind === "stock"
     edit((p) => {
       const free = freeTrackFor(p, at, length)
-      return free === null ? p : addClip(p, assetId, free, { start: at }, id)
+      if (free === null) return p
+      const added = addClip(p, assetId, free, { start: at }, id)
+      return small ? withStockDropSize(added, id) : added
     })
     setSelectedId(id)
     // A free layer takes it at the playhead; only the timeline's end limit could move it.
@@ -384,7 +469,7 @@ export function Editor({
    */
   async function deleteMedia(assetId: string): Promise<boolean> {
     const before = latest.current
-    const file = before.assets[assetId]?.file ?? "the file"
+    const file = Object.hasOwn(before.assets, assetId) ? assetLabel(before.assets[assetId]) : "the file"
     try {
       const r = await deleteAssetAction(folder, assetId)
       if ("error" in r) {
@@ -494,6 +579,13 @@ export function Editor({
     openText(id)
   }
 
+  /** The Add text button dropped on the timeline: a text clip at that layer and time (or beside the clip it hit), selected, nothing opened. One undo step. */
+  function dropText(target: DropTarget) {
+    const id = newId()
+    edit((p) => placeDroppedText(p, DEFAULT_TEXT, Math.min(target.track, p.tracks.length), target, id))
+    setSelectedId(id)
+  }
+
   function addToTimeline(assetId: string) {
     const id = newId()
     // After the base track's last clip (a sound file: after the audio layer's).
@@ -518,9 +610,12 @@ export function Editor({
   const playheadHits = clipsAt(project, playhead)
   // The audio layer isn't among the picture layers clipsAt sees: a selected audio clip under the playhead splits too.
   const selectedAudio = selectedId ? project.audioTrack?.clips.find((c) => c.id === selectedId) : undefined
-  const splitTarget = selectedId
+  const splitCandidate = selectedId
     ? (playheadHits.tracks.find((h) => h?.clip.id === selectedId)?.clip.id ?? (selectedAudio && playhead >= selectedAudio.start && playhead < clipEnd(selectedAudio) ? selectedAudio.id : null))
     : (playheadHits.top?.clip.id ?? null)
+  // A looping clip isn't split (splitClip isn't loop-aware): turn Loop off first.
+  const splitClipFound = splitCandidate ? allClips(project).find((c) => c.id === splitCandidate) : undefined
+  const splitTarget = splitClipFound && isLooping(project, splitClipFound) ? null : splitCandidate
 
   /** Splits at the playhead (S, or the toolbar); false when there's no clip under it. One undo step. */
   function splitAtPlayhead(): boolean {
@@ -529,6 +624,52 @@ export function Editor({
     const at = playhead
     const splitId = newId()
     edit((p) => splitClip(p, id, at, splitId))
+    return true
+  }
+
+  /** Ripple delete (Shift+Delete, or the clip's menu): removes the selected clip and closes the gap on its layer; false with no selection. One undo step. */
+  function rippleDeleteSelected(): boolean {
+    if (!selectedId) return false
+    const id = selectedId
+    edit((p) => rippleRemoveClip(p, id))
+    setSelectedId(null)
+    return true
+  }
+
+  // The copied clip (every setting with it) and the layer it came from; Ctrl+C / Ctrl+V and the clip's menu.
+  const [clipboard, setClipboard] = useState<{ clip: Clip; track: number } | null>(null)
+
+  /** Copies clip `id` (default: the selected one) for pasting; false when there's none. */
+  function copyClip(id: string | null = selectedId): boolean {
+    if (!id) return false
+    const p = latest.current
+    const clip = allClips(p).find((c) => c.id === id)
+    if (!clip) return false
+    const track = trackAt(p, AUDIO_TRACK)?.clips.some((c) => c.id === id) ? AUDIO_TRACK : p.tracks.findIndex((t) => t.clips.some((c) => c.id === id))
+    setClipboard({ clip: JSON.parse(JSON.stringify(clip)) as Clip, track })
+    toast.success("Copied. Paste puts it at the playhead.")
+    return true
+  }
+
+  // Filled by the timeline: where the mouse is over it (layer, time, the clip under it).
+  const pasteAt = useRef<(() => PasteAt | null) | null>(null)
+
+  /**
+   * Pastes the copied clip under the mouse: on the layer it's over, at the time
+   * under it, in front of or behind a clip it's over, the clips after it moving
+   * later to make room. With the mouse elsewhere it goes at the playhead on the
+   * layer it came from. False with nothing copied. One undo step.
+   */
+  function pasteCopied(): boolean {
+    if (!clipboard) return false
+    const id = newId()
+    const at = pasteAt.current?.() ?? null
+    // A picture clip can't go on the audio layer: it keeps its own layer there.
+    const track = at && at.track !== AUDIO_TRACK ? at.track : clipboard.track
+    const start = at ? at.start : playhead
+    edit((p) => pasteClip(p, clipboard.clip, track, start, id, at?.on))
+    if (allClips(latest.current).some((c) => c.id === id)) setSelectedId(id)
+    else toast.info("There's no room to paste it there.")
     return true
   }
 
@@ -566,6 +707,68 @@ export function Editor({
     edit((p) => setTransform(p, id, IDENTITY))
   }
 
+  /** The selected image or video clip, whose picture the toolbar's zoom scales (not a text or a sound). */
+  const zoomClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) !== "audio" ? selectedClip : undefined
+  const transparentClip = transparentFor ? allClips(project).find((c) => c.id === transparentFor) : undefined
+
+  /** Saves this project as a template (a copy; the project is unchanged), or changes this template's slots. Resolves to an error message, or null. */
+  async function saveTemplateSetup(input: { name: string; description: string; slots: Record<string, string> }): Promise<string | null> {
+    try {
+      // The server works from what is stored: send pending edits first.
+      if (!(await flush())) return "Couldn't save your latest edits first. Try again."
+      if (templateSetup === "edit") {
+        const r = await saveTemplateSlotsAction(folder, { description: input.description, slots: input.slots })
+        if ("error" in r) return r.error
+        // Replaceable clips now hold placeholders and their media is gone: reload the project as stored (the undo history starts over).
+        setEditor(initialState(r.project))
+        setSelectedId(null)
+        toast.success("Template slots saved. Replaceable clips now show placeholders.")
+        return null
+      }
+      const r = await createTemplateAction(folder, input)
+      if ("error" in r) return r.error
+      toast.success(`Template “${input.name}” saved. Start a project from it on the Video Editing page.`)
+      return null
+    } catch {
+      return "Something went wrong saving the template."
+    }
+  }
+
+  const speedClip = speedFor ? allClips(project).find((c) => c.id === speedFor) : undefined
+
+  /** Speed / Reverse: the server makes the retimed copy (or gives the original back), then the clip points at it. One undo step. Resolves to an error message, or null. */
+  async function applySpeed(clip: Clip, speed: number, reverse: boolean): Promise<string | null> {
+    try {
+      const r = await retimeAssetAction(folder, clip.asset, { in: clip.in, out: clip.out, speed, reverse })
+      if ("error" in r) return r.error
+      setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [r.id]: r.asset } } }))
+      const id = clip.id
+      // Checked on the project as it is now plus the new asset (the edit itself lands on the next render).
+      const now = latest.current
+      const probe = { ...now, assets: { ...now.assets, [r.id]: r.asset } }
+      if (retimeClip(probe, id, r.id, r.in, r.out) === probe) return "There isn't room on the timeline for that length."
+      edit((p) => retimeClip(p, id, r.id, r.in, r.out))
+      return null
+    } catch {
+      return "Something went wrong changing the speed."
+    }
+  }
+
+  /** Sets (or clears) the clip's transparent background; the image file is untouched and the player and export draw it keyed. One undo step. */
+  function applyKey(clipId: string, key: KeyOptions | undefined) {
+    edit((p) => setClipKey(p, clipId, key))
+  }
+
+  /** Sets the selected picture's zoom (1 = fit the frame) about its centre. One undo step. */
+  function zoomSelected(scale: number) {
+    if (!zoomClip) return
+    const id = zoomClip.id
+    edit((p) => {
+      const clip = allClips(p).find((c) => c.id === id)
+      return clip ? setTransform(p, id, withScale(clip.transform ?? IDENTITY, scale)) : p
+    })
+  }
+
   /** Moves the clip selected on the canvas by fractions of the canvas (arrow keys); quick repeats make one undo step. */
   function nudge(dx: number, dy: number): boolean {
     if (!canvasSelected) return false
@@ -591,6 +794,10 @@ export function Editor({
         if (key === "z" || (key === "y" && e.ctrlKey && !e.shiftKey)) {
           e.preventDefault()
           step(key === "z" && !e.shiftKey ? "undo" : "redo")
+        } else if (key === "c" && !e.shiftKey) {
+          if (copyClip()) e.preventDefault()
+        } else if (key === "v" && !e.shiftKey) {
+          if (pasteCopied()) e.preventDefault()
         }
         return
       }
@@ -611,7 +818,7 @@ export function Editor({
       } else if (e.key === "s" || e.key === "S") {
         if (splitAtPlayhead()) e.preventDefault()
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (deleteSelected()) e.preventDefault()
+        if (e.shiftKey ? rippleDeleteSelected() : deleteSelected()) e.preventDefault()
       } else if (e.key === "m" || e.key === "M") {
         if (toggleMuteSelected()) e.preventDefault()
       } else if (e.key === "Escape" && selectedId) {
@@ -625,7 +832,7 @@ export function Editor({
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
-      <div className="grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-border/60 px-4">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="flex min-w-0 items-center gap-3">
         <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
           <ArrowLeft className="h-4 w-4" />
@@ -641,13 +848,78 @@ export function Editor({
           </span>
         </span>
         <ImportButton importer={importer} />
+        {project.template?.master && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateSetup("edit")} title="Change which clips are replaceable and their labels">
+            <Layers className="h-4 w-4" /> Template slots
+          </Button>
+        )}
+        {!project.template?.master && allClips(project).length > 0 && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateSetup("create")} title="Save this project as a template with replaceable clips">
+            <Layers className="h-4 w-4" /> Create template
+          </Button>
+        )}
+        <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
+        <div role="toolbar" aria-label="Edit tools" className="flex min-w-0 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
+          <Undo2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
+          <Redo2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
+          <SquareSplitHorizontal className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={addText} draggable onDragStart={(e) => { e.dataTransfer.setData(TEXT_DRAG_TYPE, "1"); e.dataTransfer.effectAllowed = "copy" }} title="Add a text clip at the playhead, or drag it onto the timeline">
+          <Type className="h-4 w-4" /> Add text
+        </Button>
+        {selectedCuts && selectedClip &&
+          (["before", "after"] as const).map((side) => {
+            // A neighbour there: the cut's dialog; a free edge: the clip's own in or out transition (a text's animation).
+            const holder = selectedCuts[side]
+            const edge: Edge = side === "before" ? "in" : "out"
+            const set = holder ? null : (edge === "in" ? selectedClip.edgeIn : selectedClip.edgeOut)
+            const what = holder
+              ? `Transition ${side}${isAudioClip(project, selectedClip) ? "" : " / audio overlap"}`
+              : isTextClip(selectedClip)
+                ? `${edge === "in" ? "In" : "Out"} animation (Edit text)`
+                : `Transition ${edge}${set ? `: ${edgeTransitionName(set.type, edge)}, ${Number(set.duration.toFixed(2))} s` : ""}`
+            return (
+              <Button
+                key={side}
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => (holder ? openTransition(holder) : openEdge(selectedClip.id, edge))}
+                title={what}
+                aria-label={holder ? `Transition ${side}` : `Transition ${edge}`}
+                className={cn(side === "after" && "[&_svg]:-scale-x-100", set && "text-editor-accent")}
+              >
+                <Blend className="h-4 w-4" />
+              </Button>
+            )
+          })}
+        {zoomClip && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => { player.pause(); setTransparentFor(zoomClip.id) }} title={zoomClip.key ? "Change or remove the transparent background" : "Make the background transparent"} aria-label="Make background transparent">
+            <Eraser className={cn("h-4 w-4", zoomClip.key && "text-editor-accent")} /> Transparency
+          </Button>
+        )}
+        {zoomClip && <ZoomControl scale={zoomClip.transform?.scale ?? 1} onChange={zoomSelected} />}
+        {transformed && (
+          <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
+            <RotateCcw className="h-4 w-4" /> Reset
+          </Button>
+        )}
         </div>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-3">
         <FormatMenus width={project.width} height={project.height} folder={folder} disabled={exportProgress !== null} onChanged={(size) => {
           // Turning the video to the other orientation turns the preview layout with it.
           if (orientationOf(size.width, size.height) !== orientationOf(project.width, project.height)) setStoredLayout(orientationOf(size.width, size.height))
           applySize(size)
         }} layout={layout} onLayout={setStoredLayout} />
-        <div className="flex justify-end">
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>
           {exportProgress === null ? <Download className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           {exportProgress === null ? "Export" : `Exporting ${Math.round(exportProgress * 100)}%`}
@@ -674,7 +946,7 @@ export function Editor({
           </div>
           {/* Kept mounted while folded, so open folders and what was loaded are still there on reopening. */}
           <div className={cn("min-h-0 flex-1", mediaCollapsed && "hidden")}>
-            <FileTree temp={temp} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} onCopyTemp={(f, n) => void copyToMedia(f, n)} />
+            <FileTree temp={temp} project={project} thumbUrl={thumbUrl} importing={importing} onAdd={addToTimeline} onDelete={deleteMedia} onImportFiles={importer.add} onCopyTemp={(f, n) => void copyToMedia(f, n)} onImportStock={(r) => void stockToMedia(r)} />
           </div>
         </aside>
         <div ref={column} className={cn("flex min-w-0 flex-1", sideBySide ? "flex-row-reverse" : "flex-col")}>
@@ -731,65 +1003,43 @@ export function Editor({
             >
               <div className="flex h-full min-w-0 items-center gap-1 overflow-hidden px-0.5">
                 <span className="shrink-0 tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
-                <div aria-hidden className="mx-2 h-5 w-px bg-border" />
-                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
-                  <Undo2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("redo")} disabled={!canRedo(editor.history)} title="Redo (Ctrl+Shift+Z / ⌘⇧Z or Ctrl+Y)" aria-label="Redo">
-                  <Redo2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={splitAtPlayhead} disabled={!splitTarget} title={selectedId && !splitTarget ? "Move the playhead over the selected clip to split it" : "Split at playhead (S)"} aria-label="Split at playhead">
-                  <SquareSplitHorizontal className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
-                  <Type className="h-4 w-4" /> Add text
-                </Button>
-                {selectedCuts && selectedClip &&
-                  (["before", "after"] as const).map((side) => {
-                    // A neighbour there: the cut's dialog; a free edge: the clip's own in or out transition (a text's animation).
-                    const holder = selectedCuts[side]
-                    const edge: Edge = side === "before" ? "in" : "out"
-                    const set = holder ? null : (edge === "in" ? selectedClip.edgeIn : selectedClip.edgeOut)
-                    const what = holder
-                      ? `Transition ${side}${isAudioClip(project, selectedClip) ? "" : " / audio overlap"}`
-                      : isTextClip(selectedClip)
-                        ? `${edge === "in" ? "In" : "Out"} animation (Edit text)`
-                        : `Transition ${edge}${set ? `: ${edgeTransitionName(set.type, edge)}, ${Number(set.duration.toFixed(2))} s` : ""}`
-                    return (
-                      <Button
-                        key={side}
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        onClick={() => (holder ? openTransition(holder) : openEdge(selectedClip.id, edge))}
-                        title={what}
-                        aria-label={holder ? `Transition ${side}` : `Transition ${edge}`}
-                        className={cn(side === "after" && "[&_svg]:-scale-x-100", set && "text-editor-accent")}
-                      >
-                        <Blend className="h-4 w-4" />
-                      </Button>
-                    )
-                  })}
-                {transformed && (
-                  <Button type="button" size="sm" variant="ghost" onClick={resetTransform} title="Put the selected clip's picture back to fit the frame" aria-label="Reset size, position, crop, rotation and flips">
-                    <RotateCcw className="h-4 w-4" /> Reset
-                  </Button>
-                )}
               </div>
-              <Button
-                type="button"
-                size="icon"
-                onClick={toggle}
-                disabled={totalLength(project) === 0}
-                title={player.playing ? "Pause (Space)" : "Play (Space)"}
-                aria-label={player.playing ? "Pause" : "Play"}
-                className="rounded-full bg-editor-accent text-editor-accent-foreground hover:bg-editor-accent/85"
-              >
-                {player.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={player.playFromStart}
+                  disabled={totalLength(project) === 0}
+                  title="Play from start"
+                  aria-label="Play from start"
+                >
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  onClick={toggle}
+                  disabled={totalLength(project) === 0}
+                  title={player.playing ? "Pause (Space)" : "Play (Space)"}
+                  aria-label={player.playing ? "Pause" : "Play"}
+                  className="rounded-full bg-editor-accent text-editor-accent-foreground hover:bg-editor-accent/85"
+                >
+                  {player.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setStoredLoop(loop ? "0" : "1")}
+                  aria-pressed={loop}
+                  title={loop ? "Loop playback (on)" : "Loop playback (off)"}
+                  aria-label="Loop playback"
+                  className={cn(loop && "bg-editor-accent/20 text-editor-accent hover:bg-editor-accent/30")}
+                >
+                  <Repeat className="h-4 w-4" />
+                </Button>
+              </div>
               <div className="flex h-full min-w-0 items-center justify-end gap-1 overflow-hidden px-0.5">
                 <Button
                   type="button"
@@ -806,11 +1056,11 @@ export function Editor({
                 <FieldHelp id="video.waveforms" />
                 <label className="flex min-w-0 items-center gap-2">
                   Zoom<FieldHelp id="video.zoom" className="-ml-1" />
-                  <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 min-w-0 accent-editor-accent" />
+                  <input type="range" min={0} max={1} step={0.001} value={zoomToSlider(zoom)} onChange={(e) => setZoom(sliderToZoom(Number(e.target.value)))} className="w-28 min-w-0 accent-editor-accent" />
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onDropText={dropText} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
           </div>
         </div>
       </div>
@@ -834,6 +1084,53 @@ export function Editor({
           onClose={() => setTransitionTarget(null)}
         />
       )}
+      {templateSetup && (
+        <TemplateSetupDialog
+          mode={templateSetup}
+          project={project}
+          initial={templateSetup === "edit" ? project.template : undefined}
+          defaultName={templateSetup === "create" ? `${project.name} template` : undefined}
+          thumbUrl={thumbUrl}
+          onSelectClip={setSelectedId}
+          onSave={saveTemplateSetup}
+          onClose={() => setTemplateSetup(null)}
+        />
+      )}
+      {speedClip && !isTextClip(speedClip) && project.assets[speedClip.asset] && (
+        <SpeedDialog
+          key={speedClip.id}
+          assetId={speedClip.asset}
+          asset={project.assets[speedClip.asset]}
+          trimIn={speedClip.in}
+          trimOut={speedClip.out}
+          name={assetLabel(project.assets[speedClip.asset])}
+          onApply={(speed, reverse) => applySpeed(speedClip, speed, reverse)}
+          onPreview={async (speed, reverse) => {
+            try {
+              return await previewRetimeAction(folder, speedClip.asset, { in: speedClip.in, out: speedClip.out, speed, reverse })
+            } catch {
+              return { error: "Something went wrong making the preview." }
+            }
+          }}
+          onClose={() => setSpeedFor(null)}
+        />
+      )}
+      {transparentClip && (
+        <TransparentDialog
+          key={transparentClip.id}
+          imageUrl={imageUrl(transparentClip.asset)}
+          video={
+            assetKind(project.assets[transparentClip.asset]) === "video"
+              ? { url: videoUrl(transparentClip.asset), at: transparentClip.in + Math.min(Math.max(0, playhead - transparentClip.start), Math.max(0, clipLength(transparentClip) - 0.05)) % Math.max(0.1, project.assets[transparentClip.asset].duration) }
+              : undefined
+          }
+          name={assetLabel(project.assets[transparentClip.asset])}
+          initial={transparentClip.key}
+          onApply={(options) => applyKey(transparentClip.id, options)}
+          onRemove={() => applyKey(transparentClip.id, undefined)}
+          onClose={() => setTransparentFor(null)}
+        />
+      )}
       {audioClip && (
         <AudioLevelsDialog
           key={audioClip.id}
@@ -855,7 +1152,7 @@ export function Editor({
           text={textClip.text}
           length={clipLength(textClip)}
           section={textSection}
-          usedColours={usedTextColours(project, textClip.id)}
+          usedColors={usedTextColors(project, textClip.id)}
           onApply={(t) => {
             const id = textClip.id
             edit((p) => setClipText(p, id, t))

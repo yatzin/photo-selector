@@ -4,7 +4,7 @@
 
 **Goal:** An "AI" tab that scans one folder for groups of near-identical photos, asks an external vision model to rank each group, saves the results, and lets the user finish each group with one click.
 
-**Architecture:** Grouping runs locally (capture time + dHash + colour grid computed from cached thumbnails). A background runner inside the Next.js server claims queued runs from SQLite, groups the folder, then sends one group at a time to an OpenAI-compatible chat endpoint and persists each verdict. Review actions reuse the existing move/trash code.
+**Architecture:** Grouping runs locally (capture time + dHash + color grid computed from cached thumbnails). A background runner inside the Next.js server claims queued runs from SQLite, groups the folder, then sends one group at a time to an OpenAI-compatible chat endpoint and persists each verdict. Review actions reuse the existing move/trash code.
 
 **Tech Stack:** Next.js 16 (App Router, server actions, `instrumentation.ts`), Prisma 7 + SQLite (libsql adapter), sharp, `exif-reader`, zod, vitest, Tailwind/shadcn (base-ui).
 
@@ -985,7 +985,7 @@ export async function updateAiSettings(data: AiSettingsInput): Promise<{ error: 
 export type AiTestResult = { error: string } | { success: true; model: string; seesImages: boolean; detail: string }
 
 /**
- * Sends a tiny solid-red image and asks for its colour. Tests what's on
+ * Sends a tiny solid-red image and asks for its color. Tests what's on
  * screen, falling back to saved values; a saved key only goes to its own server.
  */
 export async function testAiConnection(data: AiSettingsInput): Promise<AiTestResult> {
@@ -1014,7 +1014,7 @@ export async function testAiConnection(data: AiSettingsInput): Promise<AiTestRes
         {
           role: "user",
           content: [
-            { type: "text", text: 'What single colour fills this image? Reply only with JSON like {"color":"blue"}.' },
+            { type: "text", text: 'What single color fills this image? Reply only with JSON like {"color":"blue"}.' },
             { type: "image_url", image_url: { url: `data:image/jpeg;base64,${red.toString("base64")}` } },
           ],
         },
@@ -1250,7 +1250,7 @@ git commit -m "feat(ai): Settings → AI with connection test"
 
 **Interfaces:**
 - Produces:
-  - `type Fingerprint = { hash: bigint; colors: number[] }` (48 colour values: 4×4×RGB)
+  - `type Fingerprint = { hash: bigint; colors: number[] }` (48 color values: 4×4×RGB)
   - `dHash(gray: Uint8Array): bigint` — input 9×8 grayscale, row-major
   - `hamming(a: bigint, b: bigint): number`
   - `colorDistance(a: number[], b: number[]): number` — mean absolute difference, 0–255
@@ -1317,7 +1317,7 @@ describe("fingerprintImage", () => {
     expect(far).toBe(true)
   })
 
-  it("returns 48 colour values", async () => {
+  it("returns 48 color values", async () => {
     const a = await fingerprintImage(await jpeg(scene()))
     expect(a.colors).toHaveLength(48)
   })
@@ -1334,7 +1334,7 @@ Run: `npx vitest run lib/ai/fingerprint.test.ts` — Expected: FAIL (module not 
 import sharp from "sharp"
 
 // Cheap visual fingerprints for grouping near-identical shots — no AI.
-// dHash captures shapes and layout; a 4×4 colour grid stops two different
+// dHash captures shapes and layout; a 4×4 color grid stops two different
 // scenes with similar shapes from matching.
 
 export type Fingerprint = { hash: bigint; colors: number[] }
@@ -1360,7 +1360,7 @@ export function hamming(a: bigint, b: bigint): number {
   return count
 }
 
-/** Mean absolute difference between two equal-length colour lists, 0–255. */
+/** Mean absolute difference between two equal-length color lists, 0–255. */
 export function colorDistance(a: number[], b: number[]): number {
   let sum = 0
   for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i])
@@ -1422,7 +1422,7 @@ const A2 = A ^ 0b111n // 3 bits away
 const FAR = ~A & ((1n << 64n) - 1n) // 64 bits away
 
 describe("isSimilar", () => {
-  it("needs both shape and colour to be close", () => {
+  it("needs both shape and color to be close", () => {
     expect(isSimilar(fp(A), fp(A2), "similar")).toBe(true)
     expect(isSimilar(fp(A), fp(FAR), "similar")).toBe(false)
     expect(isSimilar(fp(A, 100), fp(A, 160), "similar")).toBe(false)

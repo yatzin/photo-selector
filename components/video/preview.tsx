@@ -1,25 +1,32 @@
 "use client"
 
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, clipLength, isStill, isTextClip, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
+import { assetKind, assetLabel, clipLength, isStill, isTextClip, loopSourceId, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
 import { edgeLook, transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
 import { edgeAt, laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { isTransitionType } from "@/lib/video/transition-types"
 import { fontById, fontFamily } from "@/lib/video/fonts"
-import { textLayout, textSize, type ClipText } from "@/lib/video/text"
+import { shadowOffset, textLayout, textSize, type ClipText } from "@/lib/video/text"
 import { animationState, isAnimated, typewriterCuts, type AnimState } from "@/lib/video/text-animation"
+import type { KeyOptions } from "@/lib/video/chroma"
 import { clipRect, containsPoint, cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Content, type Transform } from "@/lib/video/transform"
 import { formatTimecode } from "@/lib/video/time"
+import { clampViewZoom, wheelViewZoom, zoomAt } from "@/lib/video/viewer-zoom"
 import { cn } from "@/lib/utils"
-import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE } from "./timeline"
+import { parseStockDrag } from "@/lib/stock/drag"
+import type { StockRef } from "@/lib/stock/types"
+import { ASSET_DRAG_TYPE, hasMediaDrag, INBOX_DRAG_TYPE, STOCK_DRAG_TYPE } from "./timeline"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
+import { KeyedVideo } from "./keyed-video"
+import { ViewerZoomControl } from "./viewer-zoom-control"
 import { TransformOverlay, type GestureState, type TransformTarget } from "./transform-overlay"
 import type { PreviewPlayer } from "./use-preview-player"
 
 /** A file from the left panel dropped on the canvas: a Project media item, or an Inbox file to import first. */
-export type MediaDrop = { kind: "asset"; id: string } | { kind: "inbox"; folder: string; name: string }
+export type MediaDrop = { kind: "asset"; id: string } | { kind: "inbox"; folder: string; name: string } | { kind: "stock"; ref: StockRef }
 
+const VIEW_PAD = 16 // px kept round the canvas inside the viewer
 const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 
 // The player above the timeline: a black canvas the project's shape. Each
@@ -52,8 +59,9 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
  * transform it fills the canvas, letterboxed in black (object-contain); a
  * text's box (`{ w, h }`) is placed at its own size, centred, even then.
  */
-export function placement(aspect: Content, W: number, H: number, t: Transform): CSSProperties {
-  if (isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
+export function placement(aspect: Content, W: number, H: number, t: Transform, exact = false): CSSProperties {
+  // `exact`: always the picture's own box (a keyed video's canvas, which has no letterboxing of its own).
+  if (!exact && isIdentity(t) && typeof aspect === "number") return { left: 0, top: 0, width: "100%", height: "100%", backgroundColor: "black" }
   const r = clipRect(aspect, W, H, t)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
@@ -83,15 +91,21 @@ const TEXT_LAYOUT_PX = 100
  */
 export function TextPicture({ text, ready }: { text: ClipText; ready: boolean }) {
   const l = textLayout(text, TEXT_LAYOUT_PX)
+  const off = text.shadow ? shadowOffset(text.shadow, TEXT_LAYOUT_PX) : null
   return (
     <svg viewBox={`0 0 ${l.w} ${l.h}`} preserveAspectRatio="none" aria-hidden className={cn("absolute inset-0 h-full w-full", !ready && "invisible")}>
-      {l.lines.map((line, i) =>
-        line.text.trim() === "" ? null : (
-          <text key={i} x={line.cx} y={line.baseline} textAnchor="middle" fill={text.color} fontSize={TEXT_LAYOUT_PX} style={{ fontFamily: `"${fontFamily(fontById(text.font))}"`, whiteSpace: "pre" }}>
-            {line.text}
-          </text>
+      {l.lines.map((line, i) => {
+        if (line.text.trim() === "") return null
+        const style = { fontFamily: `"${fontFamily(fontById(text.font))}"`, whiteSpace: "pre" } as const
+        return (
+          <g key={i}>
+            {text.shadow && off && (
+              <text x={line.cx + off.dx} y={line.baseline + off.dy} textAnchor="middle" fill={text.shadow.color} fontSize={TEXT_LAYOUT_PX} style={style}>{line.text}</text>
+            )}
+            <text x={line.cx} y={line.baseline} textAnchor="middle" fill={text.color} fontSize={TEXT_LAYOUT_PX} style={style}>{line.text}</text>
+          </g>
         )
-      )}
+      })}
     </svg>
   )
 }
@@ -198,7 +212,7 @@ export function Preview({
 }: {
   player: PreviewPlayer
   project: Project
-  imageUrl: (assetId: string) => string
+  imageUrl: (assetId: string, key?: KeyOptions) => string
   selectedId: string | null
   onSelect: (id: string | null) => void
   /** Applies an edit to the current project; `group` merges quick repeats into one undo step. */
@@ -216,24 +230,65 @@ export function Preview({
   const [aspects, setAspects] = useState<Record<string, number>>({})
   // The transform being dragged, shown instead of the clip's until it's committed.
   const [draft, setDraft] = useState<{ id: string; transform: Transform } | null>(null)
-  // The canvas box's size on screen: the project's shape fit inside the area.
-  const area = useRef<HTMLDivElement>(null)
-  // `below`: the px between the canvas's bottom and the pane's (the gray margin and the padding); `side` the same to the left or right.
-  const [box, setBox] = useState<{ w: number; h: number; below: number; side: number } | null>(null)
+  // WebGL is missing: keyed videos show unkeyed rather than not at all.
+  const [keyFailed, setKeyFailed] = useState(false)
   const { width: W, height: H } = project
+  // The viewer: `frame` is the fixed pane; the scroller inside it scrolls when the zoomed canvas is bigger.
+  const area = useRef<HTMLDivElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+  const canvas = useRef<HTMLDivElement>(null)
+  // View zoom (1 = the canvas fit in the pane), reset when the project's shape changes.
+  const [zoom, setZoomState] = useState(1)
+  const zoomRef = useRef(1)
+  const shape = `${W}x${H}`
+  const [shapeSeen, setShapeSeen] = useState(shape)
+  if (shapeSeen !== shape) {
+    setShapeSeen(shape)
+    setZoomState(1)
+  }
+  useLayoutEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
+  // The canvas fit inside the pane (less its padding), and the pane's own size.
+  const [fit, setFit] = useState<{ w: number; h: number; fw: number; fh: number } | null>(null)
+  // The scroll a zoom wants once the new size is laid out.
+  const pendingScroll = useRef<{ x: number; y: number } | null>(null)
+  // The part of the pane visible, in px from the canvas's top left (the floating buttons stay inside it).
+  const [view, setView] = useState<{ left: number; top: number; right: number; bottom: number } | null>(null)
+  // `below`: the px between the canvas's bottom and the pane's; `side` the same to the left or right (0 once it overflows).
+  const box = fit
+    ? (() => {
+        const w = Math.max(1, Math.floor(fit.w * zoom))
+        const h = Math.max(1, Math.floor((w * H) / W))
+        return { w, h, below: Math.max(0, Math.floor((fit.fh - h) / 2)), side: Math.max(0, Math.floor((fit.fw - w) / 2)) }
+      })()
+    : null
+
+  const setZoom = (z: number, pointer?: { x: number; y: number }) => {
+    const next = clampViewZoom(z)
+    const el = scroller.current
+    if (el && fit) {
+      // Zoom about the pointer, or the pane's centre.
+      const at = pointer ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 }
+      const from = pendingScroll.current ?? { x: el.scrollLeft, y: el.scrollTop }
+      pendingScroll.current = zoomAt(from, { fitW: fit.w, fitH: fit.h, viewW: el.clientWidth, viewH: el.clientHeight, pad: VIEW_PAD }, at, zoomRef.current, next)
+    }
+    zoomRef.current = next
+    setZoomState(next)
+  }
 
   useEffect(() => {
     const el = area.current
     if (!el) return
     const measure = () => {
-      const aw = el.clientWidth
-      const ah = el.clientHeight
+      const fw = el.clientWidth
+      const fh = el.clientHeight
+      const aw = fw - 2 * VIEW_PAD
+      const ah = fh - 2 * VIEW_PAD
       if (!(aw > 0 && ah > 0)) return
-      const w = Math.min(aw, (ah * W) / H)
+      const w = Math.floor(Math.min(aw, (ah * W) / H))
       const h = Math.floor((w * H) / W)
-      // The area is centred in the pane with 16 px (p-4) of padding all round.
-      const next = { w: Math.floor(w), h, below: Math.floor((ah - h) / 2) + 16, side: Math.floor((aw - Math.floor(w)) / 2) + 16 }
-      setBox((b) => (b && b.w === next.w && b.h === next.h && b.below === next.below && b.side === next.side ? b : next))
+      setFit((f) => (f && f.w === w && f.h === h && f.fw === fw && f.fh === fh ? f : { w, h, fw, fh }))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -241,19 +296,79 @@ export function Preview({
     return () => ro.disconnect()
   }, [W, H])
 
-  const total = totalLength(project)
+  // After a zoom is laid out: apply its scroll; then keep `view` current.
+  const readView = () => {
+    const s = scroller.current
+    const c = canvas.current
+    if (!s || !c) return
+    const sr = s.getBoundingClientRect()
+    const cr = c.getBoundingClientRect()
+    const left = Math.round(sr.left + s.clientLeft - cr.left)
+    const top = Math.round(sr.top + s.clientTop - cr.top)
+    const next = { left, top, right: left + s.clientWidth, bottom: top + s.clientHeight }
+    setView((v) => (v && v.left === next.left && v.top === next.top && v.right === next.right && v.bottom === next.bottom ? v : next))
+  }
+  useLayoutEffect(() => {
+    const s = scroller.current
+    const p = pendingScroll.current
+    if (s && p) {
+      pendingScroll.current = null
+      s.scrollLeft = p.x
+      s.scrollTop = p.y
+    }
+    readView()
+  })
+
+  // The wheel zooms about the pointer (a native, non-passive listener so it can stop the page scrolling).
+  useEffect(() => {
+    const el = area.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const s = scroller.current
+      if (!s) return
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1
+      const dy = e.deltaY !== 0 ? e.deltaY : e.deltaX
+      const r = s.getBoundingClientRect()
+      setZoom(wheelViewZoom(zoomRef.current, dy * unit), { x: e.clientX - r.left - s.clientLeft, y: e.clientY - r.top - s.clientTop })
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    return () => el.removeEventListener("wheel", onWheel)
+  })
+
+  // A click (a press and release that hardly moves) on the gray around the canvas, not on a scrollbar, clears the selection.
+  const gray = useRef<{ id: number; x: number; y: number } | null>(null)
+  function grayDown(e: React.PointerEvent<HTMLDivElement>) {
+    gray.current = null
+    if (e.button !== 0 || !(e.target instanceof Element) || e.target.closest("[data-transform-overlay]")) return
+    const s = e.currentTarget
+    const r = s.getBoundingClientRect()
+    const x = e.clientX - r.left - s.clientLeft
+    const y = e.clientY - r.top - s.clientTop
+    if (x < 0 || y < 0 || x >= s.clientWidth || y >= s.clientHeight) return // a scrollbar
+    gray.current = { id: e.pointerId, x: e.clientX, y: e.clientY }
+  }
+  function grayUp(e: React.PointerEvent<HTMLDivElement>) {
+    const g = gray.current
+    gray.current = null
+    if (g && g.id === e.pointerId && Math.hypot(e.clientX - g.x, e.clientY - g.y) < 4) onSelect(null)
+  }
+
+  // The copies a looping clip plays as (the player's own expansion), so lanes, clip indexes and the player's slots line up; ids map back with loopSourceId.
+  const playback = player.playback
+  const total = totalLength(playback)
   const hasClips = total > 0
   // At the end the last frame stays up.
   const look = player.time >= total ? Math.max(0, total - 0.001) : player.time
   // The clip each track shows (through a transition, the incoming one), the topmost of them, and each track's running transition.
-  const hits: (ActiveClip | null)[] = project.tracks.map((t, track) => {
+  const hits: (ActiveClip | null)[] = playback.tracks.map((t, track) => {
     const at = laneClipAt(t, look)
     return at && { track, ...at, clip: t.clips[at.index] }
   })
   const top = hits.reduce<ActiveClip | null>((above, h) => h ?? above, null)
-  const windows = project.tracks.map((t) => transitionAt(t, look))
+  const windows = playback.tracks.map((t) => transitionAt(t, look))
   // Each lane's look: its running transition's, else its clip's running edge transition's (against nothing, lib/video/transition-preview edgeLook).
-  const looks = project.tracks.map((_, lane): TransitionLook | null => {
+  const looks = playback.tracks.map((_, lane): TransitionLook | null => {
     const w = windows[lane]
     if (w) return isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
     const hit = hits[lane]
@@ -268,7 +383,7 @@ export function Preview({
     const asset = clip && !isTextClip(clip) ? project.assets[clip.asset] : undefined
     return asset !== undefined && assetKind(asset) === "image"
   }
-  const transformOf = (clip: Clip) => (draft?.id === clip.id ? draft.transform : clip.transform ?? IDENTITY)
+  const transformOf = (clip: Clip) => (draft?.id === loopSourceId(clip.id) ? draft.transform : clip.transform ?? IDENTITY)
   const aspectOf = (assetId: string) => aspects[assetId] ?? W / H
   /** What clipRect places for a clip: a text's content box, else its picture's aspect. */
   const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, Math.min(W, H)) : aspectOf(clip.asset))
@@ -298,7 +413,7 @@ export function Preview({
         </div>
       )
     } else {
-      const still = isImage(clip) ? imageUrl(clip.asset) : ""
+      const still = isImage(clip) ? imageUrl(clip.asset, clip.key) : ""
       if (!still) return null
       inner = (
         // eslint-disable-next-line @next/next/no-img-element
@@ -306,7 +421,7 @@ export function Preview({
           src={still}
           alt=""
           draggable={false}
-          className="absolute object-contain"
+          className="absolute max-w-none object-contain"
           style={placement(aspectOf(clip.asset), W, H, transformOf(clip))}
           onLoad={(e) => learnAspect(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setBrokenImage(still)}
@@ -323,19 +438,20 @@ export function Preview({
     )
   }
 
-  const lanes = project.tracks.slice(0, MAX_TRACKS)
+  const lanes = playback.tracks.slice(0, MAX_TRACKS)
   // Every text clip's font, loaded ahead (not only the ones at the playhead), so playing on to a text doesn't wait for it.
-  const textFonts = [...new Set(project.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
+  const textFonts = [...new Set(playback.tracks.flatMap((t) => t.clips.filter(isTextClip).map((c) => fontFamily(fontById(c.text.font)))))].sort().join("\n")
   const loadedFonts = useLoadedFonts(textFonts)
-  const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset) : ""
+  const topImage = top && isImage(top.clip) ? imageUrl(top.clip.asset, top.clip.key) : ""
 
   const target = (clip: Clip, lane: number): TransformTarget => ({
-    id: clip.id,
-    label: `Layer ${lane + 1}, ${isTextClip(clip) ? `text "${clip.text.content}"` : (project.assets[clip.asset]?.file ?? "missing file")}`,
+    id: loopSourceId(clip.id),
+    label: `Layer ${lane + 1}, ${isTextClip(clip) ? `text "${clip.text.content}"` : (Object.hasOwn(project.assets, clip.asset) ? assetLabel(project.assets[clip.asset]) : "missing file")}`,
     aspect: contentOf(clip),
     transform: transformOf(clip),
+    canFill: !isTextClip(clip),
   })
-  const selectedHit = hits.find((h) => h?.clip.id === selectedId)
+  const selectedHit = hits.find((h) => h && loopSourceId(h.clip.id) === selectedId)
   const selected = selectedHit ? target(selectedHit.clip, selectedHit.track) : null
   /** The topmost clip at the playhead that covers canvas point x, y (its visible strip as it shows, turned too; with no transform, the whole canvas, but a text only its box). */
   const hitTest = (x: number, y: number): TransformTarget | null => {
@@ -350,13 +466,13 @@ export function Preview({
   }
 
   // The next clip on each track, when it's an image: fetched before the cut so a cut to it doesn't flash black.
-  const nextStills = project.tracks
+  const nextStills = playback.tracks
     .map((track, i) => {
       const hit = hits[i]
       const starts = trackStarts(track)
       const next = hit ? track.clips[hit.index + 1] : track.clips[starts.findIndex((s) => s > look)]
       const a = next && !isTextClip(next) ? project.assets[next.asset] : undefined
-      return next && a && assetKind(a) === "image" ? imageUrl(next.asset) : ""
+      return next && a && assetKind(a) === "image" ? imageUrl(next.asset, next.key) : ""
     })
     .filter(Boolean)
     .join("\n")
@@ -392,9 +508,15 @@ export function Preview({
     setDropOver(false)
     const id = e.dataTransfer.getData(ASSET_DRAG_TYPE)
     const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
-    if (!id && !inbox) return
+    const stock = e.dataTransfer.getData(STOCK_DRAG_TYPE)
+    if (!id && !inbox && !stock) return
     e.preventDefault()
     if (id) return onDrop({ kind: "asset", id })
+    if (stock) {
+      const r = parseStockDrag(stock)
+      if (r) onDrop({ kind: "stock", ref: { source: r.source, id: r.id, kind: r.kind } })
+      return
+    }
     try {
       const { folder, name } = JSON.parse(inbox) as { folder?: unknown; name?: unknown }
       if (typeof folder === "string" && typeof name === "string") onDrop({ kind: "inbox", folder, name })
@@ -406,8 +528,8 @@ export function Preview({
   // The Alt hint: below the canvas when the gray margin has room for it, else inside at the bottom.
   // The overlay (and any drag on it) goes when the last clip does.
   if (!hasClips && gesture) setGesture(null)
-  const hint = hasClips && gesture ? (gesture.snapping ? "Hold Alt to turn snapping off" : "Snapping off") : null
-  const hintOutside = box !== null && box.below >= HINT_ROOM
+  const hint = hasClips && gesture ? (gesture.snapping ? (gesture.hundred ? "Snapped to 100% — hold Alt to turn snapping off" : "Hold Alt to turn snapping off") : "Snapping off") : null
+  const hintOutside = box !== null && (zoom > 1 || box.below >= HINT_ROOM)
   const hintPill = (className: string) => (
     <div aria-hidden className={cn("pointer-events-none absolute left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900/80 px-2.5 py-0.5 text-[11px] text-white shadow dark:bg-neutral-100/90 dark:text-neutral-900", className)}>
       {hint}
@@ -415,10 +537,14 @@ export function Preview({
   )
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-neutral-200 p-4 dark:bg-neutral-700">
-      <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-neutral-200 dark:bg-neutral-700">
+      <div ref={area} className="relative min-h-0 min-w-0 flex-1">
+      {/* Scrolls (native scrollbars) once the zoomed canvas outgrows the pane; a click on the gray clears the selection. */}
+      <div ref={scroller} className="absolute inset-0 overflow-auto" onPointerDown={grayDown} onPointerUp={grayUp} onPointerCancel={() => (gray.current = null)}>
+      <div className={cn("flex items-center justify-center", box ? "h-max min-h-full w-max min-w-full" : "h-full w-full")} style={{ padding: VIEW_PAD }}>
         <div
-          className={cn("relative", !box && "max-h-full max-w-full")}
+          ref={canvas}
+          className={cn("relative shrink-0", !box && "max-h-full max-w-full")}
           style={box ? { width: box.w, height: box.h } : { height: "100%", aspectRatio: `${W} / ${H}` }}
           onDragOver={dragOver}
           onDragLeave={dragLeave}
@@ -449,6 +575,8 @@ export function Preview({
                 const shown = held !== undefined && (held === clip || outgoing) ? held : undefined
                 const z = outgoing ? outgoingZ(lane, fx) : laneZ(lane, "incoming")
                 const videoStyle = shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined
+                // A keyed clip is drawn by a canvas (the shader); its video plays unseen.
+                const keyed = shown?.key && !keyFailed ? shown.key : undefined
                 return (
                   <Fragment key={`${lane}-${slot}`}>
                     <div className="absolute inset-0" style={shown ? { zIndex: z, ...fxStyle(outgoing ? fx?.from : fx?.to) } : { zIndex: 0 }}>
@@ -460,9 +588,18 @@ export function Preview({
                         onError={() => player.onVideoError(lane, slot)}
                         onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                         onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
-                        className={cn("absolute object-contain", shown ? "opacity-100" : "inset-0 h-full w-full opacity-0")}
+                        className={cn("absolute max-w-none object-contain", shown && !keyed ? "opacity-100" : shown ? "opacity-0" : "inset-0 h-full w-full opacity-0")}
                         style={videoStyle}
                       />
+                      {shown && keyed && (
+                        <KeyedVideo
+                          video={() => player.videoAt(lane, slot)}
+                          keyColor={keyed.key}
+                          tolerance={keyed.tolerance}
+                          style={placement(aspectOf(shown.asset), W, H, transformOf(shown), true)}
+                          onUnsupported={() => setKeyFailed(true)}
+                        />
+                      )}
                     </div>
                     {shown && (
                       <FxCopies styles={outgoing ? fx?.fromCopies : fx?.toCopies} zIndex={z} id={`${lane}-${slot}`}>
@@ -516,6 +653,7 @@ export function Preview({
               height={H}
               displayWidth={box?.w}
               room={box ? { x: box.side, y: box.below } : undefined}
+              view={view ?? undefined}
               selected={selected}
               hitTest={hitTest}
               onSelect={onSelect}
@@ -523,7 +661,7 @@ export function Preview({
               onCommit={(id, t, group) => onChange((p) => setTransform(p, id, t), group)}
               onGesture={setGesture}
               onDoubleClickClip={(id) => {
-                if (hits.some((h) => h?.clip.id === id && isTextClip(h.clip))) onEditText(id)
+                if (hits.some((h) => h && loopSourceId(h.clip.id) === id && isTextClip(h.clip))) onEditText(id)
               }}
             />
           )}
@@ -536,7 +674,12 @@ export function Preview({
           )}
         </div>
       </div>
+      </div>
       {hint && hintOutside && hintPill("bottom-1")}
+      </div>
+      <div className="flex shrink-0 items-stretch py-4 pr-2">
+        <ViewerZoomControl zoom={zoom} onChange={(z) => setZoom(z)} />
+      </div>
     </div>
   )
 }

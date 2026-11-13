@@ -7,7 +7,8 @@ import { numberedName, projectFolderName } from "@/lib/media"
 import { ensureVariant } from "@/lib/thumbs-server"
 import { EXPORT_STATE_FILE, exportFingerprint } from "./export-state"
 import { cleanOutputs, reusableExport, writeExportState } from "./export-state-server"
-import { buildExportArgs, buildExportGraph, runExport, textFileKey, textRaster } from "./ffmpeg-server"
+import { keyedStillPath } from "./keyed-still-server"
+import { buildExportArgs, buildExportGraph, keyedFileKey, runExport, textFileKey, textRaster } from "./ffmpeg-server"
 import { allClips, assetKind, isTextClip, totalLength } from "./project"
 import { rasteriseText } from "./text-raster-server"
 import { assetPath, outputDir, readProject } from "./projects-server"
@@ -101,15 +102,23 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
     for (const clip of clips) {
       if (isTextClip(clip)) {
         const { fontPx } = textRaster(project, clip)
-        const name = createHash("sha256").update(JSON.stringify([fontPx, clip.text.content, clip.text.color, clip.text.orientation, clip.text.font ?? ""])).digest("hex").slice(0, 32)
+        const name = createHash("sha256").update(JSON.stringify([fontPx, clip.text.content, clip.text.color, clip.text.orientation, clip.text.font ?? "", clip.text.shadow ?? null])).digest("hex").slice(0, 32)
         textDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "ps-text-"))
         const png = path.join(textDir, `${name}.png`)
         if (!(await exists(png))) await rasteriseText(clip.text, fontPx, png, textDir)
         files[textFileKey(clip)] = png
         continue
       }
-      if (files[clip.asset]) continue
       const asset = project.assets[clip.asset]
+      if (clip.key && project.assets[clip.asset] && assetKind(project.assets[clip.asset]) === "image") {
+        // An image with its background keyed out: its own PNG, made from the same preview picture.
+        const source = asset && assetPath(user, folder, asset.file)
+        const keyed = asset && source ? await keyedStillPath(user, folder, asset.file, source, clip.key) : null
+        if (!keyed) throw new Error(`${asset?.file ?? "A clip's file"} couldn't be prepared for export.`)
+        files[keyedFileKey(clip)] = keyed
+        continue
+      }
+      if (files[clip.asset]) continue
       const file = asset && assetPath(user, folder, asset.file)
       if (!asset || !file || !(await exists(file))) throw new Error(`${asset?.file ?? "A clip's file"} is missing from the project's assets.`)
       if (assetKind(asset) === "image") {

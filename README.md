@@ -389,7 +389,7 @@ Not while the project is exporting, or while that file is being imported.
   the Snap box, drop markers) is a light sky blue so it stands out.
 - **Text.** **Add text** in the toolbar puts a 5 s "Text" clip at the
   playhead, white and centred, selects it and opens **Edit text**: the text
-  (Enter starts a new line; nothing wraps), its colour, its direction and its
+  (Enter starts a new line; nothing wraps), its color, its direction and its
   font. It
   goes on the selected clip's layer; with nothing selected (or a clip on a
   snapped layer 1) on the lowest layer above the base that's free there, or a
@@ -418,10 +418,10 @@ Not while the project is exporting, or while that file is being imported.
   comes from each font's stored letter widths, the same numbers on both
   sides, with room for script swashes. Letters a font lacks (emoji, some
   scripts, Orbitron's ^) come from a fallback font and may differ.
-- **Colours.** Under Colour, Edit text shows a round swatch for each colour
+- **Colors.** Under Color, Edit text shows a round swatch for each color
   the project's other text clips use (most used first, up to 12); click one
   to use it. The font sample sits on a dark or light backdrop, whichever
-  shows the chosen colour better.
+  shows the chosen color better.
 - **Text animation.** On the Animation tab the sample at the top of Edit text
   loops the chosen In, a one-second rest, then Out (a Pause/Play button on the
   sample stops it; it starts paused with reduced motion). The Animation tab of Edit text (or **Animation...** in
@@ -490,12 +490,12 @@ Not while the project is exporting, or while that file is being imported.
   next clip's card, which then grows; Page turn folds it away from the right
   edge, the page's plain back and a soft shadow showing; Reveal splits it
   down the middle and slides the halves apart; Heart opens the next clip in a
-  growing heart; Glitch splits the colours, shifts strips and flashes noise
+  growing heart; Glitch splits the colors, shifts strips and flashes noise
   blocks, switching clips at the peak; Glitch reveal swaps the picture strip
-  by strip with jittering split colours; a Whip moves both clips together
+  by strip with jittering split colors; a Whip moves both clips together
   fast, with motion blur at the peak. The preview and the export follow the
   same motion; the page fold is straight, and the whip's blur and the glitch's
-  colour split can look a little different in the preview.
+  color split can look a little different in the preview.
 - **J-cuts and L-cuts.** In the same box, **Audio overlap** lets the sound
   run across the cut while the picture cuts where it did: a **J-cut** starts
   the next clip's sound early (you hear the next scene while still seeing

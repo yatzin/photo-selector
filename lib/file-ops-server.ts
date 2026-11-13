@@ -112,6 +112,24 @@ export async function moveToDropoff(rootKey: "upload" | NoteRootKey, folder: str
 }
 
 /**
+ * Moves files of Personal Storage folder `folder` into folder `destFolder` of
+ * the same root (never replacing a file there: a taken name gets a number). The
+ * folder must exist; its cached thumbnails move with each file.
+ */
+export async function moveWithin(rootKey: NoteRootKey, folder: string[], names: string[], destFolder: string[]): Promise<ActionResult> {
+  const dir = resolveInside(rootPath(rootKey), destFolder)
+  const isDir = dir ? await fs.stat(dir).then((st) => st.isDirectory(), () => false) : false
+  if (!dir || !isDir) return { ok: [], failed: names.map((name) => ({ name, error: "That folder no longer exists." })) }
+  return eachFile(rootKey, folder, names, async (file, name) => {
+    if (path.resolve(path.dirname(file)) === path.resolve(dir)) throw new Error("It's already in that folder.")
+    const before = await fs.stat(file)
+    const fromKey = cacheKey(rootKey, relOf(rootKey, file), before)
+    const dest = await moveNoClobber(file, dir, path.basename(name))
+    await moveCached(fromKey, cacheKey(rootKey, relOf(rootKey, dest), await fs.stat(dest)))
+  })
+}
+
+/**
  * Copies `src` to `dir/name`, replacing a file already there. The copy is
  * written beside the target, checked, then renamed over it, so the old file
  * stays intact until the new one is complete. With `move`, the source is

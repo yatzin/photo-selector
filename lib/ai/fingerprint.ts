@@ -1,7 +1,7 @@
 import sharp from "sharp"
 
 // Cheap visual fingerprints for grouping near-identical shots — no AI.
-// dHash captures shapes and layout; a 4×4 colour grid stops two different
+// dHash captures shapes and layout; a 4×4 color grid stops two different
 // scenes with similar shapes from matching.
 
 export type Fingerprint = { hash: bigint; colors: number[] }
@@ -27,7 +27,7 @@ export function hamming(a: bigint, b: bigint): number {
   return count
 }
 
-/** Mean absolute difference between two equal-length colour lists, 0–255. */
+/** Mean absolute difference between two equal-length color lists, 0–255. */
 export function colorDistance(a: number[], b: number[]): number {
   let sum = 0
   for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i])

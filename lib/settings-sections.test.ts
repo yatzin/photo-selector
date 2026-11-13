@@ -4,7 +4,13 @@ import { resolveSection, settingsHref, visibleSections } from "./settings-sectio
 describe("settings sections", () => {
   it("shows only personal settings to non-admins", () => {
     expect(visibleSections(false).map((s) => s.id)).toEqual(["account"])
-    expect(visibleSections(true).map((s) => s.id)).toEqual(["account", "storage", "ai", "users"])
+    expect(visibleSections(true).map((s) => s.id)).toEqual(["account", "storage", "ai", "stock", "users"])
+    expect(visibleSections(false).map((s) => s.id)).not.toContain("stock")
+  })
+
+  it("keeps Stock Media settings from non-admins", () => {
+    expect(resolveSection("stock", false).id).toBe("account")
+    expect(resolveSection("stock", true).id).toBe("stock")
   })
 
   it("opens the requested section, falling back to the first", () => {

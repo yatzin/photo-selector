@@ -158,7 +158,7 @@ export const glitchAmount = <T>(m: Alg<T>, q: T) => m.sub(m.n(1), m.abs(m.sub(m.
 export const glitchStep = (q: number) => Math.min(GLITCH_STEPS - 1, Math.max(0, Math.floor(q * GLITCH_STEPS)))
 export type GlitchBand = { y: number; h: number; shift: number }
 export type GlitchBlock = { x: number; y: number; w: number; h: number; rgb: [number, number, number] }
-/** A step's fixed parts: the colour split (fraction of the width, at full damage), three displaced strips (shift at full damage) and two noise blocks. */
+/** A step's fixed parts: the color split (fraction of the width, at full damage), three displaced strips (shift at full damage) and two noise blocks. */
 export function glitchFrame(n: number): { split: number; bands: GlitchBand[]; blocks: GlitchBlock[] } {
   const h = (k: number) => hash(n, k)
   const grey = Math.round(80 + 150 * h(18))
@@ -175,7 +175,7 @@ export function glitchFrame(n: number): { split: number; bands: GlitchBand[]; bl
 export const GLITCH_BLOCKS_FROM = 0.35
 
 // Glitch reveal: GLITCH_STRIPS horizontal strips, each swapping to the incoming
-// picture at its own time, glitching (shifted, colours split) for a short while around it.
+// picture at its own time, glitching (shifted, colors split) for a short while around it.
 export const GLITCH_STRIPS = 10
 export const STRIP_GLITCH = 0.07
 export const STRIP_SPLIT = 0.012

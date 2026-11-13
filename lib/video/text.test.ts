@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { fontById, FONTS, lineWidth } from "./fonts"
-import { DEFAULT_TEXT, fitAnims, isValidAnim, isValidText, MAX_TEXT, MIN_ANIM, normalizeText, sameText, splitAnims, textLayout, textLines, textSize } from "./text"
+import { DEFAULT_TEXT, fitAnims, isValidAnim, isValidText, MAX_TEXT, MIN_ANIM, normalizeText, sameText, shadowOffset, splitAnims, textLayout, textLines, textSize } from "./text"
 
 describe("isValidText and normalizeText", () => {
-  it("accepts 1 to MAX_TEXT characters, a #rrggbb colour and an orientation", () => {
+  it("accepts 1 to MAX_TEXT characters, a #rrggbb color and an orientation", () => {
     expect(isValidText(DEFAULT_TEXT)).toBe(true)
     expect(isValidText({ content: "x".repeat(MAX_TEXT), color: "#A0b1C2", orientation: "vertical" })).toBe(true)
   })
 
-  it("refuses empty or blank content, too long content, a bad colour or orientation", () => {
+  it("refuses empty or blank content, too long content, a bad color or orientation", () => {
     for (const bad of [
       null, "Text", [], {},
       { ...DEFAULT_TEXT, content: "" }, { ...DEFAULT_TEXT, content: "  \n\t" }, { ...DEFAULT_TEXT, content: "x".repeat(MAX_TEXT + 1) }, { ...DEFAULT_TEXT, content: 5 },
@@ -20,11 +20,30 @@ describe("isValidText and normalizeText", () => {
     }
   })
 
-  it("keeps only the text's fields, lower-cases the colour and turns CRLF into LF", () => {
+  it("keeps only the text's fields, lower-cases the color and turns CRLF into LF", () => {
     expect(normalizeText({ content: "a\r\nb\rc", color: "#ABCDEF", orientation: "horizontal", extra: 1 })).toEqual({ content: "a\nb\nc", color: "#abcdef", orientation: "horizontal" })
   })
 
+  it("keeps a valid shadow (color lower-cased, angle 360 as 0) and refuses a bad one", () => {
+    const base = { content: "a", color: "#ffffff", orientation: "horizontal" }
+    expect(normalizeText({ ...base, shadow: { color: "#AA0000", angle: 360, distance: 6 } })?.shadow).toEqual({ color: "#aa0000", angle: 0, distance: 6 })
+    for (const bad of [{ color: "red", angle: 0, distance: 5 }, { color: "#000000", angle: -1, distance: 5 }, { color: "#000000", angle: 361, distance: 5 }, { color: "#000000", angle: 0, distance: 0 }, { color: "#000000", angle: 0, distance: 99 }, "x"]) {
+      expect(normalizeText({ ...base, shadow: bad })).toBeNull()
+    }
+  })
+
+  it("puts the shadow where its angle and distance say, as a share of the font size", () => {
+    expect(shadowOffset({ angle: 0, distance: 10 }, 100)).toEqual({ dx: 10, dy: 0 })
+    expect(shadowOffset({ angle: 90, distance: 10 }, 100)).toEqual({ dx: 0, dy: 10 })
+    expect(shadowOffset({ angle: 180, distance: 5 }, 200)).toEqual({ dx: -10, dy: 0 })
+    const o = shadowOffset({ angle: 45, distance: 10 }, 100)
+    expect(o.dx).toBeCloseTo(7.071, 2)
+    expect(o.dy).toBeCloseTo(7.071, 2)
+  })
+
   it("compares texts field by field", () => {
+    expect(sameText({ ...DEFAULT_TEXT, shadow: { color: "#000000", angle: 45, distance: 6 } }, DEFAULT_TEXT)).toBe(false)
+    expect(sameText({ ...DEFAULT_TEXT, shadow: { color: "#000000", angle: 45, distance: 6 } }, { ...DEFAULT_TEXT, shadow: { color: "#000000", angle: 45, distance: 6 } })).toBe(true)
     expect(sameText(DEFAULT_TEXT, { ...DEFAULT_TEXT })).toBe(true)
     expect(sameText(DEFAULT_TEXT, { ...DEFAULT_TEXT, orientation: "vertical" })).toBe(false)
     expect(sameText(undefined, DEFAULT_TEXT)).toBe(false)

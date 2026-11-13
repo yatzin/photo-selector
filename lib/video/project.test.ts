@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTextClip, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
-  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipMuted, setClipText, setTransform,
-  splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Clip, type Edit, type Project,
+  addClip, addTextClip, dropZone, moveOnClip, pasteClip, placeDropped, placeDroppedText, placeOnClip, retimeClip, rippleRemoveClip, assetLabel, clipLength, newClipLength, expandLoops, maxLoopLength, MAX_LOOP_COPIES, isLooping, setClipLoop, showsSourceWindow, tailHandle, headHandle, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipKey, setClipMuted, setClipText, setTransform,
+  splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Asset, type Clip, type Edit, type Project,
 } from "./project"
 import { commit, createHistory, undo } from "./history"
 import { IDENTITY, type Transform } from "./transform"
@@ -1436,6 +1436,19 @@ describe("text clips", () => {
     expect(addTextClip(p, text, 0, {}, "x")).toBe(p)
   })
 
+  it("placeDroppedText puts text in front of or behind a clip, treating a replace as behind, else at the time", () => {
+    const p = withText([{ id: "v", asset: "a", in: 0, out: 4, start: 2 }, { id: "w", asset: "a", in: 0, out: 4, start: 6 }])
+    const before = placeDroppedText(p, text, 0, { start: 2, on: { clip: "v", mode: "before" } }, "x")
+    expect(before.tracks[0].clips.map((c) => [c.id, c.start])).toEqual([["x", 2], ["v", 2 + DEFAULT_IMAGE], ["w", 6 + DEFAULT_IMAGE]])
+    const after = placeDroppedText(p, text, 0, { on: { clip: "v", mode: "after" } }, "x")
+    expect(after.tracks[0].clips.find((c) => c.id === "x")?.start).toBe(6)
+    const replace = placeDroppedText(p, text, 0, { on: { clip: "v", mode: "replace" } }, "x")
+    expect(replace.tracks[0].clips.map((c) => c.id).sort()).toEqual(["v", "w", "x"])
+    expect(replace.tracks[0].clips.find((c) => c.id === "x")?.start).toBe(6)
+    expect(placeDroppedText(p, text, 1, { start: 3 }, "x")).toEqual(addTextClip(p, text, 1, { start: 3 }, "x"))
+    expect(placeDroppedText(p, { ...text, content: " " }, 0, { on: { clip: "v", mode: "before" } }, "x")).toBe(p)
+  })
+
   it("sets the text (one edit), refusing invalid text, a media clip and no change", () => {
     const p = withText([textClip(), { id: "v", asset: "a", in: 0, out: 4, start: 6 }])
     const vertical = setClipText(p, "x", { ...text, orientation: "vertical" })
@@ -1581,5 +1594,496 @@ describe("text clips", () => {
       const added = addTextClip(withText([]), { ...text, animIn: { ...animIn, duration: 9 } }, 0, {}, "x")
       expect(added.tracks[0].clips[0].text?.animIn?.duration).toBe(DEFAULT_IMAGE)
     })
+  })
+})
+
+describe("loop flag", () => {
+  const loopProject = (clip: Partial<Clip>, asset: Record<string, unknown> = {}): Project => ({
+    ...newProject("l"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: false, ...asset } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", in: 0, out: 3, start: 0, ...clip }] }],
+  })
+  const roundTrip = (p: Project) => parseProject(JSON.parse(JSON.stringify(p)))
+
+  it("parseProject round-trips a looping clip longer than its source", () => {
+    const p = roundTrip(loopProject({ out: 25, loop: true }))
+    expect(p?.tracks[0].clips[0]).toMatchObject({ out: 25, loop: true })
+  })
+  it("still rejects a longer-than-source clip without loop", () => {
+    expect(roundTrip(loopProject({ out: 25 }))).toBeNull()
+  })
+  it("rejects a looping clip with in > 0, or past MAX_TIMELINE", () => {
+    expect(roundTrip(loopProject({ in: 1, out: 25, loop: true }))).toBeNull()
+    expect(roundTrip(loopProject({ out: MAX_TIMELINE + 1, loop: true }))).toBeNull()
+  })
+  it("keeps loop and loopByDefault only when true", () => {
+    expect(roundTrip(loopProject({ loop: false } as never))?.tracks[0].clips[0]).not.toHaveProperty("loop")
+    const p = roundTrip(loopProject({}, { loopByDefault: true }))
+    expect(p?.assets.a.loopByDefault).toBe(true)
+    expect(roundTrip(loopProject({}))?.assets.a).not.toHaveProperty("loopByDefault")
+  })
+  it("setClipLoop(true) moves in to 0 keeping the length", () => {
+    const c = setClipLoop(loopProject({ in: 2, out: 6 }), "c1", true).tracks[0].clips[0]
+    expect([c.in, c.out, c.loop]).toEqual([0, 4, true])
+  })
+  it("setClipLoop(false) clamps out to the source duration", () => {
+    const c = setClipLoop(loopProject({ out: 25, loop: true }), "c1", false).tracks[0].clips[0]
+    expect(c.out).toBe(10)
+    expect(c).not.toHaveProperty("loop")
+  })
+  it("setClipLoop leaves an image clip unchanged", () => {
+    const p = loopProject({ out: 5 }, { kind: "image" })
+    expect(setClipLoop(p, "c1", true)).toBe(p)
+  })
+  it("addClip with loopByDefault makes a 5 s looping clip", () => {
+    const p = { ...newProject("x"), assets: { g: { file: "g.mp4", duration: 2, hasAudio: false, loopByDefault: true as const } } }
+    expect(addClip(p, "g", 0, {}, "n").tracks[0].clips[0]).toMatchObject({ loop: true, out: 5, in: 0 })
+  })
+  it("a looping clip has no head handle, and as tail what its source has left after the last copy", () => {
+    const p = loopProject({ in: 0, out: 3, loop: true })
+    const c = p.tracks[0].clips[0]
+    expect(isLooping(p, c)).toBe(true)
+    expect(tailHandle(p, c)).toBeCloseTo(7)
+    expect(headHandle(p, c)).toBe(0)
+    const gif = (out: number) => { const q = loopProject({ out, loop: true }, { duration: 1 }); return tailHandle(q, q.tracks[0].clips[0]) }
+    expect(gif(5)).toBe(0)
+    expect(gif(4.4)).toBeCloseTo(0.6)
+    expect(gif(1)).toBe(0)
+    expect(gif(0.25)).toBeCloseTo(0.75)
+    expect(gif(5 + 5e-7)).toBe(0)
+  })
+  it("showsSourceWindow: a video with sound does, a looping one or a silent one doesn't", () => {
+    const at = (p: Project) => showsSourceWindow(p, p.tracks[0].clips[0])
+    expect(at(loopProject({ out: 3 }, { hasAudio: true }))).toBe(true)
+    expect(at(loopProject({ out: 25, loop: true }, { hasAudio: true }))).toBe(false)
+    expect(at(loopProject({ out: 3 }))).toBe(false)
+  })
+  it("trimClip stretches a looping clip past its source", () => {
+    const p = loopProject({ out: 3, loop: true })
+    expect(trimClip(p, "c1", "out", 40).tracks[0].clips[0]).toMatchObject({ in: 0, out: 40, loop: true })
+  })
+})
+
+describe("expandLoops", () => {
+  const mk = (clips: Clip[], extra: Partial<Project> = {}): Project => ({
+    ...newProject("l"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } },
+    tracks: [{ id: "t1", clips }],
+    ...extra,
+  })
+  const loopClip = (o: Partial<Clip> = {}): Clip => ({ id: "c1", asset: "a", in: 0, out: 25, start: 3, loop: true, ...o })
+
+  it("expands a 22 s loop at start 3 on a 10 s source into three clips", () => {
+    const clips = expandLoops(mk([loopClip({ out: 22 })])).tracks[0].clips
+    expect(clips.map((c) => [c.id, c.start, c.in, c.out])).toEqual([["c1", 3, 0, 10], ["c1~1", 13, 0, 10], ["c1~2", 23, 0, 2]])
+    expect(clips.some((c) => "loop" in c)).toBe(false)
+    expect(new Set(clips.map((c) => c.id)).size).toBe(3)
+    const p = mk([loopClip({ out: 22 })])
+    expect(totalLength(expandLoops(p))).toBe(totalLength(p))
+  })
+  it("returns the same reference when nothing loops past its source", () => {
+    const plain = mk([{ id: "c1", asset: "a", in: 0, out: 5, start: 0 }])
+    expect(expandLoops(plain)).toBe(plain)
+    const short = mk([loopClip({ out: 10 }), loopClip({ id: "c2", out: 4, start: 20 })])
+    expect(expandLoops(short)).toBe(short)
+    expect(expandLoops(short).tracks[0].clips).toHaveLength(2)
+  })
+  it("does not mutate its input", () => {
+    const p = mk([loopClip()])
+    const copy = JSON.parse(JSON.stringify(p))
+    expandLoops(p)
+    expect(p).toEqual(copy)
+  })
+  it("leaves other clips and tracks untouched and in order", () => {
+    const other: Clip = { id: "x", asset: "a", in: 1, out: 3, start: 0 }
+    const after: Clip = { id: "y", asset: "a", in: 0, out: 2, start: 40 }
+    const t2: Clip = { id: "z", asset: "a", in: 0, out: 2, start: 0 }
+    const p = mk([other, loopClip(), after])
+    const withT2 = { ...p, tracks: [...p.tracks, { id: "t2", clips: [t2] }] }
+    const r = expandLoops(withT2)
+    expect(r.tracks[0].clips.map((c) => c.id)).toEqual(["x", "c1", "c1~1", "c1~2", "y"])
+    expect(r.tracks[0].clips[0]).toBe(other)
+    expect(r.tracks[0].clips[4]).toBe(after)
+    expect(r.tracks[1]).toBe(withT2.tracks[1])
+  })
+  it("puts in-side fields on the first copy, edgeOut on the last, the rest on all", () => {
+    const tr = { x: 0.1, y: 0.2, scale: 1.5, cropTop: 0, cropBottom: 0 } as unknown as Transform
+    const edgeIn = { type: "fade", duration: 1 } as never
+    const edgeOut = { type: "fade", duration: 1 } as never
+    const transition = { type: "fade", duration: 0.5 } as never
+    const cutAudio = { mode: "j", duration: 0.5 } as never
+    const audio = { gain: 3 } as never
+    const clips = expandLoops(mk([loopClip({ edgeIn, edgeOut, transition, cutAudio, audio, muted: true, transform: tr })])).tracks[0].clips
+    expect(clips[0]).toMatchObject({ edgeIn, transition, cutAudio })
+    expect(clips[0]).not.toHaveProperty("edgeOut")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("edgeIn")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("transition")
+    for (const c of clips.slice(1)) expect(c).not.toHaveProperty("cutAudio")
+    expect(clips[1]).not.toHaveProperty("edgeOut")
+    expect(clips[2].edgeOut).toBe(edgeOut)
+    for (const c of clips) expect(c).toMatchObject({ audio, muted: true, transform: tr })
+  })
+  it("an exact multiple of the source gives full copies only", () => {
+    const r = expandLoops(mk([loopClip({ out: 20 })]))
+    expect(r.tracks[0].clips.map((c) => [c.start, c.out])).toEqual([[3, 10], [13, 10]])
+  })
+  const tiny = (clip: Partial<Clip>): Project => mk([{ id: "c1", asset: "a", in: 0, out: 3, start: 0, loop: true, ...clip }], { assets: { a: { file: "a.mp4", duration: 0.1, hasAudio: false } } })
+  it("maxLoopLength is 500 source lengths, capped at the timeline", () => {
+    expect(MAX_LOOP_COPIES).toBe(500)
+    expect(maxLoopLength({ file: "a", duration: 0.1, hasAudio: false })).toBeCloseTo(50)
+    expect(maxLoopLength({ file: "a", duration: 100, hasAudio: false })).toBe(MAX_TIMELINE)
+  })
+  it("trimClip clamps a loop on a 0.1 s source to 50 s", () => {
+    expect(trimClip(tiny({}), "c1", "out", 10000).tracks[0].clips[0].out).toBeCloseTo(50)
+  })
+  it("parseProject rejects a looping clip beyond maxLoopLength", () => {
+    const rt = (p: Project) => parseProject(JSON.parse(JSON.stringify(p)))
+    expect(rt(tiny({ out: 50 }))).not.toBeNull()
+    expect(rt(tiny({ out: 51 }))).toBeNull()
+  })
+  it("setClipLoop(true) clamps the length", () => {
+    const p = tiny({ out: 400, loop: undefined })
+    delete (p.tracks[0].clips[0] as Partial<Clip>).loop
+    const q = { ...p, assets: { a: { ...p.assets.a, duration: 0.1 } } }
+    expect(setClipLoop(q, "c1", true).tracks[0].clips[0].out).toBeCloseTo(50)
+  })
+  it("expandLoops never emits more than MAX_LOOP_COPIES copies", () => {
+    const p = tiny({ out: 20000 })
+    expect(expandLoops(p).tracks[0].clips.length).toBeLessThanOrEqual(MAX_LOOP_COPIES)
+  })
+  it("a length a hair above a multiple of the source gives a last out <= d", () => {
+    const clips = expandLoops(mk([loopClip({ out: 20 + 5e-7 })])).tracks[0].clips
+    expect(clips).toHaveLength(2)
+    expect(clips[1].out).toBeLessThanOrEqual(10)
+  })
+  it("caps a loop's edge effects to the copy they land on", () => {
+    const gif = (clip: Partial<Clip>) => mk([loopClip({ out: 5, ...clip })], { assets: { a: { file: "g.mp4", duration: 1, hasAudio: false } } })
+    const clips = expandLoops(gif({ out: 4.4, edgeIn: { type: "fade", duration: 2 }, edgeOut: { type: "fade", duration: 2 } })).tracks[0].clips
+    expect(clips[0].edgeIn?.duration).toBe(1)
+    expect(clips.at(-1)!.edgeOut?.duration).toBeCloseTo(0.4)
+    for (const c of clips) {
+      expect(c.edgeIn?.duration ?? 0).toBeLessThanOrEqual(c.out - c.in + 1e-9)
+      expect(c.edgeOut?.duration ?? 0).toBeLessThanOrEqual(c.out - c.in + 1e-9)
+    }
+  })
+  it("a NaN length leaves the clip in place", () => {
+    const p = mk([loopClip({ out: NaN })])
+    expect(expandLoops(p)).toBe(p)
+  })
+})
+
+describe("newClipLength", () => {
+  const cases: [string, Asset, number][] = [
+    ["image", { file: "i.jpg", duration: 1, hasAudio: false, kind: "image" }, DEFAULT_IMAGE],
+    ["looping 2 s video (a GIF)", { file: "g.mp4", duration: 2, hasAudio: false, loopByDefault: true }, DEFAULT_IMAGE],
+    ["ordinary 7 s video", { file: "v.mp4", duration: 7, hasAudio: true }, 7],
+    ["audio", { file: "s.mp3", duration: 12, hasAudio: true, kind: "audio" }, 12],
+  ]
+  for (const [name, asset, want] of cases) {
+    it(`${name}: ${want} s, the length addClip gives it`, () => {
+      expect(newClipLength(asset)).toBe(want)
+      const p = addClip({ ...sample(), assets: { x: asset } }, "x", 0, { start: 0 }, "n")
+      const c = allClips(p).find((k) => k.id === "n")!
+      expect(clipLength(c)).toBe(newClipLength(asset))
+    })
+  }
+})
+
+describe("asset titles", () => {
+  const withAsset = (a: Record<string, unknown>) => ({ ...newProject("P"), assets: { a1: { file: "u.mp3", duration: 10, hasAudio: true, kind: "audio", ...a } } })
+  const title = (a: Record<string, unknown>) => parseProject(withAsset(a))?.assets.a1.title
+
+  it("assetLabel: the title wins, a blank or missing one falls back to the file", () => {
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "Rain" })).toBe("Rain")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "  " })).toBe("u.mp3")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true, title: "" })).toBe("u.mp3")
+    expect(assetLabel({ file: "u.mp3", duration: 1, hasAudio: true })).toBe("u.mp3")
+  })
+
+  it("keeps a valid title, trimmed with whitespace collapsed and capped at 120", () => {
+    expect(title({ title: "Rain" })).toBe("Rain")
+    expect(title({ title: "  Soft \n rain\t\tat  night " })).toBe("Soft rain at night")
+    expect(title({ title: "x".repeat(300) })).toBe("x".repeat(120))
+  })
+
+  it("drops a non-string or empty title without rejecting the project", () => {
+    for (const t of [5, null, {}, ["a"], "", "  \n "]) {
+      const p = parseProject(withAsset({ title: t }))
+      expect(p).not.toBeNull()
+      expect(p!.assets.a1).not.toHaveProperty("title")
+    }
+  })
+
+  it("an old project without titles round-trips unchanged", () => {
+    const old = withAsset({})
+    expect(parseProject(old)).toEqual(old)
+    expect(parseProject(parseProject(old))).toEqual(old)
+  })
+
+  it("mergeClientProject keeps a stored asset's title and ignores the client's", () => {
+    const stored = withAsset({ title: "Rain" }) as unknown as Project
+    const client = { ...stored, assets: { a1: { ...stored.assets.a1, title: "Evil" } }, tracks: [{ id: "t1", clips: [] }] }
+    expect(mergeClientProject(client, stored)?.assets.a1.title).toBe("Rain")
+  })
+})
+
+describe("setClipKey (a transparent background)", () => {
+  const key = { key: [255, 255, 255] as [number, number, number], tolerance: 18, contiguous: true }
+  const proj = (): Project => ({
+    ...newProject("P"),
+    assets: { i: { file: "a.png", duration: 5, hasAudio: false, kind: "image" }, v: { file: "v.mp4", duration: 4, hasAudio: false } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "i", in: 0, out: 3, start: 0 }, { id: "c2", asset: "v", in: 0, out: 2, start: 3 }] }],
+  })
+
+  it("sets, changes and clears an image clip's key, and leaves the asset alone", () => {
+    const p = proj()
+    const set = setClipKey(p, "c1", key)
+    expect(set.tracks[0].clips[0].key).toEqual(key)
+    expect(set.assets).toEqual(p.assets)
+    expect(setClipKey(set, "c1", key)).toBe(set)
+    expect(setClipKey(set, "c1", { ...key, tolerance: 30 }).tracks[0].clips[0].key?.tolerance).toBe(30)
+    expect(setClipKey(set, "c1", undefined).tracks[0].clips[0].key).toBeUndefined()
+    expect(setClipKey(p, "c1", undefined)).toBe(p)
+  })
+
+  it("keys a video clip too, and refuses an unknown clip and a malformed key", () => {
+    const p = proj()
+    expect(setClipKey(p, "c2", key).tracks[0].clips[1].key).toEqual(key)
+    expect(setClipKey(p, "zzz", key)).toBe(p)
+    expect(setClipKey(p, "c1", { ...key, tolerance: 500 })).toBe(p)
+    expect(setClipKey(p, "c1", { ...key, key: [1, 2, 300] })).toBe(p)
+  })
+
+  it("round-trips through parseProject, and a malformed stored key is rejected", () => {
+    const set = setClipKey(setClipKey(proj(), "c1", key), "c2", key)
+    const back = parseProject(JSON.parse(JSON.stringify(set)))
+    expect(back?.tracks[0].clips.map((c) => c.key)).toEqual([key, key])
+    const bad = JSON.parse(JSON.stringify(set))
+    bad.tracks[0].clips[1].key = { ...key, tolerance: 999 }
+    expect(parseProject(bad)).toBeNull()
+  })
+})
+
+describe("dropZone and placeOnClip (media dropped on a clip)", () => {
+  const assets: Record<string, Asset> = {
+    v: { file: "v.mp4", duration: 10, hasAudio: false },
+    n: { file: "n.mp4", duration: 4, hasAudio: false },
+    i: { file: "i.png", duration: 5, hasAudio: false, kind: "image" },
+    s: { file: "s.mp3", duration: 6, hasAudio: true, kind: "audio" },
+  }
+  const clip = (id: string, start: number, len: number, asset = "v"): Clip => ({ id, asset, in: 0, out: len, start })
+  const proj = (clips: Clip[], magnetic = false): Project => ({ ...newProject("P"), assets, tracks: [{ id: "t1", ...(magnetic ? { magnetic: true as const } : {}), clips }] })
+  const ids = (p: Project, t = 0) => p.tracks[t].clips.map((c) => `${c.id}@${c.start}`)
+
+  it("dropZone: 40% left, 20% middle, 40% right", () => {
+    expect(dropZone(0)).toBe("before")
+    expect(dropZone(0.39)).toBe("before")
+    expect(dropZone(0.5)).toBe("replace")
+    expect(dropZone(0.6)).toBe("replace")
+    expect(dropZone(0.61)).toBe("after")
+    expect(dropZone(1)).toBe("after")
+  })
+
+  it("before: the new clip takes the clip's start and it and everything after move later (a free layer)", () => {
+    const p = proj([clip("a", 0, 3), clip("b", 3, 3), clip("c", 20, 2)])
+    const r = placeOnClip(p, "n", { clip: "b", mode: "before" }, "x")
+    expect(ids(r)).toEqual(["a@0", "x@3", "b@7", "c@20"])
+  })
+
+  it("after: the new clip starts where the clip ends and later clips that would overlap move, the rest stay", () => {
+    const p = proj([clip("a", 0, 3), clip("b", 3, 3), clip("c", 7, 2), clip("d", 30, 2)])
+    const r = placeOnClip(p, "n", { clip: "a", mode: "after" }, "x")
+    expect(ids(r)).toEqual(["a@0", "x@3", "b@7", "c@10", "d@30"])
+  })
+
+  it("on a snapped base, before and after insert and the base packs", () => {
+    const p = proj([clip("a", 0, 3), clip("b", 3, 3)], true)
+    expect(ids(placeOnClip(p, "n", { clip: "b", mode: "before" }, "x"))).toEqual(["a@0", "x@3", "b@7"])
+    expect(ids(placeOnClip(p, "n", { clip: "a", mode: "after" }, "x"))).toEqual(["a@0", "x@3", "b@7"])
+    expect(ids(placeOnClip(p, "n", { clip: "a", mode: "before" }, "x"))).toEqual(["x@0", "a@4", "b@7"])
+    expect(ids(placeOnClip(p, "n", { clip: "b", mode: "after" }, "x"))).toEqual(["a@0", "b@3", "x@6"])
+  })
+
+  it("replace: the new media takes the clip's place (a still its length, a video up to its own), on a free layer and a snapped base", () => {
+    const p = proj([clip("a", 0, 3), clip("b", 5, 6), clip("c", 20, 2)])
+    const still = placeOnClip(p, "i", { clip: "b", mode: "replace" }, "x")
+    expect(ids(still)).toEqual(["a@0", "x@5", "c@20"])
+    expect(still.tracks[0].clips[1].out).toBe(6)
+    const short = placeOnClip(p, "n", { clip: "b", mode: "replace" }, "x")
+    expect(short.tracks[0].clips[1].out).toBe(4)
+    const m = proj([clip("a", 0, 3), clip("b", 3, 6), clip("c", 9, 2)], true)
+    expect(ids(placeOnClip(m, "i", { clip: "b", mode: "replace" }, "x"))).toEqual(["a@0", "x@3", "c@9"])
+  })
+
+  it("sounds only on the audio layer's clips, and nothing else there", () => {
+    const withAudio: Project = { ...proj([clip("a", 0, 3)]), audioTrack: { id: "audio", clips: [clip("m", 0, 6, "s")] } }
+    expect(placeOnClip(withAudio, "s", { clip: "a", mode: "before" }, "x")).toBe(withAudio)
+    expect(placeOnClip(withAudio, "v", { clip: "m", mode: "replace" }, "x")).toBe(withAudio)
+    const ok = placeOnClip(withAudio, "s", { clip: "m", mode: "after" }, "x")
+    expect(ok.audioTrack?.clips.map((c) => `${c.id}@${c.start}`)).toEqual(["m@0", "x@6"])
+  })
+
+  it("refuses an unknown clip, a taken id and a result past MAX_TIMELINE; placeDropped then falls back to addClip", () => {
+    const p = proj([clip("a", 0, 3)])
+    expect(placeOnClip(p, "n", { clip: "zzz", mode: "before" }, "x")).toBe(p)
+    expect(placeOnClip(p, "n", { clip: "a", mode: "before" }, "a")).toBe(p)
+    expect(placeDropped(p, "n", 0, { start: 10, on: { clip: "zzz", mode: "before" } }, "x").tracks[0].clips.map((c) => c.id)).toContain("x")
+    const late = proj([clip("a", MAX_TIMELINE - 3, 3)])
+    expect(placeOnClip(late, "n", { clip: "a", mode: "before" }, "x")).toBe(late)
+  })
+})
+
+describe("moveOnClip (a clip dragged onto another)", () => {
+  const assets: Record<string, Asset> = { v: { file: "v.mp4", duration: 10, hasAudio: false }, s: { file: "s.mp3", duration: 6, hasAudio: true, kind: "audio" } }
+  const clip = (id: string, start: number, len: number, asset = "v"): Clip => ({ id, asset, in: 0, out: len, start })
+  const proj = (clips: Clip[], magnetic = false, extra: Partial<Project> = {}): Project => ({ ...newProject("P"), assets, tracks: [{ id: "t1", ...(magnetic ? { magnetic: true as const } : {}), clips }], ...extra })
+  const ids = (p: Project, t = 0) => p.tracks[t].clips.map((c) => `${c.id}@${c.start}`)
+
+  it("on a snapped base, moving a clip before or after another reorders and packs", () => {
+    const p = proj([clip("a", 0, 2), clip("b", 2, 3), clip("c", 5, 4)], true)
+    expect(ids(moveOnClip(p, "c", { clip: "a", mode: "before" }))).toEqual(["c@0", "a@4", "b@6"])
+    expect(ids(moveOnClip(p, "a", { clip: "c", mode: "after" }))).toEqual(["b@0", "c@3", "a@7"])
+    expect(ids(moveOnClip(p, "a", { clip: "b", mode: "after" }))).toEqual(["b@0", "a@3", "c@5"])
+  })
+
+  it("replace: the moved clip takes the other's place and the other is gone", () => {
+    const p = proj([clip("a", 0, 2), clip("b", 2, 3), clip("c", 5, 4)], true)
+    expect(ids(moveOnClip(p, "a", { clip: "c", mode: "replace" }))).toEqual(["b@0", "a@3"])
+    const free = proj([clip("a", 0, 2), clip("b", 4, 3)])
+    expect(ids(moveOnClip(free, "a", { clip: "b", mode: "replace" }))).toEqual(["a@4"])
+  })
+
+  it("on a free layer, before pushes the target and the clips after it later", () => {
+    const p = proj([clip("a", 0, 2), clip("b", 5, 3), clip("c", 8, 1)])
+    expect(ids(moveOnClip(p, "a", { clip: "b", mode: "before" }))).toEqual(["a@5", "b@7", "c@10"])
+  })
+
+  it("moves between layers and keeps the clip's settings", () => {
+    const two: Project = { ...proj([clip("a", 0, 2)]), tracks: [{ id: "t1", clips: [{ ...clip("a", 0, 2), muted: true }] }, { id: "t2", clips: [clip("b", 3, 3)] }] }
+    const r = moveOnClip(two, "a", { clip: "b", mode: "after" })
+    expect(ids(r, 1)).toEqual(["b@3", "a@6"])
+    expect(r.tracks[1].clips[1].muted).toBe(true)
+    expect(r.tracks[0].clips).toEqual([])
+  })
+
+  it("refuses the same clip, an unknown clip and a sound onto a picture clip", () => {
+    const p = proj([clip("a", 0, 2), clip("b", 2, 3)])
+    expect(moveOnClip(p, "a", { clip: "a", mode: "before" })).toBe(p)
+    expect(moveOnClip(p, "a", { clip: "zzz", mode: "before" })).toBe(p)
+    const withAudio = proj([clip("a", 0, 2)], false, { audioTrack: { id: "audio", clips: [clip("m", 0, 6, "s")] } })
+    expect(moveOnClip(withAudio, "m", { clip: "a", mode: "before" })).toBe(withAudio)
+  })
+})
+
+describe("rippleRemoveClip, pasteClip and settings that travel with a clip", () => {
+  const assets: Record<string, Asset> = {
+    v: { file: "v.mp4", duration: 10, hasAudio: true },
+    s: { file: "s.mp3", duration: 6, hasAudio: true, kind: "audio" },
+  }
+  const clip = (id: string, start: number, len: number, asset = "v", extra: Partial<Clip> = {}): Clip => ({ id, asset, in: 0, out: len, start, ...extra })
+  const proj = (clips: Clip[], extra: Partial<Project> = {}, magnetic = false): Project => ({ ...newProject("P"), assets, tracks: [{ id: "t1", ...(magnetic ? { magnetic: true as const } : {}), clips }, { id: "t2", clips: [clip("o", 4, 2)] }], ...extra })
+  const ids = (p: Project, t = 0) => p.tracks[t].clips.map((c) => `${c.id}@${c.start}`)
+  const key = { key: [0, 255, 0] as [number, number, number], tolerance: 20, contiguous: true }
+
+  it("ripple delete closes the gap on its own layer only", () => {
+    const p = proj([clip("a", 0, 2), clip("b", 3, 3), clip("c", 8, 1)])
+    const r = rippleRemoveClip(p, "b")
+    expect(ids(r)).toEqual(["a@0", "c@5"])
+    expect(ids(r, 1)).toEqual(["o@4"])
+    expect(rippleRemoveClip(p, "zzz")).toBe(p)
+  })
+
+  it("ripple delete on a snapped base packs, and works on the audio layer", () => {
+    expect(ids(rippleRemoveClip(proj([clip("a", 0, 2), clip("b", 2, 3), clip("c", 5, 1)], {}, true), "a"))).toEqual(["b@0", "c@3"])
+    const audio = proj([clip("a", 0, 2)], { audioTrack: { id: "audio", clips: [clip("m", 1, 2, "s"), clip("n", 5, 1, "s")] } })
+    expect(rippleRemoveClip(audio, "m").audioTrack?.clips.map((c) => `${c.id}@${c.start}`)).toEqual(["n@3"])
+  })
+
+  it("paste keeps every setting, gets a new id and no transition, and slides clear of overlaps", () => {
+    const src = clip("a", 0, 3, "v", { muted: true, key, transform: { x: 0.1, y: 0, scale: 0.5, cropTop: 0, cropBottom: 0 }, transition: { type: "fade", duration: 1 } as never })
+    const p = proj([src, clip("b", 3, 3)])
+    const r = pasteClip(p, src, 0, 1, "x")
+    const pasted = r.tracks[0].clips.find((c) => c.id === "x")!
+    expect(pasted).toMatchObject({ asset: "v", in: 0, out: 3, muted: true, key, transform: src.transform })
+    expect(pasted.transition).toBeUndefined()
+    expect(pasted.start).toBeGreaterThanOrEqual(6)
+    expect(pasted.key).not.toBe(src.key)
+  })
+
+  it("paste on a snapped base inserts at the slot; a missing layer falls back to layer 1; a sound goes to the audio layer", () => {
+    const src = clip("a", 0, 2)
+    expect(ids(pasteClip(proj([src, clip("b", 2, 3)], {}, true), src, 0, 2, "x"))).toEqual(["a@0", "x@2", "b@4"])
+    expect(pasteClip(proj([src]), src, 9, 5, "x").tracks[0].clips.some((c) => c.id === "x")).toBe(true)
+    const snd = clip("m", 0, 2, "s")
+    const r = pasteClip(proj([src], { audioTrack: { id: "audio", clips: [snd] } }), snd, 0, 4, "x")
+    expect(r.audioTrack?.clips.map((c) => c.id)).toEqual(["m", "x"])
+  })
+
+  it("paste refuses a clip whose media is gone or an id in use", () => {
+    const p = proj([clip("a", 0, 2)])
+    expect(pasteClip(p, clip("g", 0, 2, "gone"), 0, 0, "x")).toBe(p)
+    expect(pasteClip(p, clip("a", 0, 2), 0, 0, "a")).toBe(p)
+  })
+
+  it("moving a clip keeps its key, and splitting it gives both halves the key", () => {
+    const k = clip("a", 0, 4, "v", { key })
+    const p = proj([k])
+    expect(moveClip(p, "a", 1, { start: 10 }).tracks[1].clips.find((c) => c.id === "a")?.key).toEqual(key)
+    expect(splitClip(p, "a", 2, "b").tracks[0].clips.map((c) => c.key)).toEqual([key, key])
+  })
+})
+
+describe("retimeClip (a clip pointed at a retimed copy)", () => {
+  const assets: Record<string, Asset> = {
+    v: { file: "v.mp4", duration: 10, hasAudio: true },
+    slow: { file: "slow.mp4", duration: 20, hasAudio: true, retime: { source: "v", speed: 0.5, reverse: false, from: 0, to: 10 } },
+    img: { file: "i.png", duration: 5, hasAudio: false, kind: "image" },
+  }
+  const clip = (id: string, start: number, len: number, asset = "v", extra: Partial<Clip> = {}): Clip => ({ id, asset, in: 0, out: len, start, ...extra })
+  const proj = (clips: Clip[], magnetic = false): Project => ({ ...newProject("P"), assets, tracks: [{ id: "t1", ...(magnetic ? { magnetic: true as const } : {}), clips }] })
+  const ids = (p: Project) => p.tracks[0].clips.map((c) => `${c.id}@${c.start}`)
+
+  it("slowing a clip down lengthens it and pushes later clips on a free layer", () => {
+    const p = proj([clip("a", 0, 4), clip("b", 4, 3), clip("c", 30, 1)])
+    const r = retimeClip(p, "a", "slow", 0, 8)
+    expect(r.tracks[0].clips[0]).toMatchObject({ asset: "slow", in: 0, out: 8 })
+    expect(ids(r)).toEqual(["a@0", "b@8", "c@30"])
+  })
+
+  it("speeding up leaves a gap on a free layer and packs on a snapped base", () => {
+    const free = proj([clip("a", 0, 8, "slow"), clip("b", 8, 3)])
+    expect(ids(retimeClip(free, "a", "v", 0, 4))).toEqual(["a@0", "b@8"])
+    const snapped = proj([clip("a", 0, 8, "slow"), clip("b", 8, 3)], true)
+    expect(ids(retimeClip(snapped, "a", "v", 0, 4))).toEqual(["a@0", "b@4"])
+  })
+
+  it("refuses a looping clip, an image, a window past the file and an unknown clip", () => {
+    const p = proj([clip("a", 0, 4), clip("l", 10, 12, "v", { loop: true })])
+    expect(retimeClip(p, "l", "slow", 0, 5)).toBe(p)
+    expect(retimeClip(p, "a", "img", 0, 3)).toBe(p)
+    expect(retimeClip(p, "a", "slow", 0, 25)).toBe(p)
+    expect(retimeClip(p, "zzz", "slow", 0, 5)).toBe(p)
+  })
+
+  it("retimes a sound clip on the audio layer, but never turns a video into a sound", () => {
+    const withAudio: Project = {
+      ...proj([clip("a", 0, 4)]),
+      assets: { ...assets, s: { file: "s.mp3", duration: 8, hasAudio: true, kind: "audio" }, s2: { file: "s2.m4a", duration: 4, hasAudio: true, kind: "audio", retime: { source: "s", speed: 2, reverse: false, from: 0, to: 8 } } },
+      audioTrack: { id: "audio", clips: [clip("m", 0, 8, "s")] },
+    }
+    const r = retimeClip(withAudio, "m", "s2", 0, 4)
+    expect(r.audioTrack?.clips[0]).toMatchObject({ asset: "s2", in: 0, out: 4 })
+    expect(retimeClip(withAudio, "m", "slow", 0, 8)).toBe(withAudio)
+    expect(retimeClip(withAudio, "a", "s2", 0, 4)).toBe(withAudio)
+  })
+
+  it("keeps the clip's settings and round-trips a retime asset through parseProject", () => {
+    const p = proj([clip("a", 0, 4, "v", { muted: true })])
+    expect(retimeClip(p, "a", "slow", 0, 8).tracks[0].clips[0].muted).toBe(true)
+    const back = parseProject(JSON.parse(JSON.stringify(retimeClip(p, "a", "slow", 0, 8))))
+    expect(back?.assets.slow.retime).toEqual(assets.slow.retime)
+    const bad = JSON.parse(JSON.stringify(p))
+    bad.assets.slow = { ...assets.slow, retime: { source: "v", speed: 99, reverse: false, from: 0, to: 1 } }
+    expect(parseProject(bad)).toBeNull()
   })
 })

@@ -39,7 +39,7 @@ export async function updateAiSettings(data: AiSettingsInput): Promise<{ error: 
 export type AiTestResult = { error: string } | { success: true; model: string; seesImages: boolean; detail: string }
 
 /**
- * Sends a tiny solid-red image and asks for its colour. Tests what's on
+ * Sends a tiny solid-red image and asks for its color. Tests what's on
  * screen, falling back to saved values; a saved key only goes to its own server.
  */
 export async function testAiConnection(data: AiSettingsInput): Promise<AiTestResult> {
@@ -68,7 +68,7 @@ export async function testAiConnection(data: AiSettingsInput): Promise<AiTestRes
         {
           role: "user",
           content: [
-            { type: "text", text: 'What single colour fills this image? Reply only with JSON like {"color":"blue"}.' },
+            { type: "text", text: 'What single color fills this image? Reply only with JSON like {"color":"blue"}.' },
             { type: "image_url", image_url: { url: `data:image/jpeg;base64,${red.toString("base64")}` } },
           ],
         },

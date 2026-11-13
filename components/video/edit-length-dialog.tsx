@@ -7,7 +7,7 @@ import { LINKED, setClipTiming, type ClipTiming, type TimingMode } from "@/lib/v
 import { fxPreviewed } from "@/lib/video/audio-levels"
 import { lengthSummary } from "@/lib/video/dialog-ui"
 import { FieldHelp } from "@/components/ui/field-help"
-import { assetKind, clipLength, hasSound, isMagnetic, isTextClip, MIN_CLIP, type Clip, type Project } from "@/lib/video/project"
+import { assetKind, assetLabel, clipLength, isMagnetic, isTextClip, MIN_CLIP, showsSourceWindow, type Clip, type Project } from "@/lib/video/project"
 import { formatSeconds, parseTime, playheadEdge, roundMs, stepTime, typedEdge, type EdgeResult } from "@/lib/video/source-precision"
 import type { SourceSelection } from "@/lib/video/source-window"
 import { cn } from "@/lib/utils"
@@ -167,8 +167,9 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
   const [length, setLength] = useState(clipLength(clip))
   const [text, setText] = useState({ start: fmt(clip.start), end: fmt(clip.start + clipLength(clip)), length: fmt(clipLength(clip)) })
   const [mode, setMode] = useState<TimingMode>("push")
-  // A clip with sound (an audio clip, or a video whose file has sound) shows its source window.
-  const source = hasSound(project, clip) ? project.assets[clip.asset] : undefined
+  // A clip with sound (an audio clip, or a video whose file has sound) shows its source window; a looping one doesn't
+  // (its length runs past the source, so the strip and In/Out would cut it to the source's length).
+  const source = showsSourceWindow(project, clip) ? project.assets[clip.asset] : undefined
   const [srcIn, setSrcIn] = useState(clip.in)
   const selection: SourceSelection = useMemo(() => ({ in: srcIn, out: srcIn + length }), [srcIn, length])
   // An In or Out you changed goes in on whole milliseconds (one you didn't keeps the clip's own number).
@@ -240,7 +241,7 @@ export function EditLengthDialog({ project, folder, clip, track, mediaUrl, onApp
     dialog.close(() => onApply(timing, mode))
   }
 
-  const name = isTextClip(clip) ? `Text “${clip.text.content.replace(/\s+/g, " ").slice(0, 40)}”` : (project.assets[clip.asset]?.file ?? "Missing file")
+  const name = isTextClip(clip) ? `Text “${clip.text.content.replace(/\s+/g, " ").slice(0, 40)}”` : (Object.hasOwn(project.assets, clip.asset) ? assetLabel(project.assets[clip.asset]) : "Missing file")
   const changed = fieldsOk ? lengthSummary({ start: clip.start, length: clipLength(clip) }, { start, length }) : null
   const summary = changed && `${changed}${mode === "overwrite" ? ", overwriting what it covers" : ""}.`
   const blocked = canApply ? null : errors.start ? `Start: ${errors.start}` : errors.end ? `End: ${errors.end}` : errors.length ? `Length: ${errors.length}` : (problem ?? "Check the times first.")

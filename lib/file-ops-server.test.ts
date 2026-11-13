@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { moveToDropoff, sendToTemp } from "./file-ops-server"
+import { moveToDropoff, moveWithin, sendToTemp } from "./file-ops-server"
 import { rootPath } from "./library-server"
 
 const tmp = path.join(os.tmpdir(), `ps-fileops-${process.pid}-${Date.now()}`)
@@ -91,5 +91,39 @@ describe("moveToDropoff from Personal Storage", () => {
     expect(r.ok).toEqual(["IMG_1.jpg"])
     expect(await read(dropoff, "IMG_1.jpg")).toBe("new photo")
     expect(await exists(temp, "Jessi", "IMG_1.jpg")).toBe(false)
+  })
+})
+
+describe("moveWithin", () => {
+  beforeEach(async () => {
+    await fs.mkdir(path.join(temp, "Mike", "Trips"), { recursive: true })
+    await fs.writeFile(path.join(temp, "Mike", "a.jpg"), "a")
+    await fs.writeFile(path.join(temp, "Mike", "b.jpg"), "b")
+    await fs.writeFile(path.join(temp, "Mike", "Trips", "a.jpg"), "other a")
+  })
+
+  it("moves files into another folder, numbering one whose name is taken there", async () => {
+    const r = await moveWithin("temp", ["Mike"], ["a.jpg", "b.jpg"], ["Mike", "Trips"])
+    expect(r.failed).toEqual([])
+    expect(r.ok.sort()).toEqual(["a.jpg", "b.jpg"])
+    expect(await exists(temp, "Mike", "a.jpg")).toBe(false)
+    expect(await read(temp, "Mike", "Trips", "a.jpg")).toBe("other a")
+    expect(await read(temp, "Mike", "Trips", "b.jpg")).toBe("b")
+    expect((await fs.readdir(path.join(temp, "Mike", "Trips"))).length).toBe(3)
+  })
+
+  it("refuses the folder a file is already in, and a folder that doesn't exist", async () => {
+    const same = await moveWithin("temp", ["Mike"], ["a.jpg"], ["Mike"])
+    expect(same.ok).toEqual([])
+    expect(same.failed[0].error).toMatch(/already/)
+    const gone = await moveWithin("temp", ["Mike"], ["a.jpg"], ["Mike", "Nope"])
+    expect(gone.ok).toEqual([])
+    expect(await exists(temp, "Mike", "a.jpg")).toBe(true)
+  })
+
+  it("never reaches outside the root", async () => {
+    const r = await moveWithin("temp", ["Mike"], ["a.jpg"], ["..", "upload"])
+    expect(r.ok).toEqual([])
+    expect(await exists(temp, "Mike", "a.jpg")).toBe(true)
   })
 })

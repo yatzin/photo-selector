@@ -5,7 +5,7 @@ import path from "path"
 import sharp from "sharp"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { buildExportArgs, buildExportGraph, overlayPosition, parseProbe, parseProgressLine, probeMedia, runExport, textRaster } from "./ffmpeg-server"
-import { endToEnd, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
+import { endToEnd, expandLoops, newProject, setBaseMagnetic, totalLength, type Clip, type Project } from "./project"
 import { textSize, type ClipText } from "./text"
 import { animationState } from "./text-animation"
 import { rasteriseText } from "./text-raster-server"
@@ -951,7 +951,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     for (const [x, y] of [[600, 540], [1320, 540], [500, 300], [960, 30]]) expect(Math.max(...(await pixel(r.out, x, y)))).toBeLessThan(40)
   }, 60_000)
 
-  it("mirrors a flipped clip: its left and right colours swap", async () => {
+  it("mirrors a flipped clip: its left and right colors swap", async () => {
     const split = path.join(dir, "split.mp4")
     await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=320x360:r=25:d=3", "-f", "lavfi", "-i", "color=c=blue:s=320x360:r=25:d=3", "-filter_complex", "[0:v][1:v]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", split])
     const p: Project = {
@@ -1204,8 +1204,8 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
   beforeAll(async () => {
     process.env.FFMPEG_PATH = FFMPEG
     fs.mkdirSync(dir, { recursive: true })
-    for (const [file, colour, hz] of [[red, "red", 440], [blue, "blue", 660]] as const) {
-      await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=320x180:r=30:d=6`, "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=6`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", file])
+    for (const [file, color, hz] of [[red, "red", 440], [blue, "blue", 660]] as const) {
+      await ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:s=320x180:r=30:d=6`, "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=6`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", file])
     }
   }, 60_000)
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -1352,7 +1352,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
   }, 60_000)
 
   describe("the app's own transitions", () => {
-    // A 640x360 canvas keeps the per-pixel expressions quick. `half`: red on the left, blue on the right (the glitch's colour split shows at the seam).
+    // A 640x360 canvas keeps the per-pixel expressions quick. `half`: red on the left, blue on the right (the glitch's color split shows at the seam).
     const half = path.join(dir, "half.mp4")
     beforeAll(async () => {
       await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=160x180:r=30:d=6", "-f", "lavfi", "-i", "color=c=blue:s=160x180:r=30:d=6", "-filter_complex", "[0][1]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-y", half])
@@ -1382,7 +1382,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       }
     }
     const mixed = ([r, , b]: number[]) => r > 40 && b > 40
-    const colours = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
+    const colors = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
 
     it.each(CUSTOM_TRANSITIONS.filter((t) => t !== "glitch"))("%s: the outgoing picture at the start, the incoming one at the end", async (type) => {
       const out = await renderCustom(type)
@@ -1395,14 +1395,14 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       const mid = await frame(out, 3)
       const grid: [number, number][] = []
       for (let y = 20; y < H; y += 40) for (let x = 20; x < W; x += 40) grid.push([x, y])
-      const seen = colours(mid, grid)
+      const seen = colors(mid, grid)
       // Every one is part way: some of the outgoing picture or something else still shows mid-way, and some of the incoming one.
       if (!type.startsWith("whip")) expect(seen).toMatch(/B/)
       if (type === "heart") {
         expect(isBlue(mid(320, 180))).toBe(true)
         expect(isRed(mid(5, 5))).toBe(true)
       } else if (type === "reveal") {
-        expect(colours(mid, [[40, 180], [320, 180], [600, 180]])).toBe("ABA")
+        expect(colors(mid, [[40, 180], [320, 180], [600, 180]])).toBe("ABA")
       } else if (type.startsWith("whip")) {
         // Half and half, smeared where they meet.
         const seam = type === "whip-left" || type === "whip-right" ? mid(320, 180) : mid(320, 180)
@@ -1422,7 +1422,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       }
     }, 60_000)
 
-    it("glitch: the colours split apart at the peak, a hard switch at the middle", async () => {
+    it("glitch: the colors split apart at the peak, a hard switch at the middle", async () => {
       const out = await renderCustom("glitch", half)
       expect(isRed((await frame(out, 2.5))(100, 180))).toBe(true)
       // Just before the middle, red pulled right over the blue half and blue pulled left: magenta beside the seam on some row.
@@ -1438,8 +1438,8 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
     it("a 6 s transition between two clips with no footage beyond the cut trims them and exports at the shorter length", async () => {
       const long = path.join(dir, "long-red.mp4")
       const longBlue = path.join(dir, "long-blue.mp4")
-      for (const [file, colour] of [[long, "red"], [longBlue, "blue"]] as const) {
-        await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=160x90:r=30:d=12`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", file])
+      for (const [file, color] of [[long, "red"], [longBlue, "blue"]] as const) {
+        await ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:s=160x90:r=30:d=12`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", file])
       }
       const p: Project = {
         ...newProject("X"), width: W, height: H,
@@ -1456,5 +1456,79 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       expect(isRed((await frame(out, 0.05))(320, 180))).toBe(true)
       expect(isBlue((await frame(out, 5.9))(320, 180))).toBe(true)
     }, 60_000)
+  })
+})
+describe("export honours loops", () => {
+  const looped = (): Project => ({
+    ...newProject("P"),
+    assets: { a: { file: "a.mp4", duration: 10, hasAudio: true } },
+    tracks: [{ id: "t1", clips: [{ id: "c1", asset: "a", start: 0, in: 0, out: 25, loop: true }] }],
+  })
+  const lf = { a: "/x/a.mp4" }
+
+  it("builds the graph of the expanded copies (a 25 s loop of a 10 s clip is three segments)", () => {
+    const expanded = expandLoops(looped())
+    expect(expanded.tracks[0].clips).toHaveLength(3)
+    expect(buildExportGraph(looped(), lf)).toEqual(buildExportGraph(expanded, lf))
+    expect(buildExportGraph(looped(), lf).graph).toContain("concat=n=3:v=1:a=1")
+    expect(totalLength(expanded)).toBeCloseTo(25)
+  })
+
+  it("buildExportArgs gets the same three segments", () => {
+    const args = buildExportArgs(looped(), lf, "/o.mp4")
+    expect(args).toEqual(buildExportArgs(expandLoops(looped()), lf, "/o.mp4"))
+    expect(graph(args)).toContain("concat=n=3:v=1:a=1")
+  })
+
+  it("leaves a project with nothing to loop alone", () => {
+    expect(buildExportGraph(twoClips(), files)).toEqual(buildExportGraph(expandLoops(twoClips()), files))
+  })
+})
+
+describe("an image clip with its background keyed out (clip.key)", () => {
+  const key = { key: [255, 255, 255] as [number, number, number], tolerance: 18, contiguous: true }
+  const p = (keyed: boolean): Project => ({
+    ...newProject("P"),
+    assets: { i: { file: "i.png", duration: 5, hasAudio: false, kind: "image" } },
+    tracks: base([{ id: "c1", asset: "i", in: 0, out: 3, ...(keyed ? { key } : {}) }]),
+  })
+  const g = (keyed: boolean) => buildExportGraph(p(keyed), { i: "/x/i.png", "keyed:c1": "/x/keyed.png" }).graph
+
+  it("is fitted without black padding, kept see-through and overlaid on the canvas", () => {
+    const graph = g(true)
+    expect(graph).toContain("format=yuva420p")
+    expect(graph).not.toContain("pad=")
+    expect(graph).toContain("overlay=")
+  })
+
+  it("reads the keyed picture, not the original", () => {
+    const args = buildExportArgs(p(true), { i: "/x/i.png", "keyed:c1": "/x/keyed.png" }, "o")
+    expect(args).toContain("/x/keyed.png")
+    expect(args).not.toContain("/x/i.png")
+  })
+
+  it("a plain image still takes the flat, padded path", () => {
+    expect(g(false)).toContain("pad=")
+  })
+})
+
+describe("a video clip with its background keyed out", () => {
+  const key = { key: [0, 255, 0] as [number, number, number], tolerance: 20, contiguous: true }
+  const p = (keyed: boolean): Project => ({
+    ...newProject("P"),
+    assets: { v: { file: "v.mp4", duration: 5, hasAudio: false } },
+    tracks: base([{ id: "c1", asset: "v", in: 0, out: 3, ...(keyed ? { key } : {}) }]),
+  })
+  const g = (keyed: boolean) => buildExportGraph(p(keyed), { v: "/x/v.mp4" }).graph
+
+  it("runs ffmpeg's colorkey on the clip, unpadded, and overlays it on the canvas", () => {
+    const graph = g(true)
+    expect(graph).toContain("format=rgba,colorkey=0x00ff00:0.1:0.08,")
+    expect(graph).not.toContain("pad=")
+    expect(graph).toContain("overlay=")
+  })
+
+  it("an unkeyed video has no colorkey", () => {
+    expect(g(false)).not.toContain("colorkey")
   })
 })

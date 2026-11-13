@@ -6,7 +6,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
-import { sendToTemp, type ActionResult } from "@/lib/file-ops-server"
+import { moveWithin, sendToTemp, type ActionResult } from "@/lib/file-ops-server"
 import { isNoteRoot, isPlainName, isPlainPath, isReadOnlyRoot, isRootKey, READ_ONLY_ROOT_MESSAGE, ROOT_LABELS, safeSegments, tempFolderName } from "@/lib/media"
 import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
@@ -141,6 +141,23 @@ export async function renameTempFileAction(parent: string[], name: string, newSt
   }
   refresh()
   return result
+}
+
+/** Moves photos and videos from one Personal Storage folder into another (a user's folder or below). A file there with the same name is kept: the moved one gets a number. */
+export async function moveTempFilesAction(from: string[], names: string[], destination: string[]): Promise<(ActionResult & { to: string }) | { error: string }> {
+  await requireUser()
+  const parsed = z.object({ from: folderPath, destination: folderPath, names: z.array(z.string().refine(isPlainName)).min(1).max(MAX_BATCH) }).safeParse({ from, destination, names })
+  const source = parsed.success ? safeSegments(parsed.data.from) : null
+  const target = parsed.success ? safeSegments(parsed.data.destination) : null
+  if (!parsed.success || !source || !target || source.length === 0 || target.length === 0) return { error: "Invalid request." }
+  // A running AI scan is reading these folders: nothing moves in or out of them meanwhile.
+  if ((await folderLocked("temp", source)) || (await folderLocked("temp", target))) return { error: SCAN_LOCK_MESSAGE }
+  const result = await moveWithin("temp", source, parsed.data.names, target)
+  // Notes sit on files directly in a user's folder, by name: a moved file's note stays behind.
+  if (source.length === 1) await dropTempNotes("temp", source, result.ok)
+  clearRootCounts()
+  refresh()
+  return { ...result, to: target[target.length - 1] }
 }
 
 const trashRef = z.object({ folder: z.array(z.string()).max(16), name: z.string().refine(isPlainName) })

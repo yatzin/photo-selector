@@ -5,7 +5,7 @@ import { Check, ChevronDown, CircleCheck, Info, Lightbulb, TriangleAlert, X, Oct
 import { cn } from "@/lib/utils"
 
 // Callout: a short note in a tone (info, warning, success, danger) with its
-// icon, so colour is never the only signal. Tips: the guidance under a
+// icon, so color is never the only signal. Tips: the guidance under a
 // preview (what it does, best for, avoid when) as a collapsible card with a
 // check and a cross; it remembers being open or shut for this page.
 

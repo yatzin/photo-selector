@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, isValidTransform, normalizeAngle, normalizeTransform, rotatedBounds,
-  rotatedCorners, rotatePoint, scaleAbout, snapAngle, snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Transform,
+  rotatedCorners, rotatePoint, scaleAbout, snapAngle, snapCorner, snapEdge, snapScale, snapToCanvas, toggleFlip, toLocal, withRotation, withScale, zoomedScale, parseZoomPercent, type Transform,
 } from "./transform"
 
 const W = 1920
@@ -455,5 +455,50 @@ describe("rotation geometry", () => {
     const [, tr1, br1] = rotatedCorners(clipRect(16 / 9, W, H, t1).visible, contentCentre(W, H, t1), 40)
     expect(tr1.x).toBeCloseTo(tr0.x, 6)
     expect(br1.y).toBeCloseTo(br0.y, 6)
+  })
+})
+
+describe("snapScale", () => {
+  // A 16:9 picture on the 16:9 canvas: scale 1 fills it.
+  const aspect = 16 / 9
+  const t0 = { ...IDENTITY, scale: 0.5 }
+
+  it("pulls a corner drag near 100% back to scale 1 about the opposite corner", () => {
+    const t1 = dragCorner(t0, "br", aspect, W, H, 950, 534)
+    const r = snapScale(t0, "br", aspect, W, H, t1, 20)
+    expect(r.snapped).toBe(true)
+    expect(r.t.scale).toBeCloseTo(1, 6)
+  })
+
+  it("leaves a drag far from 100% alone, and a growing drag past it", () => {
+    const far = dragCorner(t0, "br", aspect, W, H, 100, 56)
+    expect(snapScale(t0, "br", aspect, W, H, far, 20)).toEqual({ t: far, snapped: false })
+    const big = dragCorner(t0, "br", aspect, W, H, 1800, 1012)
+    expect(big.scale).toBeGreaterThan(1.2)
+    expect(snapScale(t0, "br", aspect, W, H, big, 20).snapped).toBe(false)
+  })
+})
+
+describe("zoom helpers", () => {
+  it("zoomedScale steps by 25%, lands on 100% when crossing it, and stays in limits", () => {
+    expect(zoomedScale(1, 1)).toBe(1.25)
+    expect(zoomedScale(1, -1)).toBe(0.8)
+    expect(zoomedScale(0.9, 1)).toBe(1)
+    expect(zoomedScale(1.1, -1)).toBe(1)
+    expect(zoomedScale(5, 1)).toBe(5)
+    expect(zoomedScale(0.1, -1)).toBe(0.1)
+  })
+  it("parseZoomPercent reads numbers with an optional % and clamps", () => {
+    expect(parseZoomPercent("150")).toBe(1.5)
+    expect(parseZoomPercent(" 75.5 % ")).toBeCloseTo(0.755)
+    expect(parseZoomPercent("9999")).toBe(5)
+    expect(parseZoomPercent("1")).toBe(0.1)
+    expect(parseZoomPercent("")).toBeNull()
+    expect(parseZoomPercent("abc")).toBeNull()
+    expect(parseZoomPercent("-5")).toBeNull()
+  })
+  it("withScale keeps the position", () => {
+    const r = withScale(t({ x: 0.1, y: -0.2, scale: 1 }), 2)
+    expect(r).toMatchObject({ x: 0.1, y: -0.2, scale: 2 })
   })
 })

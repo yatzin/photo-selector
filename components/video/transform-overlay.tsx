@@ -1,16 +1,16 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { FlipHorizontal2, FlipVertical2, RotateCw } from "lucide-react"
+import { FlipHorizontal2, FlipVertical2, Maximize2, RotateCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
-  angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
-  snapCorner, snapEdge, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
+  angleFrom, clipRect, containsPoint, contentCentre, dragCorner, dragEdge, dragMove, IDENTITY, isIdentity, normalizeAngle, rotatedBounds, rotatedCorners, rotatePoint, rotationOf, scaleAbout, snapAngle,
+  snapCorner, snapEdge, snapScale, snapToCanvas, toggleFlip, toLocal, withRotation, type Content, type Corner, type Edge, type Guides, type Transform,
 } from "@/lib/video/transform"
 
 // The layer over the preview canvas that edits where a clip's picture sits.
 // A press on the canvas selects the topmost clip under the pointer (and drags
-// it); empty canvas clears the selection. The selected clip gets a frame
+// it); empty canvas clears the selection (the preview clears it for the gray around the canvas too). The selected clip gets a frame
 // around its visible strip: drag the body to move it, a corner to scale it
 // about the opposite corner (aspect locked), an edge's middle handle (top,
 // bottom, left, right) to crop that side. A drag shows a draft (onDraft) and
@@ -34,12 +34,19 @@ const FLOAT_OFFSET = 22 // screen px out from a frame corner, along the frame's 
 const FLOAT_SIZE = 24 // screen px, a floating button's diameter
 
 /** `aspect`: the picture's aspect, or a text's content box (lib/video/transform's Content). */
-export type TransformTarget = { id: string; label: string; aspect: Content; transform: Transform }
+export type TransformTarget = {
+  id: string
+  label: string
+  aspect: Content
+  transform: Transform
+  /** A picture clip (not text): it can be sent back to filling the frame. */
+  canFill?: boolean
+}
 
 type Gesture = { kind: "move" } | { kind: "corner"; corner: Corner } | { kind: "edge"; edge: Edge } | { kind: "rotate" }
 
 /** A canvas drag in progress, for the preview's hint: whether snapping is on (Alt held turns it off). */
-export type GestureState = { snapping: boolean } | null
+export type GestureState = { snapping: boolean; /** The drag is held at the picture's 100% size. */ hundred?: boolean } | null
 
 const CORNERS: { corner: Corner; label: string; cursor: string; left: string; top: string }[] = [
   { corner: "tl", label: "Resize from top left", cursor: "cursor-nwse-resize", left: "0%", top: "0%" },
@@ -58,7 +65,7 @@ const isSide = (edge: Edge) => edge === "left" || edge === "right"
 const pct = (v: number, of: number) => `${(v / of) * 100}%`
 
 export function TransformOverlay({
-  width: W, height: H, displayWidth, room, selected, hitTest, onSelect, onDraft, onCommit, onGesture, onDoubleClickClip,
+  width: W, height: H, displayWidth, room, view, selected, hitTest, onSelect, onDraft, onCommit, onGesture, onDoubleClickClip,
 }: {
   /** The canvas (project) size in px; the overlay covers the canvas on screen. */
   width: number
@@ -67,6 +74,8 @@ export function TransformOverlay({
   displayWidth?: number
   /** Screen px visible around the canvas on each side (x: left and right, y: top and bottom): the floating buttons stay inside it. */
   room?: { x: number; y: number }
+  /** The visible part of the viewer as px from the canvas's top left (negative: the gray beyond the canvas; inside the canvas when zoomed in and scrolled): wins over `room`. */
+  view?: { left: number; top: number; right: number; bottom: number }
   /** The selected clip when it's showing at the playhead, with its transform as shown (a draft while dragging). */
   selected: TransformTarget | null
   /** The topmost clip whose visible strip holds this canvas point, or null. */
@@ -137,6 +146,7 @@ export function TransformOverlay({
       const threshold = SNAP_PX * k
       let t: Transform
       let g: Guides | null = null
+      let hundred = false
       if (gesture.kind === "move") {
         t = dragMove(t0, dx / W, dy / H)
         if (snap) {
@@ -149,6 +159,15 @@ export function TransformOverlay({
         // dragCorner takes the drag in the clip's own axes and keeps the opposite corner where it shows.
         t = dragCorner(t0, gesture.corner, aspect, W, H, dx, dy, { anchor: "opposite" })
         if (snap && rot0 === 0) ({ t, guides: g } = snapCorner(t0, gesture.corner, aspect, W, H, t, threshold))
+        // The picture's 100% size pulls too (a turned one included).
+        if (snap) {
+          const s = snapScale(t0, gesture.corner, aspect, W, H, t, threshold)
+          if (s.snapped) {
+            t = s.t
+            g = null
+            hundred = true
+          }
+        }
       } else if (gesture.kind === "edge") {
         // Along the clip's own axis: a turned clip's crop handle follows its side.
         const local = toLocal(dx, dy, rot0)
@@ -163,7 +182,7 @@ export function TransformOverlay({
       current = t
       onDraft({ id, transform: t })
       setGuides(g)
-      onGesture?.({ snapping: snap })
+      onGesture?.({ snapping: snap, hundred })
     }
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return
@@ -324,19 +343,24 @@ export function TransformOverlay({
       const off = rotatePoint(local, { x: 0, y: 0 }, rot)
       return { x: corner.x * px + off.x, y: corner.y * px + off.y }
     })
-    if (!room) return pts
+    if (!room && !view) return pts
     const r = FLOAT_SIZE / 2 + 2
     const shift = (vals: number[], lo: number, hi: number) => {
       const min = Math.min(...vals)
       const max = Math.max(...vals)
       return min < lo ? lo - min : max > hi ? hi - max : 0
     }
-    const sx = shift(pts.map((q) => q.x), -room.x + r, W * px + room.x - r)
-    const sy = shift(pts.map((q) => q.y), -room.y + r, H * px + room.y - r)
+    const lo = view ? { x: view.left, y: view.top } : { x: -room!.x, y: -room!.y }
+    const hi = view ? { x: view.right, y: view.bottom } : { x: W * px + room!.x, y: H * px + room!.y }
+    const sx = shift(pts.map((q) => q.x), lo.x + r, hi.x - r)
+    const sy = shift(pts.map((q) => q.y), lo.y + r, hi.y - r)
     return pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))
   }
   const corners = v && pivot ? rotatedCorners(v, pivot, rot) : null
-  const rotateAt = corners ? floating(corners[1], [{ x: FLOAT_OFFSET, y: -FLOAT_OFFSET }])?.[0] ?? null : null
+  // The rotate handle and, to its left, the fill-the-frame button (shown while the clip isn't at its fitted, centred size). They shift together to stay in view.
+  const topRight = corners ? floating(corners[1], [{ x: FLOAT_OFFSET, y: -FLOAT_OFFSET }, { x: FLOAT_OFFSET - FLOAT_SIZE - 4, y: -FLOAT_OFFSET }]) : null
+  const rotateAt = topRight?.[0] ?? null
+  const fillAt = selected?.canFill && !isIdentity(selected.transform) ? topRight?.[1] ?? null : null
   const flips = corners ? floating(corners[0], [{ x: -FLOAT_OFFSET, y: -FLOAT_OFFSET }, { x: FLOAT_SIZE + 4 - FLOAT_OFFSET, y: -FLOAT_OFFSET }]) : null
   const flipHAt = flips?.[0] ?? null
   const flipVAt = flips?.[1] ?? null
@@ -344,7 +368,7 @@ export function TransformOverlay({
     "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full bg-white text-neutral-900 shadow-[0_1px_4px_rgb(0_0_0/0.45)] ring-1 ring-black/25 outline-none hover:bg-neutral-100 focus-visible:ring-2 focus-visible:ring-ring"
 
   return (
-    <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas} onDoubleClick={doubleClick}>
+    <div ref={root} data-transform-overlay className="absolute inset-0 touch-none" onPointerDown={pressCanvas} onDoubleClick={doubleClick}>
       {/* 2 px, centred on the line: a centred 1 px line often straddles two device pixels and blurs to half strength, faint over a picture. */}
       {guides?.x.map((x) => (
         <div key={`x${x}`} aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-fuchsia-400" style={{ left: pct(x, W) }} />
@@ -424,6 +448,19 @@ export function TransformOverlay({
             </div>
           )}
         </>
+      )}
+      {selected && fillAt && (
+        <button
+          type="button"
+          aria-label="Fill the frame"
+          title="Fill the frame (resets size, position, crop and rotation)"
+          className={cn(floatClass, "cursor-pointer")}
+          style={{ left: fillAt.x, top: fillAt.y, width: FLOAT_SIZE, height: FLOAT_SIZE }}
+          onPointerDown={own}
+          onClick={() => onCommit(selected.id, IDENTITY)}
+        >
+          <Maximize2 className="h-3.5 w-3.5" strokeWidth={2.5} />
+        </button>
       )}
       {selected && flipHAt && flipVAt && (
         <>

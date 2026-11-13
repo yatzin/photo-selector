@@ -257,3 +257,15 @@ describe("setClipTiming: source in-point", () => {
     expect(p.tracks[0].clips[0]).toEqual({ id: "p", asset: "i", in: 0, out: 3, start: 2 })
   })
 })
+
+describe("setClipTiming on a looping clip", () => {
+  const p: Project = {
+    ...newProject("l"),
+    assets: { a: { file: "a.mp4", duration: 0.1, hasAudio: false } },
+    tracks: [{ id: "t1", clips: [{ id: "c", asset: "a", in: 0, out: 3, start: 0, loop: true }] }],
+  }
+  it("refuses a length beyond 500 repeats of the source", () => {
+    expect(setClipTiming(p, "c", { start: 0, length: 51 }, "push", () => "n").ok).toBe(false)
+    expect(setClipTiming(p, "c", { start: 0, length: 50 }, "push", () => "n").ok).toBe(true)
+  })
+})

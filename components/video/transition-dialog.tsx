@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { trimSummary } from "@/lib/video/dialog-ui"
 import { FieldHelp } from "@/components/ui/field-help"
 import { audioCutState, audioEdgeState } from "@/lib/video/audio-fx"
-import { allClips, clipLength, isAudioClip, isTextClip, type Clip, type Project } from "@/lib/video/project"
+import { allClips, assetLabel, clipLength, isAudioClip, isTextClip, type Clip, type Project } from "@/lib/video/project"
 import {
   AUDIO_CURVES, AUDIO_TRANSITION_TYPES, DEFAULT_CUT_AUDIO, DEFAULT_EDGE, DEFAULT_TRANSITION, EDGE_AUDIO_TYPES, EDGE_PICTURE_TYPES, isAudioCurve, isAudioTransitionType, isTransitionType, MAX_EDGE, MIN_CUT_AUDIO, MIN_EDGE,
   MIN_TRANSITION, TRANSITION_TYPES, type AnyTransitionType, type AudioTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition, type TransitionType,
@@ -85,7 +85,7 @@ function Sample({ type }: { type: TransitionType }) {
 }
 
 /** A clip's name in the dialog's words. */
-const clipName = (project: Project, clip: Clip) => (isTextClip(clip) ? `Text "${clip.text.content.replace(/\s+/g, " ")}"` : (project.assets[clip.asset]?.file ?? "Missing file"))
+const clipName = (project: Project, clip: Clip) => (isTextClip(clip) ? `Text "${clip.text.content.replace(/\s+/g, " ")}"` : (Object.hasOwn(project.assets, clip.asset) ? assetLabel(project.assets[clip.asset]) : "Missing file"))
 
 function ClipChip({ project, clip, thumbUrl, label }: { project: Project; clip: Clip; thumbUrl: (assetId: string) => string; label: string }) {
   const name = clipName(project, clip)
@@ -107,9 +107,11 @@ function ClipChip({ project, clip, thumbUrl, label }: { project: Project; clip: 
 type AudioChoice = CutAudio["mode"] | "none"
 
 /** Why an audio overlap can't be had, in the dialog's words. */
+/** Why a looping clip's cut takes no transition or audio overlap (its copies have no footage past their ends). */
+const LOOP_REASON = "A looping clip can't have a transition. Turn Loop off first."
 const AUDIO_REASON: Record<CutAudio["mode"], Record<Exclude<CutRange["reason"], "ok">, string>> = {
-  j: { "not-adjoining": "No clip right before this one.", "no-audio": "The incoming clip has no audio, so there's nothing to bring in early.", "too-short": "The clips are too short for it." },
-  l: { "not-adjoining": "No clip right before this one.", "no-audio": "The outgoing clip has no audio, so there's nothing to carry on.", "too-short": "The clips are too short for it." },
+  j: { "not-adjoining": "No clip right before this one.", "no-audio": "The incoming clip has no audio, so there's nothing to bring in early.", "too-short": "The clips are too short for it.", loop: LOOP_REASON },
+  l: { "not-adjoining": "No clip right before this one.", "no-audio": "The outgoing clip has no audio, so there's nothing to carry on.", "too-short": "The clips are too short for it.", loop: LOOP_REASON },
 }
 
 /** Why a range stops where it does: "(the second clip is only 1.6 s long)". */
@@ -220,7 +222,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
   const blocked = canApply
     ? null
     : choice !== "none" && noFootage
-      ? "These clips are too short for a transition."
+      ? range.reason === "loop" ? LOOP_REASON : "These clips are too short for a transition."
       : choice !== "none" && durationError
         ? `Duration: ${durationError}`
         : audioError
@@ -293,7 +295,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
                 value={text}
                 onChange={setText}
                 disabled={noFootage || choice === "none"}
-                disabledReason={noFootage ? "These clips are too short for a transition: each needs half of it, and 0.2 s of its own." : "A hard cut has no duration."}
+                disabledReason={range.reason === "loop" ? LOOP_REASON : noFootage ? "These clips are too short for a transition: each needs half of it, and 0.2 s of its own." : "A hard cut has no duration."}
                 error={choice !== "none" && !noFootage ? durationError : null}
                 hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
               />

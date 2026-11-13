@@ -82,7 +82,7 @@ export function VideoMirror({ video, className, style }: { video: () => HTMLVide
   return <canvas ref={ref} aria-hidden className={className} style={style} />
 }
 
-/** The SVG filters the transitions name: one colour channel kept, and a whip's blur at each level, sideways and up and down. */
+/** The SVG filters the transitions name: one color channel kept, and a whip's blur at each level, sideways and up and down. */
 export function TransitionFxDefs() {
   const keep = (row: number) => {
     const m = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]

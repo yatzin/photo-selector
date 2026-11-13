@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Poppins, Open_Sans, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DragGhost } from "@/components/drag-ghost";
 import "./globals.css";
 
 const openSans = Open_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-open-sans" });
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           {children}
           <Toaster richColors />
+          <DragGhost />
         </ThemeProvider>
       </body>
     </html>

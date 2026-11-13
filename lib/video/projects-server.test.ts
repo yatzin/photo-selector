@@ -7,6 +7,7 @@ import { DEFAULT_IMAGE, MIN_CLIP, newProject } from "./project"
 vi.mock("./ffmpeg-server", () => ({ probeMedia: vi.fn(async () => ({ duration: 12.5, hasAudio: true })) }))
 
 import { probeMedia } from "./ffmpeg-server"
+import { isMagnetic } from "./project"
 import { assetPath, createProject, deleteAsset, deleteProject, importAsset, listProjects, readProject, renameProject, reusableAsset, writeProject } from "./projects-server"
 
 const tmp = path.join(os.tmpdir(), `ps-video-${process.pid}-${Date.now()}`)
@@ -40,6 +41,11 @@ describe("createProject", () => {
     expect(await exists(dir, "output")).toBe(true)
     expect(JSON.parse(await fs.readFile(path.join(dir, "config", "export.json"), "utf8"))).toEqual({ width: 1920, height: 1080, fps: 30 })
     expect((await readProject("mike", "My Trip"))?.name).toBe("My Trip")
+  })
+
+  it("starts with the base layer's magnet (Snap) on", async () => {
+    await createProject("mike", "Snappy")
+    expect(isMagnetic((await readProject("mike", "Snappy"))!)).toBe(true)
   })
 
   it("rejects a second project that cleans to the same folder", async () => {

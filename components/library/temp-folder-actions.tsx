@@ -63,11 +63,11 @@ export function TempBrowser({ parent, enabled, children }: { parent: string[]; e
 }
 
 /** "New folder" in the page header. */
-export function NewTempFolderButton() {
+export function NewTempFolderButton({ className }: { className?: string }) {
   const actions = useContext(Context)
   if (!actions) return null
   return (
-    <Button variant="outline" size="sm" onClick={actions.newFolder}>
+    <Button variant="outline" size="sm" onClick={actions.newFolder} className={className}>
       <FolderPlus className="h-4 w-4" />
       New folder
     </Button>

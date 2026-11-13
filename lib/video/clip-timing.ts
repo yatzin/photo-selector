@@ -1,5 +1,5 @@
 import {
-  assetKind, AUDIO_TRACK, brokenLinks, clipEnd, clipLength, fixTransitions, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, MIN_CLIP, packBase, trackAt, withTrack,
+  assetKind, AUDIO_TRACK, brokenLinks, clipEnd, clipLength, fixTransitions, isLooping, isMagnetic, isStill, isTextClip, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE, maxLoopLength, MAX_LOOP_COPIES, MIN_CLIP, packBase, trackAt, withTrack,
   type Clip, type Project,
 } from "./project"
 
@@ -65,12 +65,15 @@ function timingEdit(p: Project, clipId: string, timing: ClipTiming, mode: Timing
   const asset = isTextClip(clip) ? undefined : p.assets[clip.asset]
   if (!asset && !isTextClip(clip)) return fail("That clip's media is gone.")
   // A text clip times like an image.
-  const image = isStill(p, clip)
+  // A looping video clip stretches like one, up to MAX_TIMELINE.
+  const looping = isLooping(p, clip)
+  const image = isStill(p, clip) || looping
   const { start, length } = timing
   if (!Number.isFinite(start) || !Number.isFinite(length)) return fail("Enter numbers.")
   if (start < 0) return fail("Start can't be before 0.")
   if (length < MIN_CLIP - 1e-9) return fail(`Length must be at least ${MIN_CLIP} s.`)
-  if (image && length > MAX_IMAGE) return fail(`An image can be at most ${MAX_IMAGE} s long.`)
+  if (image && !looping && length > MAX_IMAGE) return fail(`An image can be at most ${MAX_IMAGE} s long.`)
+  if (looping && asset && length > maxLoopLength(asset) + EPS) return fail(`A looping clip can be at most ${maxLoopLength(asset)} s long (${MAX_LOOP_COPIES} repeats of its source).`)
   const srcIn = image || timing.in === undefined ? clip.in : timing.in
   if (!Number.isFinite(srcIn)) return fail("Enter numbers.")
   if (srcIn < -EPS) return fail("The source can't start before 0.")
@@ -111,7 +114,7 @@ function timingEdit(p: Project, clipId: string, timing: ClipTiming, mode: Timing
       continue
     }
     // A clip whose media is gone is cut like this one.
-    const cImage = isTextClip(c) || p.assets[c.asset] ? isStill(p, c) : image
+    const cImage = isTextClip(c) || p.assets[c.asset] ? isStill(p, c) || isLooping(p, c) : image
     const long = (piece: Clip) => clipLength(piece) >= MIN_CLIP - 1e-9
     // The part before the new range: the tail is cut (out moves back for both kinds).
     const left = c.start < start - EPS ? { ...c, out: c.out - (clipEnd(c) - start) } : null

@@ -1,17 +1,20 @@
 import "server-only"
+import { keyHex, videoKeyParams } from "./chroma"
 import { execFile, spawn } from "child_process"
 import fs from "fs/promises"
 import { parsePictureSize, parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
 import { audioLevelFilters, type ClipAudio } from "./audio-levels"
-import { adjoins, allClips, clipLength, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { adjoins, allClips, clipLength, expandLoops, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
 import { customExpr, stepsFor, whipBlurFilters } from "./transition-expr"
 import { CUT_AUDIO_FADE, isAudioCurve, isAudioTransitionType, isCustomTransition, isTransitionType, type AudioCurve, type EdgeTransition, type TransitionType } from "./transition-types"
 
-const ffmpeg = () => process.env.FFMPEG_PATH || "ffmpeg"
+/** The ffmpeg binary to run: FFMPEG_PATH, or "ffmpeg" on the PATH. */
+export const ffmpegPath = () => process.env.FFMPEG_PATH || "ffmpeg"
+const ffmpeg = ffmpegPath
 
 /** Parses `ffmpeg -i` stderr: "Duration: 00:01:02.50" and an "Audio:" stream line. */
 export function parseProbe(stderr: string): { duration: number; hasAudio: boolean } {
@@ -174,6 +177,8 @@ function textAnimation(p: Project, c: Clip & { text: NonNullable<Clip["text"]> }
 
 /** The key a text clip's rasterised PNG has in buildExportGraph's `files`. */
 export const textFileKey = (c: Clip) => `text:${c.id}`
+/** The key of an image clip's background-cleared picture in the export's file map. */
+export const keyedFileKey = (c: Clip) => `keyed:${c.id}`
 
 /** Largest side (px) a text clip's PNG is drawn at; a bigger box is drawn smaller and scaled up. */
 const MAX_TEXT_RASTER = 8192
@@ -442,6 +447,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
    * plays the footage beyond its in and out points, a still holds its first
    * and last frame (tpad). The sound runs as soundSpan says.
    */
+  /** A picture with its background keyed out: kept see-through, not flattened onto black. */
+  const keepsAlpha = (c: Clip) => !isTextClip(c) && c.key !== undefined
+  /** A video's key, ahead of its placing: ffmpeg's colorkey, as the player's shader does it (lib/video/chroma). */
+  const keying = (c: Clip) => {
+    if (!c.key) return ""
+    const { similarity, blend } = videoKeyParams(c.key.tolerance)
+    return `format=rgba,colorkey=${keyHex(c.key.key)}:${frac(similarity)}:${frac(blend)},`
+  }
   const source = (c: Clip, pre = 0, post = 0) => {
     const i = inputs.length
     const file = fileFor(c)
@@ -455,7 +468,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
           ...transformFilters(t, anim ? { ...(anim.alpha ? { afterFlips: [anim.alpha] } : {}), ...(anim.angle ? { angle: anim.angle } : {}) } : {}),
           ...(anim?.scale ? [anim.scale] : []),
         ].join(",")
-      : isIdentity(c.transform)
+      : isIdentity(c.transform) && !keepsAlpha(c)
       ? frame
       : [
           `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
@@ -467,10 +480,10 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       inputs.push(["-loop", "1", "-framerate", String(fps), "-t", num(clipLength(c)), "-i", file])
       const hold = pre > 0 || post > 0 ? `,tpad=start_duration=${num(pre)}:stop_duration=${num(post)}:start_mode=clone:stop_mode=clone` : ""
       // A turned still keeps its transparent corners, and text its transparency.
-      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
+      parts.push(`[${i}:v]setpts=PTS-STARTPTS,${place},format=${text || rotationOf(t) !== 0 || keepsAlpha(c) ? "yuva420p" : "yuv420p"}${hold},${shift}[v${i}]`)
     } else {
       inputs.push(["-i", file])
-      parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${place},${shift}[v${i}]`)
+      parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${keying(c)}${place},${shift}[v${i}]`)
       sound(c, i)
     }
     const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
@@ -591,14 +604,16 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  * audio levels (Clip.audio) or a clip on the audio layer always takes the
  * uniform graph.
  */
-export function buildExportGraph(p: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
+export function buildExportGraph(project: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
+  // A looping clip exports as its back-to-back copies; everything below sees plain clips.
+  const p = expandLoops(project)
   if (allClips(p).length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
   const inputs: string[][] = []
   const parts: string[] = []
   const frame = `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}`
   const fileFor = (c: Clip) => {
-    const file = files[isTextClip(c) ? textFileKey(c) : c.asset]
+    const file = files[isTextClip(c) ? textFileKey(c) : c.key && isImage(c) ? keyedFileKey(c) : c.asset]
     if (!file) throw new Error(isTextClip(c) ? "Missing text picture" : "Missing asset file")
     return file
   }
@@ -606,7 +621,7 @@ export function buildExportGraph(p: Project, files: Record<string, string>): { g
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || (!isTextClip(c) && c.key !== undefined) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 

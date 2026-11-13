@@ -8,6 +8,8 @@ import { AiSettings } from "@/components/settings/ai-settings"
 import { DEFAULT_QUALITY_INSTRUCTIONS, DEFAULT_SCREENSHOT_INSTRUCTIONS } from "@/lib/ai/shot-prompt"
 import { loadAiConfig } from "@/lib/ai/config"
 import { DEFAULT_INSTRUCTIONS } from "@/lib/ai/prompt"
+import { StockSettings } from "@/components/settings/stock-settings"
+import { loadStockConfig } from "@/lib/stock/config"
 import { SettingsNav } from "@/components/settings/settings-nav"
 import { allRootStatuses } from "@/lib/library-server"
 import { workerStatus } from "@/lib/worker-server"
@@ -27,11 +29,12 @@ export default async function SettingsPage({
   const is = (id: SettingsSectionId) => section.id === id
 
   // Only the open section's data is loaded.
-  const [me, users, roots, ai] = await Promise.all([
+  const [me, users, roots, ai, stock] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.user.id }, select: { name: true, email: true, role: true } }),
     is("users") ? prisma.user.findMany({ orderBy: { createdAt: "asc" } }) : Promise.resolve([]),
     is("storage") ? allRootStatuses() : Promise.resolve([]),
     is("ai") ? loadAiConfig() : Promise.resolve(null),
+    is("stock") ? loadStockConfig() : Promise.resolve(null),
   ])
   // A session whose user row is gone. Redirecting to /login would bounce
   // straight back (proxy.ts sends signed-in sessions away from /login).
@@ -84,6 +87,15 @@ export default async function SettingsPage({
               }}
               hasStoredKey={ai.hasStoredKey}
               keyUnreadable={ai.keyUnreadable}
+            />
+          )}
+          {is("stock") && stock && (
+            <StockSettings
+              initial={{ openverseClientId: stock.openverseClientId ?? "" }}
+              hasPixabayKey={stock.hasPixabayKey}
+              hasPexelsKey={stock.hasPexelsKey}
+              hasOpenverseSecret={stock.hasOpenverseSecret}
+              unreadable={stock.unreadable}
             />
           )}
           {is("users") && <UserManagement users={users} currentUserId={session.user.id} />}

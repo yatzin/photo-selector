@@ -1,9 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
+import { endAction } from "@/lib/video/loop"
 import { audioCutState, audioEdgeState, combineFx, PLAIN, pictureEdgeGain } from "@/lib/video/audio-fx"
-import { clipLength, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
+import { clipLength, expandLoops, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { isAudioTransitionType, isTransitionType } from "@/lib/video/transition-types"
 import { cutGains, edgeAt, entrySourceTime, laneClipAt, laneElementAt, overlapAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
 import { applyFx, offSpeed, setLevels, setVolume } from "./audio-graph"
@@ -82,7 +83,9 @@ function sameClips(a: Clip[][], b: Clip[][]): boolean {
   return true
 }
 
-export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => string, audioUrlFor: (assetId: string) => string) {
+export function usePreviewPlayer(stored: Project, urlFor: (assetId: string) => string, audioUrlFor: (assetId: string) => string, loop = false) {
+  // A looping clip plays as back-to-back copies (expandLoops); the editor's own project is never changed.
+  const project = useMemo(() => expandLoops(stored), [stored])
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
   // The audio layer's two elements, the clip each holds (id and asset), the one playing and the clip at the playhead (-1: none).
   const audioEls = useRef<(HTMLAudioElement | null)[]>([null, null])
@@ -99,6 +102,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   const clock = useRef({ t: 0, at: 0 })
   const playingRef = useRef(false)
   const projectRef = useRef(project)
+  const loopRef = useRef(loop)
   const urlRef = useRef(urlFor)
   const raf = useRef(0)
   const tickRef = useRef<(now: number) => void>(() => {})
@@ -122,6 +126,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   useEffect(() => {
     projectRef.current = project
+    loopRef.current = loop
     urlRef.current = urlFor
     audioUrlRef.current = audioUrlFor
   })
@@ -477,7 +482,14 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
         else playAudio()
       }
 
-      if (t >= total - END_MARGIN) {
+      const end = endAction(t, total, END_MARGIN, loopRef.current)
+      if (end === "restart") {
+        // Loop: start over from 0 (seek reloads and replays every lane and resets the stall state) and keep the frame loop going.
+        seek(0)
+        raf.current = requestAnimationFrame((n) => tickRef.current(n))
+        return
+      }
+      if (end === "stop") {
         pause()
         setTimeline(total)
         return
@@ -628,7 +640,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
       else setFrame(t)
       raf.current = requestAnimationFrame((n) => tickRef.current(n))
     },
-    [load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip, mixVolumes, playAudio, loadAudio, mixAudio]
+    [seek, load, markFailed, pause, playSlot, setTimeline, setFrame, isImage, nextVideo, upcoming, playableClip, mixVolumes, playAudio, loadAudio, mixAudio]
   )
 
   const play = useCallback(() => {
@@ -691,6 +703,12 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
   }, [tick])
 
   const toggle = useCallback(() => (playingRef.current ? pause() : play()), [pause, play])
+
+  /** Plays from 0, whether or not it is playing now. */
+  const playFromStart = useCallback(() => {
+    timeRef.current = 0
+    play()
+  }, [play])
 
   const hasClips = project.tracks.some((t) => t.clips.length > 0) || (project.audioTrack?.clips.length ?? 0) > 0
 
@@ -777,7 +795,7 @@ export function usePreviewPlayer(project: Project, urlFor: (assetId: string) => 
 
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
+  return { playback: project, attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, playFromStart, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
 
 }
 

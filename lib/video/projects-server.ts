@@ -9,7 +9,7 @@ import { probeMedia } from "./ffmpeg-server"
 import { formatFromSource, sizeFor, turnTo, type Orientation, type ResolutionId } from "./format"
 import { mediaSize } from "./media-size-server"
 import { peaksFileName } from "./peaks"
-import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, totalLength, type Asset, type Project } from "./project"
+import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, setBaseMagnetic, totalLength, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -63,7 +63,7 @@ async function dirSize(dir: string): Promise<number> {
   return sizes.reduce((a, b) => a + b, 0)
 }
 
-export type ProjectSummary = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number }
+export type ProjectSummary = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number; /** A template (project.template.master), with its slot count and description. */ template?: { slots: number; description?: string } }
 
 export async function listProjects(userFolder: string): Promise<ProjectSummary[]> {
   const dir = userDir(userFolder)
@@ -81,7 +81,7 @@ export async function listProjects(userFolder: string): Promise<ProjectSummary[]
     if (!p) continue
     try {
       const st = await fs.stat(path.join(dir, e.name, "project.json"))
-      out.push({ folder: e.name, name: p.name, clips: allClips(p).length, modified: st.mtimeMs, duration: totalLength(p), bytes: await dirSize(path.join(dir, e.name)) })
+      out.push({ folder: e.name, name: p.name, clips: allClips(p).length, modified: st.mtimeMs, duration: totalLength(p), bytes: await dirSize(path.join(dir, e.name)), ...(p.template?.master ? { template: { slots: Object.keys(p.template.slots).length, ...(p.template.description ? { description: p.template.description } : {}) } } : {}) })
     } catch {
       continue
     }
@@ -107,7 +107,8 @@ export async function createProject(userFolder: string, name: string): Promise<{
     await fs.mkdir(path.join(dir, "output"))
     await fs.mkdir(path.join(dir, "config"))
     await fs.writeFile(path.join(dir, "config", "export.json"), JSON.stringify({ width: 1920, height: 1080, fps: 30 }, null, 2))
-    await writeProject(userFolder, folder, newProject(name))
+    // The base layer's magnet (Snap) starts on; an older project keeps what it had.
+    await writeProject(userFolder, folder, setBaseMagnetic(newProject(name), true))
   } catch (error) {
     await fs.rm(dir, { recursive: true, force: true })
     return { error: errorText(error) }

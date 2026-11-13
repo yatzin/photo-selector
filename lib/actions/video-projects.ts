@@ -7,9 +7,11 @@ import { prisma } from "@/lib/prisma"
 import { listDirectory } from "@/lib/library-server"
 import { isPlainName, safeSegments, tempFolderName } from "@/lib/media"
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
-import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
+import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset, type Project } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
+import { previewRetime, retimeAsset } from "@/lib/video/retime-server"
+import { createTemplate, saveTemplateSlots, startFromTemplate } from "@/lib/video/template-server"
 import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
 
 // Server actions for video projects. The user's folder always comes from the
@@ -209,4 +211,86 @@ export async function startExportAction(folder: string): Promise<{ jobId: string
 export async function exportStatusAction(jobId: string): Promise<ExportStatus> {
   const { userFolder } = await requireUserFolder()
   return exportStatus(userFolder, String(jobId))
+}
+
+/**
+ * Speed / Reverse: a copy of the part of video `assetId` a clip shows (trim
+ * `options.in` to `options.out`) at `options.speed`, reversed or not, as a new
+ * hidden asset the clip can point at; speed 1 forwards gives the original back.
+ * The editor adds the asset to its project and calls retimeClip with the trim
+ * in the reply.
+ */
+export async function retimeAssetAction(
+  folder: string,
+  assetId: string,
+  options: { in: number; out: number; speed: number; reverse: boolean }
+): Promise<{ id: string; asset: Asset; in: number; out: number } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  const a = z.string().min(1).max(100).safeParse(assetId)
+  if (!f.success || !a.success) return { error: "Invalid request." }
+  try {
+    return await retimeAsset(userFolder, f.data, a.data, options)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** A short sample (about 6 s from the middle) of what Speed / Reverse would make, to listen to first; nothing is stored. */
+export async function previewRetimeAction(
+  folder: string,
+  assetId: string,
+  options: { in: number; out: number; speed: number; reverse: boolean }
+): Promise<{ dataUrl: string; audioOnly: boolean; seconds: number } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  const a = z.string().min(1).max(100).safeParse(assetId)
+  if (!f.success || !a.success) return { error: "Invalid request." }
+  try {
+    return await previewRetime(userFolder, f.data, a.data, options)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Saves project `folder` as a template: a copy with the marked clips (`input.slots`: clip id to label) as slots. The project is unchanged. */
+export async function createTemplateAction(
+  folder: string,
+  input: { name: string; description?: string; slots: Record<string, string> }
+): Promise<{ folder: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await createTemplate(userFolder, f.data, input)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Starts a new project named `name` from template `templateFolder`. */
+export async function startFromTemplateAction(templateFolder: string, name: string): Promise<{ folder: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(templateFolder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await startFromTemplate(userFolder, f.data, name)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Changes which clips of template `folder` are slots, their labels and its description. Replies with the whole template project as stored (placeholders made, replaced media gone): the editor reloads it. */
+export async function saveTemplateSlotsAction(
+  folder: string,
+  input: { description?: string; slots: Record<string, string> }
+): Promise<{ project: Project } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await saveTemplateSlots(userFolder, f.data, input)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
 }

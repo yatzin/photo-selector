@@ -121,7 +121,7 @@ describe("exportFingerprint", () => {
     expect(exportFingerprint({ ...p, assets: { ...p.assets, a: { ...p.assets.a, kind: "video" } } })).toBe(exportFingerprint(p))
   })
 
-  it("changes with a text clip's content, colour and orientation, and ignores its empty asset", () => {
+  it("changes with a text clip's content, color and orientation, and ignores its empty asset", () => {
     const text = { content: "Hi", color: "#ffffff", orientation: "horizontal" as const }
     const withText = (t: ClipText = text): Project => {
       const p = project()

@@ -161,6 +161,53 @@ export async function finishUpload(userFolder: string, folder: string, id: strin
     const st = await fs.lstat(part)
     if (!st.isFile()) return fail("Invalid upload.", 400)
     if (st.size !== size) return fail(`${name} isn't complete yet.`, 409)
+  } catch (error) {
+    await fs.rm(part, { force: true }).catch(() => {})
+    return fail(error instanceof Error ? error.message : String(error), 500)
+  }
+  return probeAndPlace(dir, part, name)
+}
+
+/** A fresh staging file in project `folder` for a file to be stored as `name` (already sanitised), on the same volume as assets/ and swept like an upload's part file; null when the project or the name isn't valid. Its path comes only from random bytes and the name's extension. */
+export function stagingPath(userFolder: string, folder: string, name: string): string | null {
+  return partPath(userFolder, folder, randomBytes(8).toString("hex"), name)
+}
+
+/**
+ * finishUpload for a file the server fetched itself (a stock download):
+ * `part` is a staging file from stagingPath in this project, `name` the
+ * sanitised name to store it as. It's checked as an upload would be (name
+ * and size, lib/video/import importRejection), then read by ffmpeg and
+ * placed in assets/ exactly like an upload. Call it under the project's lock;
+ * the staging file is removed on any failure.
+ */
+export async function finishDownload(userFolder: string, folder: string, part: string, name: string): Promise<{ id: string; asset: Asset } | UploadError> {
+  const dir = projectDir(userFolder, folder)
+  if (!dir || path.dirname(path.resolve(part)) !== path.resolve(dir) || !path.basename(part).startsWith(PART_PREFIX)) return fail("Invalid download.", 400)
+  try {
+    const st = await fs.lstat(part)
+    if (!st.isFile()) return fail("Invalid download.", 400)
+    const rejected = importRejection(name, st.size)
+    if (rejected) {
+      await fs.rm(part, { force: true })
+      return fail(rejected, st.size > 0 && importCategory(name) ? 413 : 415)
+    }
+  } catch (error) {
+    await fs.rm(part, { force: true }).catch(() => {})
+    return fail((error as NodeJS.ErrnoException).code === "ENOENT" ? "The download is gone." : error instanceof Error ? error.message : String(error), 500)
+  }
+  return probeAndPlace(dir, part, name)
+}
+
+/**
+ * The shared second half of finishUpload and finishDownload: ffmpeg reads
+ * `part` and kindFromProbe says what it is (an image sharp can decode counts
+ * too), then it's moved into `dir`/assets as `name` or the next free
+ * numbered name, never replacing a file. Its asset (`source`: `name`) and a
+ * new id; `part` is removed on any failure.
+ */
+async function probeAndPlace(dir: string, part: string, name: string): Promise<{ id: string; asset: Asset } | UploadError> {
+  try {
     let streams = await probeStreams(part)
     if (importCategory(name) === "image" && !streams.hasVideo && (await sharpReads(part))) streams = { ...streams, hasVideo: true }
     const kind = kindFromProbe(name, streams)

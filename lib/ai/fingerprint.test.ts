@@ -54,7 +54,7 @@ describe("fingerprintImage", () => {
     expect(far).toBe(true)
   })
 
-  it("returns 48 colour values", async () => {
+  it("returns 48 color values", async () => {
     const a = await fingerprintImage(await jpeg(scene()))
     expect(a.colors).toHaveLength(48)
   })

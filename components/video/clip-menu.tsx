@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 // and so does running an item. Items with `checked` are a radio pair (a
 // check mark on the one that's on), set off from the others by a line. An
 // item with `dot` shows a small dot after its label (it has settings already),
-// and a `destructive` one is in the destructive colour. It scales in from the
+// and a `destructive` one is in the destructive color. It scales in from the
 // pointer (still with reduced motion).
 
 export type ClipMenuItem = {
@@ -24,7 +24,7 @@ export type ClipMenuItem = {
   dot?: boolean
   /** A choice of several (menuitemradio): whether it's the one that's on. */
   checked?: boolean
-  /** It deletes something: shown in the destructive colour. */
+  /** It deletes something: shown in the destructive color. */
   destructive?: boolean
   onSelect: () => void
 }
