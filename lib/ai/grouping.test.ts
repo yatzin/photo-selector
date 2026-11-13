@@ -11,7 +11,7 @@ const A2 = A ^ 0b111n // 3 bits away
 const FAR = ~A & ((1n << 64n) - 1n) // 64 bits away
 
 describe("isSimilar", () => {
-  it("needs both shape and colour to be close", () => {
+  it("needs both shape and color to be close", () => {
     expect(isSimilar(fp(A), fp(A2), "similar")).toBe(true)
     expect(isSimilar(fp(A), fp(FAR), "similar")).toBe(false)
     expect(isSimilar(fp(A, 100), fp(A, 160), "similar")).toBe(false)

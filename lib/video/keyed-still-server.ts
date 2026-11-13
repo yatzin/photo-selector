@@ -9,7 +9,7 @@ import { projectDir } from "./projects-server"
 
 // An image clip's background-cleared picture (Clip.key). The project image is
 // never changed: the picture is made from the same converted preview the
-// editor and the export already use, with the colour keyed out
+// editor and the export already use, with the color keyed out
 // (lib/video/chroma), and kept as a PNG in the project's keyed/ folder under a
 // name made from the source and the settings. The same settings reuse the
 // file; changed ones make another (the project's deletion takes them all).

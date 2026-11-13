@@ -7,9 +7,9 @@ import { keyVideoPixels, MAX_TOLERANCE, pixelAt, removeBackground, type KeyOptio
 import { CancelButton, DialogFooter, DialogSection, EditorDialog, PrimaryButton, RemoveButton, useEditorDialog } from "./ui/editor-dialog"
 
 // The Make background transparent dialog for an image or video clip. Pick the
-// background colour with the dropper (click the picture), then set how close a
-// colour has to be to go (Tolerance) and whether only areas touching the edge
-// go (so the same colour inside the subject stays). The picture shows the
+// background color with the dropper (click the picture), then set how close a
+// color has to be to go (Tolerance) and whether only areas touching the edge
+// go (so the same color inside the subject stays). The picture shows the
 // result live over a checkerboard, from a reduced copy with the same maths
 // the server runs for the player and the export (lib/video/chroma). Apply keeps
 // the settings on the clip: the image file is never changed, so reopening the
@@ -24,7 +24,7 @@ const CHECKER = "repeating-conic-gradient(#d4d4d8 0% 25%, #fafafa 0% 50%) 50% / 
 export function TransparentDialog({ imageUrl, video, name, initial, onApply, onRemove, onClose, returnFocus }: {
   /** The image's picture (the player's own copy); "" for a video. */
   imageUrl: string
-  /** A video clip: its file and the source time (s) of the frame to pick from. A video is keyed by a plain colour key (the same one the player and the export use), an image by flood fill. */
+  /** A video clip: its file and the source time (s) of the frame to pick from. A video is keyed by a plain color key (the same one the player and the export use), an image by flood fill. */
   video?: { url: string; at: number }
   name: string
   /** The clip's current setting, when it has one: the dialog starts there. */
@@ -108,8 +108,8 @@ export function TransparentDialog({ imageUrl, video, name, initial, onApply, onR
     c.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(shown), pixels.w, pixels.h), 0, 0)
   }, [pixels, shown])
 
-  /** The working picture's colour under the pointer (from the original pixels, not the result). */
-  function colourAt(e: PointerEvent<HTMLCanvasElement>): Rgb | null {
+  /** The working picture's color under the pointer (from the original pixels, not the result). */
+  function colorAt(e: PointerEvent<HTMLCanvasElement>): Rgb | null {
     if (!pixels) return null
     const r = e.currentTarget.getBoundingClientRect()
     return pixelAt(pixels.data, pixels.w, pixels.h, ((e.clientX - r.left) / r.width) * pixels.w, ((e.clientY - r.top) / r.height) * pixels.h)
@@ -133,11 +133,11 @@ export function TransparentDialog({ imageUrl, video, name, initial, onApply, onR
       returnFocus={returnFocus}
       footer={
         <DialogFooter
-          summary={key ? undefined : "Pick the background colour first."}
+          summary={key ? undefined : "Pick the background color first."}
           start={initial ? <RemoveButton onClick={() => dialog.close(onRemove)}>Remove transparency</RemoveButton> : undefined}
         >
           <CancelButton state={dialog} />
-          <PrimaryButton disabledReason={key ? null : "Pick the background colour first."}>Apply</PrimaryButton>
+          <PrimaryButton disabledReason={key ? null : "Pick the background color first."}>Apply</PrimaryButton>
         </DialogFooter>
       }
     >
@@ -150,12 +150,12 @@ export function TransparentDialog({ imageUrl, video, name, initial, onApply, onR
           ) : (
             <canvas
               ref={canvas}
-              aria-label="The picture: click a colour to make it transparent"
-              onPointerMove={(e) => picking && setHover(colourAt(e))}
+              aria-label="The picture: click a color to make it transparent"
+              onPointerMove={(e) => picking && setHover(colorAt(e))}
               onPointerLeave={() => setHover(null)}
               onPointerDown={(e) => {
                 if (!picking) return
-                const c = colourAt(e)
+                const c = colorAt(e)
                 if (c) {
                   setKey(c)
                   setPicking(false)
@@ -167,10 +167,10 @@ export function TransparentDialog({ imageUrl, video, name, initial, onApply, onR
           )}
         </div>
 
-        <DialogSection title="Background colour">
+        <DialogSection title="Background color">
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant={picking ? "default" : "outline"} onClick={() => setPicking((v) => !v)} aria-pressed={picking} title="Click the picture to choose the background colour">
-              <Pipette className="h-4 w-4" /> {picking ? "Click the picture…" : key ? "Pick again" : "Pick colour"}
+            <Button type="button" variant={picking ? "default" : "outline"} onClick={() => setPicking((v) => !v)} aria-pressed={picking} title="Click the picture to choose the background color">
+              <Pipette className="h-4 w-4" /> {picking ? "Click the picture…" : key ? "Pick again" : "Pick color"}
             </Button>
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <span aria-hidden className="h-6 w-6 rounded border" style={{ background: swatch(picking && hover ? hover : key) ?? "transparent" }} />
@@ -187,16 +187,16 @@ export function TransparentDialog({ imageUrl, video, name, initial, onApply, onR
                 <span className="tabular-nums text-muted-foreground">{tolerance}</span>
               </span>
               <input type="range" min={0} max={MAX_TOLERANCE / 2} step={1} value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} disabled={!key} className="w-full accent-[var(--editor-accent,currentColor)]" />
-              <span className="text-xs text-muted-foreground">How close to the picked colour a colour has to be to go. Raise it if a fringe or shaded patches are left.</span>
+              <span className="text-xs text-muted-foreground">How close to the picked color a color has to be to go. Raise it if a fringe or shaded patches are left.</span>
             </label>
             {!isVideo && <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" checked={contiguous} onChange={(e) => setContiguous(e.target.checked)} disabled={!key} className="mt-0.5" />
               <span>
                 Only areas connected to the edge
-                <span className="block text-xs text-muted-foreground">Keeps the same colour inside the subject (dots, eyes, holes). Turn off to remove it everywhere.</span>
+                <span className="block text-xs text-muted-foreground">Keeps the same color inside the subject (dots, eyes, holes). Turn off to remove it everywhere.</span>
               </span>
             </label>}
-            {isVideo && <p className="text-xs text-muted-foreground">Every pixel near the picked colour goes, in every frame. It works best on a green or blue screen, or a flat, evenly lit background.</p>}
+            {isVideo && <p className="text-xs text-muted-foreground">Every pixel near the picked color goes, in every frame. It works best on a green or blue screen, or a flat, evenly lit background.</p>}
           </div>
         </DialogSection>
       </div>

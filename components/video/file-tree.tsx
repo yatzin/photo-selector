@@ -341,15 +341,16 @@ export function FileTree({
   onImportStock: (ref: StockRef) => void
 }) {
   const [lowerTab, setLowerTab] = useLowerTab()
+  const tabs = LOWER_TABS
   const tabRefs = useRef<Partial<Record<LowerTab, HTMLButtonElement | null>>>({})
   /** Left/Right move to the neighbouring tab (wrapping), Home/End to the first/last; the tab is activated and focused. */
   function onTabKey(e: React.KeyboardEvent, id: LowerTab) {
-    const i = LOWER_TABS.findIndex((t) => t.id === id)
-    const last = LOWER_TABS.length - 1
-    const to = e.key === "ArrowRight" ? (i + 1) % LOWER_TABS.length : e.key === "ArrowLeft" ? (i + last) % LOWER_TABS.length : e.key === "Home" ? 0 : e.key === "End" ? last : -1
+    const i = tabs.findIndex((t) => t.id === id)
+    const last = tabs.length - 1
+    const to = e.key === "ArrowRight" ? (i + 1) % tabs.length : e.key === "ArrowLeft" ? (i + last) % tabs.length : e.key === "Home" ? 0 : e.key === "End" ? last : -1
     if (to < 0) return
     e.preventDefault()
-    const next = LOWER_TABS[to].id
+    const next = tabs[to].id
     setLowerTab(next)
     tabRefs.current[next]?.focus()
   }
@@ -378,7 +379,7 @@ export function FileTree({
   const [busy, setBusy] = useState(false)
   const closeMenu = useCallback(() => setMenu(null), [])
   // A retimed copy (Speed / Reverse) belongs to its clip, not to the media list.
-  const assets = Object.entries(project.assets).filter(([, a]) => a.retime === undefined)
+  const assets = Object.entries(project.assets).filter(([, a]) => a.retime === undefined && a.placeholder === undefined)
   // An item whose Personal Storage file is being imported again can't be deleted until that's done.
   const locked = (id: string) => importing !== null && project.assets[id]?.source === importing
   const confirmAsset = confirm === null ? undefined : project.assets[confirm]
@@ -513,7 +514,7 @@ export function FileTree({
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div role="tablist" aria-label="Media sources" className="flex shrink-0 gap-0.5 border-b px-2 pt-1">
-          {LOWER_TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               ref={(el) => {

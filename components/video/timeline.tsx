@@ -5,7 +5,7 @@ import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Replace
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
-  addTrack, adjoins, dropZone, moveOnClip, placeDropped, rippleRemoveClip, type DropOn, allClips, assetKind, assetLabel, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isLooping, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
+  addTrack, adjoins, dropZone, isTemplateSlot, slotLabelOf, moveOnClip, placeDropped, rippleRemoveClip, type DropOn, allClips, assetKind, assetLabel, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, DEFAULT_IMAGE, findAssetsBySource, isAudioClip, isLooping, isMagnetic, isTextClip, leftTrimDraft, linksBefore, MAX_TRACKS,
   MIN_CLIP, moveClip, newClipLength, removeClip, removeTrack, resolveStart, setBaseMagnetic, setClipLoop, setClipMuted, setClipText, splitClip, totalLength, trackAt, trackStarts, trimClip, type Clip, type Project,
 } from "@/lib/video/project"
 import { setClipTiming } from "@/lib/video/clip-timing"
@@ -47,7 +47,7 @@ import { Thumb } from "./thumb"
 // (Shift: up and down). A clip with sound has its own mute button and, when
 // waveforms are on, its waveform over the thumbnail. Right-clicking a clip
 // opens its menu (split at the playhead, delete, mute, and Edit length..., a
-// dialog for its start and length, and for a clip with sound its source window). A text clip is a coloured
+// dialog for its start and length, and for a clip with sound its source window). A text clip is a colored
 // block with its text; it has Edit length... too, Edit text... (also a
 // double-click), Animation... (the same dialog on its Animation tab) and
 // Horizontal / Vertical (letters across or stacked). A ramp at each end of the
@@ -88,6 +88,8 @@ export const ASSET_DRAG_TYPE = "application/x-ps-asset"
 export const INBOX_DRAG_TYPE = "application/x-ps-inbox"
 /** A stock search result being dragged: JSON { source, id, kind, duration? }. */
 export const STOCK_DRAG_TYPE = "application/x-ps-stock"
+/** The toolbar's Add text button being dragged (no data of interest). */
+export const TEXT_DRAG_TYPE = "application/x-ps-text"
 
 /** Where a clip lands: a track (one past the top makes a new layer; AUDIO_TRACK the audio layer) and its start there; `refused` when it can't go there. */
 /** Where a paste goes: layer, time and, over a clip, in front of or behind it. */
@@ -98,6 +100,7 @@ export type DropTarget = { track: number; start: number; refused?: boolean; on?:
 
 /** What the audio layer refuses. */
 const AUDIO_ONLY = "Only sound files go on the audio layer."
+const TEXT_NOT_AUDIO = "Text can't go on the audio layer."
 
 const HEADER = 44 // px, the sticky column with each track's number and buttons
 const TIGHT_HEADER = 60 // px, the same column on short rows, where its controls sit side by side
@@ -136,7 +139,7 @@ type Notice = {
 /** Seconds, without trailing zeros (0.65, 1, 1.5). */
 const secs = (n: number) => String(Number(n.toFixed(2)))
 
-export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE) || dt.types.includes(STOCK_DRAG_TYPE))
+export const hasMediaDrag = (dt: DataTransfer | null) => dt !== null && (dt.types.includes(ASSET_DRAG_TYPE) || dt.types.includes(INBOX_DRAG_TYPE) || dt.types.includes(STOCK_DRAG_TYPE) || dt.types.includes(TEXT_DRAG_TYPE))
 
 const sameTarget =(a: DropTarget | null, b: DropTarget | null) => a === b || (a !== null && b !== null && a.track === b.track && a.start === b.start && a.refused === b.refused && a.on?.clip === b.on?.clip && a.on?.mode === b.on?.mode)
 
@@ -206,7 +209,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null, onCopy, onPaste, canPaste, onSpeed, pasteAt,
+  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onDropText, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null, onCopy, onPaste, canPaste, onSpeed, pasteAt,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -233,6 +236,8 @@ export function Timeline({
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
   /** A Stock tab result was dropped: download it, then add it at `target`. */
   onDropStock: (ref: StockRef, target: DropTarget) => void
+  /** The Add text button dropped at `target` (never on the audio layer; a replace never occurs). */
+  onDropText: (target: DropTarget) => void
   /** The timeline fills this with a function giving where a paste goes: under the mouse (its row, the time under it, and the clip under it), or null when the mouse isn't over the rows. */
   pasteAt: React.MutableRefObject<(() => PasteAt | null) | null>
   /** Open the Speed / Reverse dialog for video clip `id`. */
@@ -266,7 +271,7 @@ export function Timeline({
   // The clips last dropped by a drag: they land where the ghost was, without sliding there from where they started (until the next press).
   const [landed, setLanded] = useState<string[] | null>(null)
   // A file from the left panel being dragged (anywhere): its clip length, when known, for the ghost, and whether it's a sound file.
-  const [outside, setOutside] = useState<{ length: number; audio: boolean } | null>(null)
+  const [outside, setOutside] = useState<{ length: number; audio: boolean; text?: boolean } | null>(null)
   const [drop, setDrop] = useState<DropTarget | null>(null)
   // The scroll viewport's inner width (px; 0 until measured).
   const [viewport, setViewport] = useState(0)
@@ -447,6 +452,10 @@ export function Timeline({
       // The data can only be read during dragstart itself.
       const p = live.current.project
       let length = DEFAULT_IMAGE
+      if (dt.types.includes(TEXT_DRAG_TYPE)) {
+        setTimeout(() => setOutside({ length, audio: false, text: true }), 0)
+        return
+      }
       const assetId = dt.getData(ASSET_DRAG_TYPE)
       const known = assetId ? p.assets[assetId] : undefined
       if (known) length = newClipLength(known)
@@ -807,13 +816,12 @@ export function Timeline({
     const start = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop }
     let moved = false
     el.setPointerCapture(id)
+    // Held in blank space: the closed hand from the press on.
+    setPanning(true)
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== id) return
       if (!moved && !pannedPast(ev.clientX - start.x, ev.clientY - start.y, DRAG_THRESHOLD)) return
-      if (!moved) {
-        moved = true
-        setPanning(true)
-      }
+      moved = true
       ev.preventDefault()
       el.scrollLeft = panScroll(start.left, start.x, ev.clientX, el.scrollWidth - el.clientWidth)
       el.scrollTop = panScroll(start.top, start.y, ev.clientY, el.scrollHeight - el.clientHeight)
@@ -1003,7 +1011,10 @@ export function Timeline({
     if (!at || !el || (track === AUDIO_TRACK) !== audio) return null
     const r = el.getBoundingClientRect()
     if (!(r.width > 0)) return null
-    const mode = dropZone((clientX - r.left) / r.width)
+    const zone = dropZone((clientX - r.left) / r.width)
+    // A text never takes a clip's place: the middle fifth inserts after it.
+    // On a template's slot, anywhere on it replaces all of it.
+    const mode = isTemplateSlot(live.current.project, overId) && !live.current.outside?.text ? "replace" : zone === "replace" && live.current.outside?.text ? "after" : zone
     return { track, start: mode === "after" ? clipEnd(at) : at.start, on: { clip: overId, mode } }
   }
 
@@ -1063,11 +1074,12 @@ export function Timeline({
     const assetId = e.dataTransfer.getData(ASSET_DRAG_TYPE)
     const inbox = e.dataTransfer.getData(INBOX_DRAG_TYPE)
     const stockData = e.dataTransfer.getData(STOCK_DRAG_TYPE)
+    const textDrag = e.dataTransfer.types.includes(TEXT_DRAG_TYPE)
     setDrop(null)
     setSnap(null)
     fileDrag.current = null
     stopPan()
-    if (!assetId && !inbox && !stockData) return
+    if (!assetId && !inbox && !stockData && !textDrag) return
     e.preventDefault()
     const t = timeAt(e.clientX)
     const snapOn = !e.altKey
@@ -1077,6 +1089,12 @@ export function Timeline({
     // Not in between two clips a transition or audio overlap links (replacing a clip parts none).
     const cut = onClip?.on?.mode === "replace" ? null : linkedCutAt(track, onClip ? onClip.start : t)
     if (cut) return refuse(null, linkedNotice(cut, {}, true))
+    if (textDrag) {
+      const to = onClip ?? targetFor(track, t, DEFAULT_IMAGE, undefined, undefined, snapOn).to
+      if (to.refused) return refuse(null, { text: TEXT_NOT_AUDIO })
+      onDropText(to)
+      return
+    }
     if (assetId) {
       const asset = live.current.project.assets[assetId]
       if (!asset) return
@@ -1443,6 +1461,8 @@ export function Timeline({
                     const audible = asset !== undefined && !image && asset.hasAudio
                     const muted = Boolean(clip.muted)
                     const left = starts[k]
+                    // A template's replaceable clip: the label its author gave it, after its usual text.
+                    const slotLabel = slotLabelOf(project, clip)
                     const clipWidth = Math.max(clipLength(clip) * zoom - 2, 8)
                     return (
                       <div
@@ -1577,16 +1597,16 @@ export function Timeline({
                         )}
                         {text ? null : image ? (
                           <span className="pointer-events-none absolute inset-x-3 bottom-0.5 flex items-center gap-1 truncate text-[10px] font-medium text-white drop-shadow">
-                            <ImageIcon className="h-3 w-3 shrink-0" /> {clipLength(clip).toFixed(1)}s image
+                            <ImageIcon className="h-3 w-3 shrink-0" /> {clipLength(clip).toFixed(1)}s image{slotLabel ? `: ${slotLabel}` : ""}
                           </span>
                         ) : audio ? (
                           // Over the waveform's dark wash the label is white; without it, dark teal (light) or light teal (dark).
                           <span className={cn("pointer-events-none absolute inset-x-3 bottom-0.5 flex items-center gap-1 truncate text-[10px] font-medium", waveforms ? "text-white drop-shadow" : "text-teal-950 dark:text-teal-50")}>
-                            <Music className="h-3 w-3 shrink-0" /> <span className="truncate">{file} · {formatTimecode(clipLength(clip))}</span>
+                            <Music className="h-3 w-3 shrink-0" /> <span className="truncate">{file} · {formatTimecode(clipLength(clip))}{slotLabel ? `: ${slotLabel}` : ""}</span>
                           </span>
                         ) : (
                           <span className="pointer-events-none absolute inset-x-3 bottom-0.5 truncate text-[10px] font-medium text-white drop-shadow">
-                            {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}
+                            {file ?? "Missing clip"} · {formatTimecode(clipLength(clip))}{slotLabel ? `: ${slotLabel}` : ""}
                           </span>
                         )}
                         {audible && (

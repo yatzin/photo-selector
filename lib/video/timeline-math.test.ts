@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { Clip } from "./project"
 import {
-  autoPanSpeed, clampRowZoom, clampZoom, MAX_ZOOM, MIN_ZOOM, panScroll, pannedPast, pxToTime, rowHeight, snapEdges, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround,
+  autoPanSpeed, clampRowZoom, clampZoom, DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, panScroll, pannedPast, pxToTime, rowHeight, snapEdges, snapStart, timeToPx, timelineWidth, trimDelta, wheelPixels, wheelZoomFactor, zoomAround, zoomToSlider, sliderToZoom,
 } from "./timeline-math"
 
 const clip = (id: string, a: number, b: number): Clip => ({ id, asset: "a", in: a, out: b, start: 0 })
@@ -150,11 +150,34 @@ describe("zoomAround", () => {
 
 describe("clampZoom", () => {
   it("keeps the horizontal zoom in the slider's range", () => {
-    expect([MIN_ZOOM, MAX_ZOOM]).toEqual([20, 200])
-    expect(clampZoom(5)).toBe(20)
-    expect(clampZoom(500)).toBe(200)
+    expect([MIN_ZOOM, MAX_ZOOM]).toEqual([10, 360])
+    expect(clampZoom(5)).toBe(10)
+    expect(clampZoom(500)).toBe(360)
     expect(clampZoom(64.8)).toBe(64.8)
     expect(clampZoom(Number.NaN)).toBe(60)
+  })
+})
+
+describe("zoom slider mapping", () => {
+  it("puts the default in the middle and the limits at the ends", () => {
+    expect(zoomToSlider(DEFAULT_ZOOM)).toBeCloseTo(0.5, 10)
+    expect(zoomToSlider(MIN_ZOOM)).toBeCloseTo(0, 10)
+    expect(zoomToSlider(MAX_ZOOM)).toBeCloseTo(1, 10)
+    expect(sliderToZoom(0.5)).toBeCloseTo(DEFAULT_ZOOM, 8)
+    expect(sliderToZoom(0)).toBeCloseTo(MIN_ZOOM, 8)
+    expect(sliderToZoom(1)).toBeCloseTo(MAX_ZOOM, 8)
+  })
+  it("gives equal zoom factors for equal distances either side", () => {
+    expect(DEFAULT_ZOOM / MIN_ZOOM).toBeCloseTo(MAX_ZOOM / DEFAULT_ZOOM, 10)
+    expect(sliderToZoom(0.75) / DEFAULT_ZOOM).toBeCloseTo(DEFAULT_ZOOM / sliderToZoom(0.25), 8)
+  })
+  it("round-trips and clamps", () => {
+    for (const z of [10, 25, 60, 100, 360]) expect(sliderToZoom(zoomToSlider(z))).toBeCloseTo(z, 6)
+    expect(zoomToSlider(1)).toBeCloseTo(0, 10)
+    expect(zoomToSlider(9999)).toBeCloseTo(1, 10)
+    expect(sliderToZoom(-3)).toBeCloseTo(MIN_ZOOM, 8)
+    expect(sliderToZoom(3)).toBeCloseTo(MAX_ZOOM, 8)
+    expect(sliderToZoom(Number.NaN)).toBe(DEFAULT_ZOOM)
   })
 })
 

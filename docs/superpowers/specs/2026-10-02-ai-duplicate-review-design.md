@@ -17,7 +17,7 @@ user can start one, walk away, and review later.
 | Topic | Decision |
 |---|---|
 | Who judges "best" | External vision model via an OpenAI-compatible server (Ollama, LM Studio, OpenAI, OpenRouter). No local ML models. |
-| Grouping | Local, no AI: capture-time window + perceptual hash + colour grid. |
+| Grouping | Local, no AI: capture-time window + perceptual hash + color grid. |
 | Scan scope | One chosen folder, that folder only (no subfolders). Groups never span folders. |
 | Re-scan | Skip photos already in resolved/dismissed groups; "Start fresh" checkbox re-does everything. |
 | Ranking | AI ranks every photo in a group; only the best is pre-selected. |
@@ -92,8 +92,8 @@ user can start one, walk away, and review later.
    HEIC photos whose EXIF can't be read use mtime.
 4. Fingerprint from the cached thumbnail (`ensureVariant(..., "thumb", "scan")`):
    - dHash: grayscale 9×8, 64-bit difference hash
-   - colour grid: 4×4 average RGB (48 values)
-5. Similarity thresholds (dHash Hamming distance / mean colour distance 0–255):
+   - color grid: 4×4 average RGB (48 values)
+5. Similarity thresholds (dHash Hamming distance / mean color distance 0–255):
    - strict: ≤ 6 / ≤ 12
    - similar: ≤ 12 / ≤ 20
    - loose: ≤ 18 / ≤ 30
@@ -158,7 +158,7 @@ group `ANALYZED`, run `analyzedCount++`.
 
 ### Test connection
 
-Sends a generated 64×64 solid-red JPEG and asks for its colour as JSON.
+Sends a generated 64×64 solid-red JPEG and asks for its color as JSON.
 Results: "Connected — model can see images", "Connected, but this model
 doesn't accept images (choose a vision model)", or the connection error.
 Tests the form's values (falling back to saved values; a saved key is never
@@ -215,7 +215,7 @@ Admins only: AI settings.
 
 | Unit | Responsibility |
 |---|---|
-| `lib/ai/fingerprint.ts` | dHash + colour grid from raw pixels; distances (pure) |
+| `lib/ai/fingerprint.ts` | dHash + color grid from raw pixels; distances (pure) |
 | `lib/ai/grouping.ts` | window + union-find grouping, splitting (pure) |
 | `lib/ai/capture-time.ts` | EXIF date parse with fallback |
 | `lib/ai/prompt.ts` | build messages; parse/validate reply (pure) |

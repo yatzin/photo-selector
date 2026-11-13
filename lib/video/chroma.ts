@@ -1,10 +1,10 @@
-// Background removal for a still: the usual "magic wand" way. The picked colour
-// matches pixels within `tolerance` of it in the CIE Lab colour space (a
-// distance close to how different two colours look). Matching pixels connected
-// to the picture's border become transparent, so the same colour inside the
+// Background removal for a still: the usual "magic wand" way. The picked color
+// matches pixels within `tolerance` of it in the CIE Lab color space (a
+// distance close to how different two colors look). Matching pixels connected
+// to the picture's border become transparent, so the same color inside the
 // subject (a few dots, an eye) stays; with `contiguous` off, every matching
 // pixel goes. The pixels along the cut get a partly transparent edge and the
-// key colour is taken back out of them (despill), so no halo is left.
+// key color is taken back out of them (despill), so no halo is left.
 
 export type Rgb = [number, number, number]
 export type KeyOptions = {
@@ -17,7 +17,7 @@ export type KeyOptions = {
 
 export const MAX_TOLERANCE = 100
 
-/** A stored key setting that is well formed (a colour of whole 0-255 channels, a tolerance in range, a flag). */
+/** A stored key setting that is well formed (a color of whole 0-255 channels, a tolerance in range, a flag). */
 export function isValidKey(v: unknown): v is KeyOptions {
   if (typeof v !== "object" || v === null) return false
   const k = v as Record<string, unknown>
@@ -47,7 +47,7 @@ export function rgbToLab(r: number, g: number, b: number): [number, number, numb
 
 const clampByte = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : Math.round(v))
 
-/** The picture's colour at pixel x, y of an RGBA buffer; null outside it or where it is (nearly) transparent. */
+/** The picture's color at pixel x, y of an RGBA buffer; null outside it or where it is (nearly) transparent. */
 export function pixelAt(rgba: ArrayLike<number>, w: number, h: number, x: number, y: number): Rgb | null {
   if (!(x >= 0 && y >= 0 && x < w && y < h)) return null
   const i = (Math.floor(y) * w + Math.floor(x)) * 4
@@ -106,7 +106,7 @@ export function removeBackground(rgba: ArrayLike<number>, w: number, h: number, 
     bg.set(matches)
   }
 
-  // The cut's edge: pixels beside the background fade by how far off the key they are, with the key colour taken out.
+  // The cut's edge: pixels beside the background fade by how far off the key they are, with the key color taken out.
   const ramp = tol * SOFT + 1
   const edge: number[] = []
   for (let y = 0; y < h; y++) {
@@ -139,9 +139,9 @@ export function removeBackground(rgba: ArrayLike<number>, w: number, h: number, 
   return out
 }
 
-// A video clip's key is the plain colour key ffmpeg's `colorkey` filter does
+// A video clip's key is the plain color key ffmpeg's `colorkey` filter does
 // (the export) and the player's shader repeats (the preview): a pixel's
-// distance from the key colour, as a fraction of the longest possible RGB
+// distance from the key color, as a fraction of the longest possible RGB
 // distance, below `similarity` goes transparent and fades in over `blend`.
 // KeyOptions.tolerance (0-100) sets the similarity; `contiguous` isn't used.
 
@@ -153,10 +153,10 @@ export function videoKeyParams(tolerance: number): { similarity: number; blend: 
   return { similarity: Math.min(MAX_TOLERANCE, Math.max(0, tolerance)) / 200, blend: VIDEO_BLEND }
 }
 
-/** The key colour as ffmpeg writes it, "0xRRGGBB". */
+/** The key color as ffmpeg writes it, "0xRRGGBB". */
 export const keyHex = (key: Rgb): string => `0x${key.map((c) => c.toString(16).padStart(2, "0")).join("")}`
 
-/** A copy of the RGBA frame with the key colour cleared the way the export does it. */
+/** A copy of the RGBA frame with the key color cleared the way the export does it. */
 export function keyVideoPixels(rgba: ArrayLike<number>, o: Pick<KeyOptions, "key" | "tolerance">): Uint8ClampedArray {
   const out = Uint8ClampedArray.from(rgba)
   const { similarity, blend } = videoKeyParams(o.tolerance)

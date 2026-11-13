@@ -59,10 +59,43 @@ export const MIN_ANIM = 0.1
 const MAX_ANIM = 600
 
 /**
- * A text clip's text: `color` is #rrggbb (lower case); `font` an id from
- * lib/video/fonts, absent for Mono; `animIn` and `animOut` absent for none.
+ * A drop shadow behind the letters: `color` is #rrggbb (lower case), `angle`
+ * the direction it falls, in degrees clockwise from the right (90 is straight
+ * down), and `distance` how far, in percent of the font size, so it scales
+ * with the text.
  */
-export type ClipText = { content: string; color: string; orientation: TextOrientation; font?: string; animIn?: TextAnim; animOut?: TextAnim }
+export type TextShadow = { color: string; angle: number; distance: number }
+export const MAX_SHADOW_DISTANCE = 30
+export const DEFAULT_SHADOW: TextShadow = { color: "#000000", angle: 45, distance: 6 }
+
+/** True for a #rrggbb color, an angle from 0 up to 360 and a distance above 0 up to MAX_SHADOW_DISTANCE. */
+export function isValidShadow(v: unknown): v is TextShadow {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
+  const { color, angle, distance } = v as Record<string, unknown>
+  return (
+    typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color) &&
+    typeof angle === "number" && Number.isFinite(angle) && angle >= 0 && angle <= 360 &&
+    typeof distance === "number" && Number.isFinite(distance) && distance > 0 && distance <= MAX_SHADOW_DISTANCE
+  )
+}
+
+/** Where the shadow falls from the letters (px right and down) at font size `fontPx`. */
+export function shadowOffset(shadow: Pick<TextShadow, "angle" | "distance">, fontPx: number): { dx: number; dy: number } {
+  const r = (shadow.angle * Math.PI) / 180
+  const d = (shadow.distance / 100) * fontPx
+  // Rounded so a straight-down or straight-across shadow has no stray fraction.
+  const round = (n: number) => Math.round(n * 1000) / 1000 + 0
+  return { dx: round(Math.cos(r) * d), dy: round(Math.sin(r) * d) }
+}
+
+const sameShadow = (a: TextShadow | undefined, b: TextShadow | undefined) =>
+  a === b || (a !== undefined && b !== undefined && a.color === b.color && a.angle === b.angle && a.distance === b.distance)
+
+/**
+ * A text clip's text: `color` is #rrggbb (lower case); `font` an id from
+ * lib/video/fonts, absent for Mono; `shadow`, `animIn` and `animOut` absent for none.
+ */
+export type ClipText = { content: string; color: string; orientation: TextOrientation; font?: string; shadow?: TextShadow; animIn?: TextAnim; animOut?: TextAnim }
 
 const isAnimType = (v: unknown): v is AnimType => typeof v === "string" && (ANIM_TYPES as readonly string[]).includes(v)
 
@@ -127,19 +160,19 @@ export const TEXT_BASE = 0.1
 
 const HEX = /^#[0-9a-fA-F]{6}$/
 
-/** True for a valid text: 1 to MAX_TEXT characters and not only spaces, a #rrggbb colour, an orientation, no font or a known one, no animations or valid ones. */
+/** True for a valid text: 1 to MAX_TEXT characters and not only spaces, a #rrggbb color, an orientation, no font or a known one, no animations or valid ones. */
 export function isValidText(v: unknown): v is ClipText {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const { content, color, orientation, font, animIn, animOut } = v as Record<string, unknown>
+  const { content, color, orientation, font, shadow, animIn, animOut } = v as Record<string, unknown>
   return (
     typeof content === "string" && content.trim().length > 0 && content.length <= MAX_TEXT &&
     typeof color === "string" && HEX.test(color) && (orientation === "horizontal" || orientation === "vertical") &&
-    (font === undefined || isFontId(font)) && (animIn === undefined || isValidAnim(animIn)) && (animOut === undefined || isValidAnim(animOut))
+    (font === undefined || isFontId(font)) && (shadow === undefined || isValidShadow(shadow)) && (animIn === undefined || isValidAnim(animIn)) && (animOut === undefined || isValidAnim(animOut))
   )
 }
 
 /**
- * Only the text's own fields (an animation's too), the colour in lower case,
+ * Only the text's own fields (an animation's too), the color in lower case,
  * the line ends as \n and no font for Mono; null when it isn't valid. Its
  * animations aren't fitted to a clip here (fitAnims does that).
  */
@@ -147,12 +180,13 @@ export function normalizeText(v: unknown): ClipText | null {
   if (typeof v !== "object" || v === null) return null
   const r = v as Record<string, unknown>
   const t = {
-    content: typeof r.content === "string" ? r.content.replace(/\r\n?/g, "\n") : r.content, color: r.color, orientation: r.orientation, font: r.font,
+    content: typeof r.content === "string" ? r.content.replace(/\r\n?/g, "\n") : r.content, color: r.color, orientation: r.orientation, font: r.font, shadow: r.shadow,
     animIn: r.animIn, animOut: r.animOut,
   }
   if (!isValidText(t)) return null
   const text: ClipText = { content: t.content, color: t.color.toLowerCase(), orientation: t.orientation }
   if (t.font !== undefined && t.font !== DEFAULT_FONT) text.font = t.font
+  if (t.shadow) text.shadow = { color: t.shadow.color.toLowerCase(), angle: t.shadow.angle % 360, distance: t.shadow.distance }
   if (t.animIn) text.animIn = { type: t.animIn.type, duration: t.animIn.duration }
   if (t.animOut) text.animOut = { type: t.animOut.type, duration: t.animOut.duration }
   return text
@@ -161,7 +195,7 @@ export function normalizeText(v: unknown): ClipText | null {
 export const sameText = (a: ClipText | undefined, b: ClipText | undefined) =>
   a === b ||
   (a !== undefined && b !== undefined && a.content === b.content && a.color === b.color && a.orientation === b.orientation &&
-    (a.font ?? DEFAULT_FONT) === (b.font ?? DEFAULT_FONT) && sameAnim(a.animIn, b.animIn) && sameAnim(a.animOut, b.animOut))
+    (a.font ?? DEFAULT_FONT) === (b.font ?? DEFAULT_FONT) && sameShadow(a.shadow, b.shadow) && sameAnim(a.animIn, b.animIn) && sameAnim(a.animOut, b.animOut))
 
 /** The lines drawn, top to bottom: tabs show as a space; vertical text has one character a line, a blank one for a space or newline. */
 export function textLines(text: Pick<ClipText, "content" | "orientation">): string[] {

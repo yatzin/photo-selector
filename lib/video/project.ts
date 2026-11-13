@@ -1,6 +1,7 @@
 import { normalizeClipAudio, sameClipAudio, type ClipAudio } from "./audio-levels"
 import { isValidKey, type KeyOptions } from "./chroma"
 import { isValidRetime, type Retime } from "./retime"
+import { normalizeTemplate, pruneTemplate, type TemplateInfo } from "./template"
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 import {
@@ -15,11 +16,14 @@ import {
  * `source` is the Personal Storage path it was copied from ("<folder>/<name>"), so a
  * second import reuses it, or the original name of a file uploaded with Import.
  * `loopByDefault` (a video, e.g. an imported GIF) makes its new clips loop.
+ * `placeholder` marks the stand-in a template leaves where a replaceable clip
+ * was (an image or a silent sound titled with the slot's label), hidden from
+ * Project media.
  * `retime` marks a generated copy of part of another video at another speed
  * or reversed (lib/video/retime): hidden from Project media, the original stays.
  * `title` is a human title (e.g. a stock result's), shown instead of the file name.
  */
-export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string; retime?: Retime }
+export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string; retime?: Retime; placeholder?: { label: string } }
 /** The name to show for an asset: its human title (a stock result's) when it has one, else its file name. */
 export const assetLabel = (a: Asset): string => (a.title !== undefined && a.title.trim() !== "" ? a.title : a.file)
 /**
@@ -46,7 +50,7 @@ export type Clip = {
   edgeIn?: EdgeTransition; edgeOut?: EdgeTransition; audio?: ClipAudio
   /** A video clip that repeats its source for its whole length: in is 0 and out may pass the source duration (up to MAX_TIMELINE). */
   loop?: true
-  /** An image or video clip's transparent background (the colour keyed out; `contiguous` only matters for an image); the file itself is unchanged. */
+  /** An image or video clip's transparent background (the color keyed out; `contiguous` only matters for an image); the file itself is unchanged. */
   key?: KeyOptions
 }
 /**
@@ -81,6 +85,8 @@ export type Project = {
   assets: Record<string, Asset>
   tracks: Track[]
   audioTrack?: Track
+  /** Slots to fill (a project made from a template), or, with `master`, this project is a template (lib/video/template). Server-owned: saves never change it. */
+  template?: TemplateInfo
 }
 
 /** The part of a project that undo/redo covers; assets, name and settings are server-owned and never undone. */
@@ -652,9 +658,9 @@ const assetKindOf = (p: Project, c: Clip) => (Object.hasOwn(p.assets, c.asset) ?
 
 /**
  * Sets (or with undefined, removes) an image or video clip's transparent background:
- * the picked colour and how it is keyed (lib/video/chroma). The file is never
+ * the picked color and how it is keyed (lib/video/chroma). The file is never
  * changed; the preview and the export draw the clip with the background
- * cleared (an image by flood fill, a video by a plain colour key). The same project for any other clip, an invalid setting or no change.
+ * cleared (an image by flood fill, a video by a plain color key). The same project for any other clip, an invalid setting or no change.
  */
 export function setClipKey(p: Project, clipId: string, key: KeyOptions | undefined): Project {
   const at = find(p, clipId)
@@ -783,6 +789,12 @@ export function placeOnClip(p: Project, assetId: string, on: DropOn, id: string)
 export function moveOnClip(p: Project, id: string, on: DropOn): Project {
   const from = find(p, id)
   if (!from || on.clip === id) return p
+  // Onto a template's slot: the slot takes this clip's media (with its trim) and the moved clip is used up.
+  if (isTemplateSlot(p, on.clip)) {
+    if (isTextClip(from.clip)) return p
+    const filled = replaceClipMedia(p, on.clip, from.clip.asset, { in: from.clip.in, out: from.clip.out })
+    return filled === p ? p : removeClip(filled, id)
+  }
   const without = removeClip(p, id)
   if (without === p) return p
   const placed = insertOnClip(without, from.clip, on, p)
@@ -841,8 +853,27 @@ function insertAtTime(p: Project, clip: Clip, trackIndex: number, start: number,
   return next === p ? p : fixTransitions(next, prev)
 }
 
+/**
+ * Whether clip `id` still shows a template's placeholder: such a clip is a slot
+ * to be filled, and media dropped anywhere on it replaces all of it. Nothing is
+ * stored about it beyond the placeholder media itself, so a project made from a
+ * template is an ordinary project; once the placeholder is replaced the clip is
+ * an ordinary clip too.
+ */
+export function isTemplateSlot(p: Project, id: string): boolean {
+  const c = find(p, id)?.clip
+  return c !== undefined && !isTextClip(c) && Object.hasOwn(p.assets, c.asset) && p.assets[c.asset].placeholder !== undefined
+}
+
+/** The label a placeholder clip shows on the timeline (what the template's author called the slot), or undefined for any other clip. */
+export function slotLabelOf(p: Project, c: Clip): string | undefined {
+  return isTextClip(c) || !Object.hasOwn(p.assets, c.asset) ? undefined : p.assets[c.asset].placeholder?.label
+}
+
 /** addClip, or, when the drop was on a clip (`at.on`), placeOnClip (addClip when that can't be done). */
 export function placeDropped(p: Project, assetId: string, trackIndex: number, at: { start?: number; on?: DropOn }, id: string): Project {
+  // Media dropped anywhere on a template's slot replaces all of it: the slot keeps its place and settings.
+  if (at.on && isTemplateSlot(p, at.on.clip)) return replaceClipMedia(p, at.on.clip, assetId)
   if (at.on) {
     const placed = placeOnClip(p, assetId, at.on, id)
     if (placed !== p) return placed
@@ -865,7 +896,22 @@ export function addTextClip(p: Project, text: ClipText, trackIndex: number, at: 
 }
 
 /**
- * Sets a text clip's text (content, colour, orientation, font, animations,
+ * addTextClip for a drop: on a clip (`at.on`) the new text goes in front of or
+ * behind it (a replace counts as behind: a text never takes a clip's place),
+ * else at `at.start` on `trackIndex` as addTextClip places it.
+ */
+export function placeDroppedText(p: Project, text: ClipText, trackIndex: number, at: { start?: number; on?: DropOn }, id: string): Project {
+  const t = normalizeText(text)
+  if (at.on && t && !hasClip(p, id)) {
+    const clip: Clip = { id, asset: "", in: 0, out: DEFAULT_IMAGE, start: 0, text: fitAnims(t, DEFAULT_IMAGE) }
+    const placed = insertOnClip(p, clip, { clip: at.on.clip, mode: at.on.mode === "before" ? "before" : "after" }, p)
+    if (placed !== p) return fixEdges(placed)
+  }
+  return addTextClip(p, text, trackIndex, at, id)
+}
+
+/**
+ * Sets a text clip's text (content, color, orientation, font, animations,
  * the animations fitted to the clip's length); the same project when it isn't
  * a text clip, the text isn't valid or nothing changes.
  */
@@ -1091,23 +1137,67 @@ export function retimeClip(p: Project, clipId: string, assetId: string, inSec: n
   // A video stays a video and a sound a sound.
   if (assetKind(asset) !== assetKind(p.assets[at.clip.asset] ?? asset)) return p
   if (!(inSec >= 0) || !(outSec > inSec) || outSec > asset.duration + 1e-3 || outSec - inSec < MIN_CLIP - EPS) return p
-  const clip: Clip = { ...at.clip, asset: assetId, in: inSec, out: Math.min(outSec, asset.duration) }
+  return refitClip(p, at.track, { ...at.clip, asset: assetId, in: inSec, out: Math.min(outSec, asset.duration) })
+}
+
+/**
+ * `clip` (an edited version of a clip on layer `track`, the same id and start)
+ * put in the clip's place with the layer fitted to its new length: a snapped
+ * base packs, on another layer the clips after it move later if it grew into
+ * them. The same project when it wouldn't fit before MAX_TIMELINE.
+ */
+function refitClip(p: Project, track: number, clip: Clip): Project {
+  const old = trackAt(p, track)!.clips.find((c) => c.id === clip.id)
+  if (!old) return p
   let cursor = clipEnd(clip)
   let end = cursor
-  const clips = sortByStart(trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? clip : c))).map((c) => {
-    if (c.id === clipId) return c
-    if (c.start >= at.clip.start - EPS && c.start < cursor - EPS) {
+  const clips = sortByStart(trackAt(p, track)!.clips.map((c) => (c.id === clip.id ? clip : c))).map((c) => {
+    if (c.id === clip.id) return c
+    if (c.start >= old.start - EPS && c.start < cursor - EPS) {
       const shifted = { ...c, start: cursor }
       cursor = clipEnd(shifted)
       end = Math.max(end, cursor)
       return shifted
     }
-    if (c.start >= at.clip.start - EPS) cursor = Math.max(cursor, clipEnd(c))
+    if (c.start >= old.start - EPS) cursor = Math.max(cursor, clipEnd(c))
     end = Math.max(end, clipEnd(c))
     return c
   })
   if (end > MAX_TIMELINE + EPS) return p
-  return settle(p, withTrack(p, at.track, clips))
+  return settle(p, withTrack(p, track, clips))
+}
+
+/**
+ * Puts other media in a clip: the same clip (its place, picture placement,
+ * key, audio levels, mute, transitions) showing `assetId` from its start. A
+ * picture or video slot takes an image or a video, a sound slot a sound. An
+ * image takes the clip's length; a video or sound plays from its start for the
+ * clip's length, or all it has when that's shorter (the layer's later clips then
+ * close up on a snapped base, and move later if it grew into them on another);
+ * a looping clip keeps looping on a video. The same project when it can't be
+ * done (a text clip, the wrong kind, no room).
+ */
+export function replaceClipMedia(p: Project, clipId: string, assetId: string, trim?: { in: number; out: number }): Project {
+  const at = find(p, clipId)
+  const asset = Object.hasOwn(p.assets, assetId) ? p.assets[assetId] : undefined
+  if (!at || isTextClip(at.clip) || !asset || (at.clip.asset === assetId && !trim)) return p
+  const old = p.assets[at.clip.asset]
+  if (!old || (assetKind(old) === "audio") !== (assetKind(asset) === "audio") || asset.duration < MIN_CLIP) return p
+  const length = clipLength(at.clip)
+  const kind = assetKind(asset)
+  const { loop: _loop, ...rest } = at.clip
+  void _loop
+  let clip: Clip
+  if (kind === "image") clip = { ...rest, asset: assetId, in: 0, out: Math.min(length, MAX_IMAGE) }
+  else if (kind === "video" && (at.clip.loop || (assetKind(old) === "image" && loopsByDefault(asset)))) clip = { ...rest, asset: assetId, in: 0, out: Math.min(length, maxLoopLength(asset)), loop: true }
+  else {
+    // A video or sound plays from its start, or from `trim.in` (a clip moved onto the slot keeps its own trim) for the clip's length, as far as the file (and the trim's out) goes.
+    const from = trim && trim.in >= 0 && trim.in < asset.duration ? trim.in : 0
+    const limit = Math.min(asset.duration, trim && trim.out > from ? trim.out : asset.duration)
+    clip = { ...rest, asset: assetId, in: from, out: from + Math.min(length, limit - from) }
+  }
+  if (clipLength(clip) < MIN_CLIP - EPS) return p
+  return refitClip(p, at.track, clip)
 }
 
 /**
@@ -1238,6 +1328,9 @@ export function parseProject(json: unknown): Project | null {
   const rawTracks: unknown = json.version === 1 ? (Array.isArray(json.clips) ? [{ id: "t1", clips: json.clips }] : null) : json.tracks
   if (!Array.isArray(rawTracks) || rawTracks.length < 1 || rawTracks.length > MAX_TRACKS) return null
 
+  const templateIn = json.template === undefined ? undefined : normalizeTemplate(json.template)
+  if (json.template !== undefined && !templateIn) return null
+
   const parsedAssets: Record<string, Asset> = {}
   for (const [key, a] of Object.entries(assets)) {
     if (key === "__proto__") return null
@@ -1249,6 +1342,10 @@ export function parseProject(json: unknown): Project | null {
     if (a.kind !== undefined) parsedAssets[key].kind = a.kind
     if (a.source !== undefined) parsedAssets[key].source = a.source
     if (a.loopByDefault === true) parsedAssets[key].loopByDefault = true
+    if (a.placeholder !== undefined) {
+      if (typeof a.placeholder !== "object" || a.placeholder === null || typeof (a.placeholder as { label?: unknown }).label !== "string") return null
+      parsedAssets[key].placeholder = { label: (a.placeholder as { label: string }).label.slice(0, 100) }
+    }
     if (a.retime !== undefined) {
       if (!isValidRetime(a.retime)) return null
       const { source, speed, reverse, from, to } = a.retime
@@ -1374,7 +1471,9 @@ export function parseProject(json: unknown): Project | null {
   // Kept only while it has clips, so a project without audio stays as it was.
   const audioTrack = rawAudio === undefined ? undefined : tracks.pop()
   // A transition or audio overlap with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
-  return fixTransitions({ version: 3, name, width, height, fps, ...(json.formatChosen === true ? { formatChosen: true as const } : {}), assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}) })
+  // A slot whose clip is gone is dropped; a project left with none is no longer one made from a template.
+  const template = templateIn ? pruneTemplate(templateIn, (id) => ids.has(id)) : undefined
+  return fixTransitions({ version: 3, name, width, height, fps, ...(json.formatChosen === true ? { formatChosen: true as const } : {}), assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}), ...(template ? { template } : {}) })
 }
 
 /**
@@ -1395,6 +1494,7 @@ export function mergeClientProject(client: unknown, stored: Project): Project | 
   if (clips.length > MAX_CLIPS) return null
   // A text clip uses no asset.
   if (!clips.every((c) => isTextClip(c) || Object.hasOwn(stored.assets, c.asset))) return null
-  const { name, width, height, fps, assets, formatChosen } = stored
-  return parseProject({ ...parsed, name, width, height, fps, formatChosen, assets })
+  const { name, width, height, fps, assets, formatChosen, template } = stored
+  // The template belongs to the server: whatever the client sent is replaced by the stored one.
+  return parseProject({ ...parsed, name, width, height, fps, formatChosen, assets, template })
 }

@@ -4,9 +4,9 @@ import { useEffect, useRef, type CSSProperties } from "react"
 import { videoKeyParams, type Rgb } from "@/lib/video/chroma"
 
 // A video clip with its background keyed out, in the player: a WebGL canvas
-// that draws the video element's current frame through the same colour key
+// that draws the video element's current frame through the same color key
 // ffmpeg's colorkey applies in the export (lib/video/chroma videoKeyParams:
-// distance from the key colour as a fraction of the longest RGB distance, clear
+// distance from the key color as a fraction of the longest RGB distance, clear
 // below `similarity`, fading in over `blend`). The video element itself stays
 // (hidden) in the player so it plays and seeks as always. Where WebGL isn't
 // there the video stays visible, unkeyed.
@@ -15,9 +15,9 @@ const VERTEX = `attribute vec2 p; varying vec2 uv; void main(){ uv = vec2(p.x * 
 const FRAGMENT = `precision mediump float; varying vec2 uv; uniform sampler2D tex; uniform vec3 key; uniform float sim; uniform float blend;
 void main(){ vec4 c = texture2D(tex, uv); float d = length(c.rgb - key) / 1.7320508; float a = clamp((d - sim) / blend, 0.0, 1.0); gl_FragColor = vec4(c.rgb * a, a); }`
 
-export function KeyedVideo({ video, keyColour, tolerance, style, onUnsupported }: {
+export function KeyedVideo({ video, keyColor, tolerance, style, onUnsupported }: {
   video: () => HTMLVideoElement | null
-  keyColour: Rgb
+  keyColor: Rgb
   tolerance: number
   style?: CSSProperties
   /** WebGL isn't available: show the plain video. */
@@ -25,11 +25,11 @@ export function KeyedVideo({ video, keyColour, tolerance, style, onUnsupported }
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   // What the draw loop reads each frame, kept current without restarting it.
-  const params = useRef({ keyColour, tolerance })
+  const params = useRef({ keyColor, tolerance })
   const getVideo = useRef(video)
   const unsupported = useRef(onUnsupported)
   useEffect(() => {
-    params.current = { keyColour, tolerance }
+    params.current = { keyColor, tolerance }
     getVideo.current = video
     unsupported.current = onUnsupported
   })
@@ -86,7 +86,7 @@ export function KeyedVideo({ video, keyColour, tolerance, style, onUnsupported }
         gl.viewport(0, 0, c.width, c.height)
         try {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v)
-          const { keyColour: k, tolerance: t } = params.current
+          const { keyColor: k, tolerance: t } = params.current
           const { similarity, blend } = videoKeyParams(t)
           gl.uniform3f(u("key"), k[0] / 255, k[1] / 255, k[2] / 255)
           gl.uniform1f(u("sim"), similarity)

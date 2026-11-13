@@ -275,7 +275,7 @@ export function AudioLoopPreview({ cut, edge, type, duration, audioUrl }: {
     }).join(" ")
   )
   const pct = (s: number) => `${Math.min(100, Math.max(0, total > 0 ? (s / total) * 100 : 0))}%`
-  const colours = ["stroke-sky-300", "stroke-amber-300"]
+  const colors = ["stroke-sky-300", "stroke-amber-300"]
   return (
     <div className="grid gap-2" data-audio-loop={cut ? "cut" : "edge"}>
       <PreviewMonitor
@@ -286,7 +286,7 @@ export function AudioLoopPreview({ cut, edge, type, duration, audioUrl }: {
         <div aria-hidden className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent_49.5%,rgb(255_255_255/0.06)_50%,transparent_50.5%)]" />
         {band && <div className="absolute inset-y-0 bg-amber-400/15" style={{ left: pct(band[0]), width: `calc(${pct(band[1])} - ${pct(band[0])})` }} />}
         <svg aria-hidden viewBox="0 0 100 24" preserveAspectRatio="none" className="absolute inset-x-0 top-4 bottom-4 h-[calc(100%-2rem)] w-full">
-          {lines.map((pts, i) => <polyline key={i} points={pts} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" className={edge ? "stroke-teal-300" : colours[i]} />)}
+          {lines.map((pts, i) => <polyline key={i} points={pts} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" className={edge ? "stroke-teal-300" : colors[i]} />)}
         </svg>
         <div className="absolute inset-y-0 w-px bg-white/80" style={{ left: pct(t) }} />
         {sounds.map((s, i) => <audio key={i} ref={(el) => { refs.current[i] = el }} preload="auto" data-loop-audio={i} hidden />)}

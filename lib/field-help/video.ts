@@ -92,12 +92,17 @@ export const VIDEO_HELP: FieldHelpMap = {
   "text.content": {
     title: "Text",
     what: "The words shown on the video. Enter starts a new line.",
-    use: "Drawn on the preview and in the exported video in the font and colour you pick.",
+    use: "Drawn on the preview and in the exported video in the font and color you pick.",
   },
-  "text.colour": {
-    title: "Colour",
-    what: "The colour of the letters. The swatches are colours other text clips in this project already use.",
+  "text.color": {
+    title: "Color",
+    what: "The color of the letters. The swatches are colors other text clips in this project already use.",
     use: "The sample's background changes to a light or dark one so you can judge the contrast. The video behind the text is not changed.",
+  },
+  "text.shadow": {
+    title: "Shadow",
+    what: "A copy of the letters behind them, pushed off to one side. Pick its color, the direction it falls (drag the dial) and how far.",
+    use: "The distance is a share of the text's size, so the shadow grows and shrinks with the text. It is solid, not blurred.",
   },
   "text.direction": {
     title: "Direction",

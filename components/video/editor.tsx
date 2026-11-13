@@ -3,11 +3,11 @@
 import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, RotateCcw, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Layers, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, Repeat, RotateCcw, SkipBack, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { deleteAssetAction, exportStatusAction, importAssetAction, previewRetimeAction, retimeAssetAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, exportStatusAction, createTemplateAction, importAssetAction, previewRetimeAction, retimeAssetAction, saveTemplateSlotsAction, startExportAction } from "@/lib/actions/video-projects"
 import { importStockAction } from "@/lib/actions/stock"
 import { stockKey } from "@/lib/stock/drag"
 import type { StockRef } from "@/lib/stock/types"
@@ -16,17 +16,18 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, placeDropped, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  addClip, addTextClip, allClips, placeDropped, placeDroppedText, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
   pasteClip, removeClip, resolveStart, retimeClip, rippleRemoveClip, setClipAudio, setClipKey, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { withStockDropSize } from "@/lib/video/stock-drop"
 import { DEFAULT_TEXT } from "@/lib/video/text"
-import { usedTextColours } from "@/lib/video/text-colours"
-import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM } from "@/lib/video/timeline-math"
+import { usedTextColors } from "@/lib/video/text-colors"
+import { DEFAULT_ZOOM, sliderToZoom, zoomToSlider } from "@/lib/video/timeline-math"
 import { dragMove, IDENTITY, isIdentity, withScale } from "@/lib/video/transform"
 import { ZoomControl } from "./zoom-control"
 import { TransparentDialog } from "./transparent-dialog"
 import { SpeedDialog } from "./speed-dialog"
+import { TemplateSetupDialog } from "./template-setup-dialog"
 import type { KeyOptions } from "@/lib/video/chroma"
 import { formatTimecode } from "@/lib/video/time"
 import { applyCut, cutsOf, edgeTransitionName, setEdgeTransition } from "@/lib/video/transitions"
@@ -40,7 +41,7 @@ import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
-import { Timeline, type DropTarget, type PasteAt } from "./timeline"
+import { TEXT_DRAG_TYPE, Timeline, type DropTarget, type PasteAt } from "./timeline"
 import { TransitionDialog, type TransitionTarget } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 import { useMediaImport } from "./use-media-import"
@@ -109,6 +110,8 @@ export function Editor({
   const [transparentFor, setTransparentFor] = useState<string | null>(null)
   // The video clip whose Speed / Reverse dialog is open.
   const [speedFor, setSpeedFor] = useState<string | null>(null)
+  // The template setup dialog: create one from this project, or change this template's slots.
+  const [templateSetup, setTemplateSetup] = useState<"create" | "edit" | null>(null)
   const audioClip = audioFor ? allClips(project).find((c) => c.id === audioFor) : undefined
   // What the open Transition dialog is for: the cut into a clip (the clip after it holds the transition), or a clip's free edge.
   const [transitionTarget, setTransitionTarget] = useState<TransitionTarget | null>(null)
@@ -243,7 +246,9 @@ export function Editor({
   )
   /** A video's or a sound file's URL, for the Edit length dialog's preview. */
   const lengthMediaUrl = useCallback((assetId: string) => videoUrl(assetId) || audioUrl(assetId), [videoUrl, audioUrl])
-  const player = usePreviewPlayer(project, videoUrl, audioUrl)
+  const [storedLoop, setStoredLoop] = useStoredValue("ps.video.loop")
+  const loop = storedLoop === "1"
+  const player = usePreviewPlayer(project, videoUrl, audioUrl, loop)
   // Import: files from the computer land in Project media as each one finishes (the server owns assets: take the new one from its reply).
   /** The project's size changed (chosen in the format menus, or taken from a new project's first picture). */
   const applySize = useCallback((size: { width: number; height: number }, announce = false) => {
@@ -574,6 +579,13 @@ export function Editor({
     openText(id)
   }
 
+  /** The Add text button dropped on the timeline: a text clip at that layer and time (or beside the clip it hit), selected, nothing opened. One undo step. */
+  function dropText(target: DropTarget) {
+    const id = newId()
+    edit((p) => placeDroppedText(p, DEFAULT_TEXT, Math.min(target.track, p.tracks.length), target, id))
+    setSelectedId(id)
+  }
+
   function addToTimeline(assetId: string) {
     const id = newId()
     // After the base track's last clip (a sound file: after the audio layer's).
@@ -699,6 +711,29 @@ export function Editor({
   const zoomClip = selectedClip && !isTextClip(selectedClip) && project.assets[selectedClip.asset] && assetKind(project.assets[selectedClip.asset]) !== "audio" ? selectedClip : undefined
   const transparentClip = transparentFor ? allClips(project).find((c) => c.id === transparentFor) : undefined
 
+  /** Saves this project as a template (a copy; the project is unchanged), or changes this template's slots. Resolves to an error message, or null. */
+  async function saveTemplateSetup(input: { name: string; description: string; slots: Record<string, string> }): Promise<string | null> {
+    try {
+      // The server works from what is stored: send pending edits first.
+      if (!(await flush())) return "Couldn't save your latest edits first. Try again."
+      if (templateSetup === "edit") {
+        const r = await saveTemplateSlotsAction(folder, { description: input.description, slots: input.slots })
+        if ("error" in r) return r.error
+        // Replaceable clips now hold placeholders and their media is gone: reload the project as stored (the undo history starts over).
+        setEditor(initialState(r.project))
+        setSelectedId(null)
+        toast.success("Template slots saved. Replaceable clips now show placeholders.")
+        return null
+      }
+      const r = await createTemplateAction(folder, input)
+      if ("error" in r) return r.error
+      toast.success(`Template “${input.name}” saved. Start a project from it on the Video Editing page.`)
+      return null
+    } catch {
+      return "Something went wrong saving the template."
+    }
+  }
+
   const speedClip = speedFor ? allClips(project).find((c) => c.id === speedFor) : undefined
 
   /** Speed / Reverse: the server makes the retimed copy (or gives the original back), then the clip points at it. One undo step. Resolves to an error message, or null. */
@@ -813,6 +848,16 @@ export function Editor({
           </span>
         </span>
         <ImportButton importer={importer} />
+        {project.template?.master && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateSetup("edit")} title="Change which clips are replaceable and their labels">
+            <Layers className="h-4 w-4" /> Template slots
+          </Button>
+        )}
+        {!project.template?.master && allClips(project).length > 0 && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateSetup("create")} title="Save this project as a template with replaceable clips">
+            <Layers className="h-4 w-4" /> Create template
+          </Button>
+        )}
         <div aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
         <div role="toolbar" aria-label="Edit tools" className="flex min-w-0 items-center gap-1 overflow-hidden text-xs text-muted-foreground">
         <Button type="button" size="icon-sm" variant="ghost" onClick={() => step("undo")} disabled={!canUndo(editor.history)} title="Undo (Ctrl+Z / ⌘Z)" aria-label="Undo">
@@ -827,7 +872,7 @@ export function Editor({
         <Button type="button" size="icon-sm" variant="ghost" onClick={deleteSelected} disabled={!selectedId} title="Delete selected clip (Delete)" aria-label="Delete selected clip">
           <Trash2 className="h-4 w-4" />
         </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={addText} title="Add a text clip at the playhead">
+        <Button type="button" size="sm" variant="ghost" onClick={addText} draggable onDragStart={(e) => { e.dataTransfer.setData(TEXT_DRAG_TYPE, "1"); e.dataTransfer.effectAllowed = "copy" }} title="Add a text clip at the playhead, or drag it onto the timeline">
           <Type className="h-4 w-4" /> Add text
         </Button>
         {selectedCuts && selectedClip &&
@@ -959,17 +1004,42 @@ export function Editor({
               <div className="flex h-full min-w-0 items-center gap-1 overflow-hidden px-0.5">
                 <span className="shrink-0 tabular-nums">{formatTimecode(playhead)} / {formatTimecode(totalLength(project))}</span>
               </div>
-              <Button
-                type="button"
-                size="icon"
-                onClick={toggle}
-                disabled={totalLength(project) === 0}
-                title={player.playing ? "Pause (Space)" : "Play (Space)"}
-                aria-label={player.playing ? "Pause" : "Play"}
-                className="rounded-full bg-editor-accent text-editor-accent-foreground hover:bg-editor-accent/85"
-              >
-                {player.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={player.playFromStart}
+                  disabled={totalLength(project) === 0}
+                  title="Play from start"
+                  aria-label="Play from start"
+                >
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  onClick={toggle}
+                  disabled={totalLength(project) === 0}
+                  title={player.playing ? "Pause (Space)" : "Play (Space)"}
+                  aria-label={player.playing ? "Pause" : "Play"}
+                  className="rounded-full bg-editor-accent text-editor-accent-foreground hover:bg-editor-accent/85"
+                >
+                  {player.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setStoredLoop(loop ? "0" : "1")}
+                  aria-pressed={loop}
+                  title={loop ? "Loop playback (on)" : "Loop playback (off)"}
+                  aria-label="Loop playback"
+                  className={cn(loop && "bg-editor-accent/20 text-editor-accent hover:bg-editor-accent/30")}
+                >
+                  <Repeat className="h-4 w-4" />
+                </Button>
+              </div>
               <div className="flex h-full min-w-0 items-center justify-end gap-1 overflow-hidden px-0.5">
                 <Button
                   type="button"
@@ -986,11 +1056,11 @@ export function Editor({
                 <FieldHelp id="video.waveforms" />
                 <label className="flex min-w-0 items-center gap-2">
                   Zoom<FieldHelp id="video.zoom" className="-ml-1" />
-                  <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-28 min-w-0 accent-editor-accent" />
+                  <input type="range" min={0} max={1} step={0.001} value={zoomToSlider(zoom)} onChange={(e) => setZoom(sliderToZoom(Number(e.target.value)))} className="w-28 min-w-0 accent-editor-accent" />
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onDropText={dropText} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
           </div>
         </div>
       </div>
@@ -1012,6 +1082,18 @@ export function Editor({
             if (edge) edit((p) => setEdgeTransition(p, id, edge, spec), undefined, true)
           }}
           onClose={() => setTransitionTarget(null)}
+        />
+      )}
+      {templateSetup && (
+        <TemplateSetupDialog
+          mode={templateSetup}
+          project={project}
+          initial={templateSetup === "edit" ? project.template : undefined}
+          defaultName={templateSetup === "create" ? `${project.name} template` : undefined}
+          thumbUrl={thumbUrl}
+          onSelectClip={setSelectedId}
+          onSave={saveTemplateSetup}
+          onClose={() => setTemplateSetup(null)}
         />
       )}
       {speedClip && !isTextClip(speedClip) && project.assets[speedClip.asset] && (
@@ -1070,7 +1152,7 @@ export function Editor({
           text={textClip.text}
           length={clipLength(textClip)}
           section={textSection}
-          usedColours={usedTextColours(project, textClip.id)}
+          usedColors={usedTextColors(project, textClip.id)}
           onApply={(t) => {
             const id = textClip.id
             edit((p) => setClipText(p, id, t))

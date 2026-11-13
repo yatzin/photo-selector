@@ -10,7 +10,7 @@ import {
 
 // The layer over the preview canvas that edits where a clip's picture sits.
 // A press on the canvas selects the topmost clip under the pointer (and drags
-// it); empty canvas clears the selection. The selected clip gets a frame
+// it); empty canvas clears the selection (the preview clears it for the gray around the canvas too). The selected clip gets a frame
 // around its visible strip: drag the body to move it, a corner to scale it
 // about the opposite corner (aspect locked), an edge's middle handle (top,
 // bottom, left, right) to crop that side. A drag shows a draft (onDraft) and
@@ -65,7 +65,7 @@ const isSide = (edge: Edge) => edge === "left" || edge === "right"
 const pct = (v: number, of: number) => `${(v / of) * 100}%`
 
 export function TransformOverlay({
-  width: W, height: H, displayWidth, room, selected, hitTest, onSelect, onDraft, onCommit, onGesture, onDoubleClickClip,
+  width: W, height: H, displayWidth, room, view, selected, hitTest, onSelect, onDraft, onCommit, onGesture, onDoubleClickClip,
 }: {
   /** The canvas (project) size in px; the overlay covers the canvas on screen. */
   width: number
@@ -74,6 +74,8 @@ export function TransformOverlay({
   displayWidth?: number
   /** Screen px visible around the canvas on each side (x: left and right, y: top and bottom): the floating buttons stay inside it. */
   room?: { x: number; y: number }
+  /** The visible part of the viewer as px from the canvas's top left (negative: the gray beyond the canvas; inside the canvas when zoomed in and scrolled): wins over `room`. */
+  view?: { left: number; top: number; right: number; bottom: number }
   /** The selected clip when it's showing at the playhead, with its transform as shown (a draft while dragging). */
   selected: TransformTarget | null
   /** The topmost clip whose visible strip holds this canvas point, or null. */
@@ -341,15 +343,17 @@ export function TransformOverlay({
       const off = rotatePoint(local, { x: 0, y: 0 }, rot)
       return { x: corner.x * px + off.x, y: corner.y * px + off.y }
     })
-    if (!room) return pts
+    if (!room && !view) return pts
     const r = FLOAT_SIZE / 2 + 2
     const shift = (vals: number[], lo: number, hi: number) => {
       const min = Math.min(...vals)
       const max = Math.max(...vals)
       return min < lo ? lo - min : max > hi ? hi - max : 0
     }
-    const sx = shift(pts.map((q) => q.x), -room.x + r, W * px + room.x - r)
-    const sy = shift(pts.map((q) => q.y), -room.y + r, H * px + room.y - r)
+    const lo = view ? { x: view.left, y: view.top } : { x: -room!.x, y: -room!.y }
+    const hi = view ? { x: view.right, y: view.bottom } : { x: W * px + room!.x, y: H * px + room!.y }
+    const sx = shift(pts.map((q) => q.x), lo.x + r, hi.x - r)
+    const sy = shift(pts.map((q) => q.y), lo.y + r, hi.y - r)
     return pts.map((q) => ({ x: q.x + sx, y: q.y + sy }))
   }
   const corners = v && pivot ? rotatedCorners(v, pivot, rot) : null
@@ -364,7 +368,7 @@ export function TransformOverlay({
     "absolute z-10 flex -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full bg-white text-neutral-900 shadow-[0_1px_4px_rgb(0_0_0/0.45)] ring-1 ring-black/25 outline-none hover:bg-neutral-100 focus-visible:ring-2 focus-visible:ring-ring"
 
   return (
-    <div ref={root} className="absolute inset-0 touch-none" onPointerDown={pressCanvas} onDoubleClick={doubleClick}>
+    <div ref={root} data-transform-overlay className="absolute inset-0 touch-none" onPointerDown={pressCanvas} onDoubleClick={doubleClick}>
       {/* 2 px, centred on the line: a centred 1 px line often straddles two device pixels and blurs to half strength, faint over a picture. */}
       {guides?.x.map((x) => (
         <div key={`x${x}`} aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-fuchsia-400" style={{ left: pct(x, W) }} />

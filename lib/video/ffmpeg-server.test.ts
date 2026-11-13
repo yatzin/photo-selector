@@ -951,7 +951,7 @@ if (!canRun) console.warn(`Real ffmpeg export tests skipped: need ${FFMPEG} and 
     for (const [x, y] of [[600, 540], [1320, 540], [500, 300], [960, 30]]) expect(Math.max(...(await pixel(r.out, x, y)))).toBeLessThan(40)
   }, 60_000)
 
-  it("mirrors a flipped clip: its left and right colours swap", async () => {
+  it("mirrors a flipped clip: its left and right colors swap", async () => {
     const split = path.join(dir, "split.mp4")
     await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=320x360:r=25:d=3", "-f", "lavfi", "-i", "color=c=blue:s=320x360:r=25:d=3", "-filter_complex", "[0:v][1:v]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", split])
     const p: Project = {
@@ -1204,8 +1204,8 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
   beforeAll(async () => {
     process.env.FFMPEG_PATH = FFMPEG
     fs.mkdirSync(dir, { recursive: true })
-    for (const [file, colour, hz] of [[red, "red", 440], [blue, "blue", 660]] as const) {
-      await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=320x180:r=30:d=6`, "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=6`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", file])
+    for (const [file, color, hz] of [[red, "red", 440], [blue, "blue", 660]] as const) {
+      await ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:s=320x180:r=30:d=6`, "-f", "lavfi", "-i", `sine=frequency=${hz}:duration=6`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", file])
     }
   }, 60_000)
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -1352,7 +1352,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
   }, 60_000)
 
   describe("the app's own transitions", () => {
-    // A 640x360 canvas keeps the per-pixel expressions quick. `half`: red on the left, blue on the right (the glitch's colour split shows at the seam).
+    // A 640x360 canvas keeps the per-pixel expressions quick. `half`: red on the left, blue on the right (the glitch's color split shows at the seam).
     const half = path.join(dir, "half.mp4")
     beforeAll(async () => {
       await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=160x180:r=30:d=6", "-f", "lavfi", "-i", "color=c=blue:s=160x180:r=30:d=6", "-filter_complex", "[0][1]hstack", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-y", half])
@@ -1382,7 +1382,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       }
     }
     const mixed = ([r, , b]: number[]) => r > 40 && b > 40
-    const colours = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
+    const colors = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
 
     it.each(CUSTOM_TRANSITIONS.filter((t) => t !== "glitch"))("%s: the outgoing picture at the start, the incoming one at the end", async (type) => {
       const out = await renderCustom(type)
@@ -1395,14 +1395,14 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       const mid = await frame(out, 3)
       const grid: [number, number][] = []
       for (let y = 20; y < H; y += 40) for (let x = 20; x < W; x += 40) grid.push([x, y])
-      const seen = colours(mid, grid)
+      const seen = colors(mid, grid)
       // Every one is part way: some of the outgoing picture or something else still shows mid-way, and some of the incoming one.
       if (!type.startsWith("whip")) expect(seen).toMatch(/B/)
       if (type === "heart") {
         expect(isBlue(mid(320, 180))).toBe(true)
         expect(isRed(mid(5, 5))).toBe(true)
       } else if (type === "reveal") {
-        expect(colours(mid, [[40, 180], [320, 180], [600, 180]])).toBe("ABA")
+        expect(colors(mid, [[40, 180], [320, 180], [600, 180]])).toBe("ABA")
       } else if (type.startsWith("whip")) {
         // Half and half, smeared where they meet.
         const seam = type === "whip-left" || type === "whip-right" ? mid(320, 180) : mid(320, 180)
@@ -1422,7 +1422,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
       }
     }, 60_000)
 
-    it("glitch: the colours split apart at the peak, a hard switch at the middle", async () => {
+    it("glitch: the colors split apart at the peak, a hard switch at the middle", async () => {
       const out = await renderCustom("glitch", half)
       expect(isRed((await frame(out, 2.5))(100, 180))).toBe(true)
       // Just before the middle, red pulled right over the blue half and blue pulled left: magenta beside the seam on some row.
@@ -1438,8 +1438,8 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
     it("a 6 s transition between two clips with no footage beyond the cut trims them and exports at the shorter length", async () => {
       const long = path.join(dir, "long-red.mp4")
       const longBlue = path.join(dir, "long-blue.mp4")
-      for (const [file, colour] of [[long, "red"], [longBlue, "blue"]] as const) {
-        await ffmpeg(["-f", "lavfi", "-i", `color=c=${colour}:s=160x90:r=30:d=12`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", file])
+      for (const [file, color] of [[long, "red"], [longBlue, "blue"]] as const) {
+        await ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:s=160x90:r=30:d=12`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", file])
       }
       const p: Project = {
         ...newProject("X"), width: W, height: H,

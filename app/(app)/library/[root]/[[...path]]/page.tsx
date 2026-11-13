@@ -4,7 +4,10 @@ import { ChevronRight, Folder, FolderX, Lock } from "lucide-react"
 import { isNoteRoot, isReadOnlyRoot, isRootKey, resolveInside, ROOT_LABELS } from "@/lib/media"
 import { listDirectory, rootStatus } from "@/lib/library-server"
 import { formatBytes, libraryHref } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import { MediaGrid } from "@/components/library/media-grid"
+import { TempNav } from "@/components/library/temp-nav"
+import { TempShell } from "@/components/library/temp-shell"
 import { TrashButton } from "@/components/library/temp-trash"
 import { NewTempFolderButton, TempBrowser, TempFolderCard, UploadMediaButton } from "@/components/library/temp-folder-actions"
 import { AutoRefresh } from "@/components/ai/auto-refresh"
@@ -62,7 +65,9 @@ export default async function LibraryPage({
 
   // Personal Storage: below a user's own folder, folders can be made, renamed and deleted and media uploaded.
   const personal = root === "temp" && segments.length > 0 && status.writable
-  return (
+  // Inside a user's folder the subfolders are browsed in the side navigation (on a wide screen); the cards stay for narrow ones.
+  const sideNav = root === "temp" && segments.length > 0
+  const page = (
     <TempBrowser parent={segments} enabled={personal}>
       <div>
         <nav aria-label="Folder path" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
@@ -103,7 +108,7 @@ export default async function LibraryPage({
       <AutoRefresh active={locked} intervalMs={5000} />
 
       {listing.folders.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className={cn("grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4", sideNav && "lg:hidden")}>
           {listing.folders.map((f) => root === "temp" ? (
             <TempFolderCard key={f.name} parent={segments} name={f.name} count={f.mediaCount} href={libraryHref(root, [...segments, f.name])} editable={personal} />
           ) : (
@@ -134,7 +139,7 @@ export default async function LibraryPage({
           canEdit={!isReadOnlyRoot(root) && status.writable && !locked}
         />
       ) : (
-        listing.folders.length === 0 && (
+        (listing.folders.length === 0 || sideNav) && (
           <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
             {root === "temp" && segments.length === 0
               ? "Nothing here yet. Right-click photos anywhere in the library and choose Move to Personal Storage to start a folder for someone."
@@ -144,4 +149,7 @@ export default async function LibraryPage({
       )}
     </TempBrowser>
   )
+  if (!sideNav) return page
+  // Their whole folder tree sits on the left, with a grip line to set its width.
+  return <TempShell nav={<TempNav current={segments} />}>{page}</TempShell>
 }

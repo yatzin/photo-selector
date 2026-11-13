@@ -102,7 +102,7 @@ export async function startExport(user: string, folder: string): Promise<{ jobId
     for (const clip of clips) {
       if (isTextClip(clip)) {
         const { fontPx } = textRaster(project, clip)
-        const name = createHash("sha256").update(JSON.stringify([fontPx, clip.text.content, clip.text.color, clip.text.orientation, clip.text.font ?? ""])).digest("hex").slice(0, 32)
+        const name = createHash("sha256").update(JSON.stringify([fontPx, clip.text.content, clip.text.color, clip.text.orientation, clip.text.font ?? "", clip.text.shadow ?? null])).digest("hex").slice(0, 32)
         textDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "ps-text-"))
         const png = path.join(textDir, `${name}.png`)
         if (!(await exists(png))) await rasteriseText(clip.text, fontPx, png, textDir)

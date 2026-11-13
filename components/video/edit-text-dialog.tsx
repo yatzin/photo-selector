@@ -1,14 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
 import { ArrowRightFromLine, ArrowRightToLine, Pause, Play, Type } from "lucide-react"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { FieldHelp } from "@/components/ui/field-help"
 import { DEFAULT_FONT, fontById, fontFamily } from "@/lib/video/fonts"
-import { fitAnims, MAX_TEXT, MIN_ANIM, normalizeText, type AnimType, type ClipText, type TextAnim, type TextOrientation } from "@/lib/video/text"
+import { DEFAULT_SHADOW, fitAnims, MAX_SHADOW_DISTANCE, MAX_TEXT, MIN_ANIM, normalizeText, shadowOffset, type AnimType, type ClipText, type TextAnim, type TextOrientation, type TextShadow } from "@/lib/video/text"
 import { animationState, ANIM_GROUPS, demoLength, REST } from "@/lib/video/text-animation"
-import { previewBackdrop } from "@/lib/video/text-colours"
+import { previewBackdrop, shadowBackdrop } from "@/lib/video/text-colors"
 import { cn } from "@/lib/utils"
 import { FontPicker } from "./font-picker"
 import { Callout } from "./ui/callout"
@@ -17,13 +17,13 @@ import { NumberField } from "./ui/number-field"
 import { Segmented } from "./ui/segmented"
 
 // A text clip's "Edit text...": the content (new lines where you press
-// Enter; nothing wraps), its colour, whether the letters run across or
+// Enter; nothing wraps), its color, whether the letters run across or
 // stack down, and its font (components/video/font-picker: 50 fonts in mood
 // groups, each name drawn in its font as it scrolls into view). The hero is
-// the text itself, drawn large in the chosen font and colour on a dark or
-// light backdrop by whichever shows that colour better (lib/video/text-colours).
-// Beside Colour, a swatch for each colour other text clips in the project use
-// (usedColours, most used first) sets it in one click. An Animation tab (the
+// the text itself, drawn large in the chosen font and color on a dark or
+// light backdrop by whichever shows that color better (lib/video/text-colors).
+// Beside Color, a swatch for each color other text clips in the project use
+// (usedColors, most used first) sets it in one click. An Animation tab (the
 // clip menu's "Animation..." opens on it) sets how the text comes in at the
 // clip's start and goes out at its end, each a type and a length in seconds;
 // in and out together longer than the clip are shortened to fit (lib/video/text
@@ -103,14 +103,61 @@ function AnimCard({ id, kind, type, seconds, max, error, onType, onSeconds }: {
   )
 }
 
-export function EditTextDialog({ text, length, section = "text", usedColours = [], onApply, onClose }: {
+/** A small dial for the direction the shadow falls: drag anywhere on it (it snaps to every 15 degrees when close), or use the arrow keys. */
+function AngleDial({ angle, onChange }: { angle: number; onChange: (angle: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const set = (e: PointerEvent<HTMLDivElement>) => {
+    const r = ref.current!.getBoundingClientRect()
+    let a = (Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)) * 180) / Math.PI
+    a = Math.round((a + 360) % 360)
+    const near = Math.round(a / 15) * 15
+    onChange((Math.abs(a - near) <= 3 ? near : a) % 360)
+  }
+  const key = (e: KeyboardEvent) => {
+    const step = e.shiftKey ? 15 : 5
+    const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? step : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -step : 0
+    if (!d) return
+    e.preventDefault()
+    onChange((((angle + d) % 360) + 360) % 360)
+  }
+  const r = (angle * Math.PI) / 180
+  return (
+    <div
+      ref={ref}
+      role="slider"
+      tabIndex={0}
+      aria-label="Shadow direction"
+      aria-valuemin={0}
+      aria-valuemax={359}
+      aria-valuenow={angle}
+      aria-valuetext={`${angle} degrees`}
+      onKeyDown={key}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId)
+        set(e)
+      }}
+      onPointerMove={(e) => e.currentTarget.hasPointerCapture(e.pointerId) && set(e)}
+      className="relative size-16 shrink-0 cursor-pointer touch-none rounded-full border border-input bg-card outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 dark:bg-input/30 pointer-coarse:size-20"
+    >
+      <span aria-hidden className="absolute top-1/2 left-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground/60" />
+      <span aria-hidden className="absolute top-1/2 left-1/2 h-px origin-left bg-editor-accent" style={{ width: "40%", transform: `rotate(${angle}deg)` }} />
+      <span
+        aria-hidden
+        className="absolute size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-editor-accent ring-2 ring-background"
+        style={{ left: `${50 + Math.cos(r) * 40}%`, top: `${50 + Math.sin(r) * 40}%` }}
+      />
+    </div>
+  )
+}
+
+export function EditTextDialog({ text, length, section = "text", usedColors = [], onApply, onClose }: {
   text: ClipText
   /** The clip's length (seconds): the longest an animation may be. */
   length: number
   /** The tab it opens on. */
   section?: TextSection
-  /** Colours (#rrggbb) other text clips in the project use, shown as swatches. */
-  usedColours?: string[]
+  /** Colors (#rrggbb) other text clips in the project use, shown as swatches. */
+  usedColors?: string[]
   onApply: (text: ClipText) => void
   onClose: () => void
 }) {
@@ -119,6 +166,12 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
   const [color, setColor] = useState(text.color)
   const [orientation, setOrientation] = useState<TextOrientation>(text.orientation)
   const [font, setFont] = useState(text.font ?? DEFAULT_FONT)
+  // The shadow's settings are kept while it is switched off, so turning it back on finds them as they were.
+  const [shadowOn, setShadowOn] = useState(text.shadow !== undefined)
+  const [shadowColor, setShadowColor] = useState(text.shadow?.color ?? DEFAULT_SHADOW.color)
+  const [shadowAngle, setShadowAngle] = useState(text.shadow?.angle ?? DEFAULT_SHADOW.angle)
+  const [shadowDistance, setShadowDistance] = useState(text.shadow?.distance ?? DEFAULT_SHADOW.distance)
+  const shadow: TextShadow | undefined = shadowOn ? { color: shadowColor, angle: shadowAngle, distance: shadowDistance } : undefined
   const [tab, setTab] = useState<TextSection>(section)
   const [inType, setInType] = useState<AnimType | "none">(text.animIn?.type ?? "none")
   const [inSeconds, setInSeconds] = useState(String(text.animIn?.duration ?? DEFAULT_ANIM_SECONDS))
@@ -134,7 +187,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
   }
   const animIn = animOf(inType, inSeconds)
   const animOut = animOf(outType, outSeconds)
-  const typed = animIn !== null && animOut !== null ? normalizeText({ content, color, orientation, font, animIn, animOut }) : null
+  const typed = animIn !== null && animOut !== null ? normalizeText({ content, color, orientation, font, shadow, animIn, animOut }) : null
   const next = typed && fitAnims(typed, length)
   const error = content.trim() === "" ? "Enter some text." : content.length > MAX_TEXT ? `At most ${MAX_TEXT} characters.` : null
   // Longer than the clip, or in and out together longer: what they'll be shortened to.
@@ -169,7 +222,11 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
   const visibleChars = shown.chars
   let seen = 0
 
-  const backdrop = previewBackdrop(color)
+  const lines = content.split("\n")
+  const backdrop = shadow ? shadowBackdrop(color, shadow.color) : previewBackdrop(color)
+  const sampleSize = `clamp(20px, ${Math.max(18, 44 - Math.max(0, Math.max(...lines.map((l) => l.length)) - 12) * 1.2)}px, 44px)`
+  // The sample's shadow in em, so it keeps its proportion to the letters at whatever size the sample is drawn.
+  const sampleShadow = shadow ? (() => { const o = shadowOffset(shadow, 1); return `${o.dx}em ${o.dy}em 0 ${shadow.color}` })() : undefined
   const fontName = fontById(font).name
 
   function apply() {
@@ -185,7 +242,6 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
     ]
     return parts.length ? `Comes ${parts.join(", goes ")}` : null
   })()
-  const lines = content.split("\n")
 
   return (
     <EditorDialog
@@ -229,7 +285,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
           >
             <div
               className={cn("max-w-full text-center leading-[1.05] whitespace-pre", orientation === "vertical" && "[writing-mode:vertical-rl] [text-orientation:upright]")}
-              style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, clipPath: reveal, fontSize: `clamp(20px, ${Math.max(18, 44 - Math.max(0, Math.max(...lines.map((l) => l.length)) - 12) * 1.2)}px, 44px)` }}
+              style={{ fontFamily: `"${fontFamily(fontById(font))}"`, color, clipPath: reveal, fontSize: sampleSize, textShadow: sampleShadow }}
             >
               {visibleChars === null
                 ? content || " "
@@ -281,17 +337,17 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
                 </p>
               </div>
             </DialogSection>
-            <DialogSection title="Colour" id="edit-text-colour" help="text.colour">
+            <DialogSection title="Color" id="edit-text-color" help="text.color">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
                   <span aria-hidden className="size-7 rounded-md ring-1 ring-black/15 ring-inset dark:ring-white/20" style={{ backgroundColor: color }} />
                   <span className="text-sm font-medium tabular-nums uppercase">{color}</span>
-                  <input id="edit-text-color" type="color" aria-label="Text colour" value={color} onChange={(e) => setColor(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
+                  <input id="edit-text-color" type="color" aria-label="Text color" value={color} onChange={(e) => setColor(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
                 </label>
-                {usedColours.length > 0 && (
-                  <div role="group" aria-label="Colours in other texts" className="flex flex-wrap items-center gap-1.5">
+                {usedColors.length > 0 && (
+                  <div role="group" aria-label="Colors in other texts" className="flex flex-wrap items-center gap-1.5">
                     <span className="mr-0.5 text-xs text-muted-foreground">In other texts</span>
-                    {usedColours.map((c) => {
+                    {usedColors.map((c) => {
                       const hex = c.toUpperCase()
                       const on = color.toLowerCase() === c.toLowerCase()
                       return (
@@ -299,7 +355,7 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
                           key={c}
                           type="button"
                           title={hex}
-                          aria-label={`Use colour ${hex}`}
+                          aria-label={`Use color ${hex}`}
                           aria-pressed={on}
                           onClick={() => setColor(c.toLowerCase())}
                           className={cn(
@@ -310,6 +366,48 @@ export function EditTextDialog({ text, length, section = "text", usedColours = [
                         />
                       )
                     })}
+                  </div>
+                )}
+              </div>
+            </DialogSection>
+            <DialogSection title="Shadow" id="edit-text-shadow" help="text.shadow">
+              <div className="grid gap-3">
+                <Segmented
+                  label="Shadow"
+                  value={shadowOn ? "on" : "off"}
+                  onChange={(v) => setShadowOn(v === "on")}
+                  options={[
+                    { value: "off", label: "None" },
+                    { value: "on", label: "Drop shadow" },
+                  ]}
+                  className="w-full sm:w-auto"
+                />
+                {shadowOn && (
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-3 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200" data-shadow-controls>
+                    <AngleDial angle={shadowAngle} onChange={setShadowAngle} />
+                    <div className="grid min-w-40 flex-1 gap-2.5">
+                      <div className="flex items-center gap-3">
+                        <label className="relative flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card pr-3 pl-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40 dark:bg-input/30 pointer-coarse:h-11">
+                          <span aria-hidden className="size-7 rounded-md ring-1 ring-black/15 ring-inset dark:ring-white/20" style={{ backgroundColor: shadowColor }} />
+                          <span className="text-sm font-medium tabular-nums uppercase">{shadowColor}</span>
+                          <input type="color" aria-label="Shadow color" value={shadowColor} onChange={(e) => setShadowColor(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0" />
+                        </label>
+                        <span className="text-xs text-muted-foreground tabular-nums">{shadowAngle}°</span>
+                      </div>
+                      <label className="grid gap-1 text-xs text-muted-foreground">
+                        <span className="flex justify-between"><span>Distance</span><span className="tabular-nums">{shadowDistance}%</span></span>
+                        <input
+                          type="range"
+                          aria-label="Shadow distance"
+                          min={1}
+                          max={MAX_SHADOW_DISTANCE}
+                          step={1}
+                          value={shadowDistance}
+                          onChange={(e) => setShadowDistance(Number(e.target.value))}
+                          className="w-full min-w-0 accent-editor-accent"
+                        />
+                      </label>
+                    </div>
                   </div>
                 )}
               </div>

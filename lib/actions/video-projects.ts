@@ -7,10 +7,11 @@ import { prisma } from "@/lib/prisma"
 import { listDirectory } from "@/lib/library-server"
 import { isPlainName, safeSegments, tempFolderName } from "@/lib/media"
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
-import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset } from "@/lib/video/project"
+import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset, type Project } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
 import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
 import { previewRetime, retimeAsset } from "@/lib/video/retime-server"
+import { createTemplate, saveTemplateSlots, startFromTemplate } from "@/lib/video/template-server"
 import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
 
 // Server actions for video projects. The user's folder always comes from the
@@ -247,6 +248,48 @@ export async function previewRetimeAction(
   if (!f.success || !a.success) return { error: "Invalid request." }
   try {
     return await previewRetime(userFolder, f.data, a.data, options)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Saves project `folder` as a template: a copy with the marked clips (`input.slots`: clip id to label) as slots. The project is unchanged. */
+export async function createTemplateAction(
+  folder: string,
+  input: { name: string; description?: string; slots: Record<string, string> }
+): Promise<{ folder: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await createTemplate(userFolder, f.data, input)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Starts a new project named `name` from template `templateFolder`. */
+export async function startFromTemplateAction(templateFolder: string, name: string): Promise<{ folder: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(templateFolder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await startFromTemplate(userFolder, f.data, name)
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Changes which clips of template `folder` are slots, their labels and its description. Replies with the whole template project as stored (placeholders made, replaced media gone): the editor reloads it. */
+export async function saveTemplateSlotsAction(
+  folder: string,
+  input: { description?: string; slots: Record<string, string> }
+): Promise<{ project: Project } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success) return { error: "Invalid request." }
+  try {
+    return await saveTemplateSlots(userFolder, f.data, input)
   } catch (error) {
     return { error: errorText(error) }
   }

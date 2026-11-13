@@ -396,10 +396,11 @@
   html {
     @apply font-sans;
   }
-  /* The timeline's empty space pans when dragged: a grab cursor there only
-     (its other parts keep their own), grabbing everywhere while it pans. */
+  /* The timeline's empty space pans when dragged: the normal pointer while
+     hovering it (clips and controls keep their own), the closed hand while
+     it's held and pans. */
   [data-pan] {
-    cursor: grab;
+    cursor: default;
   }
   [data-pan] > :not([data-pan]) {
     cursor: auto;

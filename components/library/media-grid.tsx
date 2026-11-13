@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl, preview } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
+import { TEMP_MEDIA_DRAG, TEMP_MOVED_EVENT } from "@/lib/temp-drag"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
 import type { QualityFlags } from "@/lib/ai/flags-server"
@@ -78,7 +79,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 function Tile({
-  root, folder, item, flagged, note, tempNote, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu, caption = false,
+  root, folder, item, flagged, note, tempNote, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu, onDragStart, caption = false,
 }: {
   root: string
   folder: string[]
@@ -94,6 +95,8 @@ function Tile({
   onDoubleClick: () => void
   onToggle: () => void
   onContextMenu: (e: React.MouseEvent) => void
+  /** Personal Storage: a selected photo can be dragged onto a folder in the side navigation. */
+  onDragStart?: (e: React.DragEvent) => void
   /** Show the start of `tempNote` under the tile (Personal Storage). */
   caption?: boolean
 }) {
@@ -111,6 +114,8 @@ function Tile({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      draggable={onDragStart !== undefined && selected}
+      onDragStart={onDragStart}
       title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : tempNote ? `${item.name} — ${tempNote}` : item.name}
     >
       <PhotoImage
@@ -422,7 +427,23 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
     }
     void run(action, action.startsWith("rotate") ? menuImages : menu.names)
   }
+  // Personal Storage, below a user's own folder: the selected photos can be dragged onto a folder in the side navigation to move them there.
+  const canDragToFolder = root === "temp" && folder.length > 0 && canEdit
+  const dragSelected = (e: React.DragEvent) => {
+    e.dataTransfer.setData(TEMP_MEDIA_DRAG, JSON.stringify({ folder, names: chosen.map((f) => f.name) }))
+    e.dataTransfer.effectAllowed = "move"
+  }
+  const onMoved = useEffectEvent((e: Event) => {
+    const d = (e as CustomEvent<{ folder: string[]; names: string[] }>).detail
+    if (d.folder.join("/") === folder.join("/")) hide(d.names)
+  })
+  useEffect(() => {
+    const h = (e: Event) => onMoved(e)
+    window.addEventListener(TEMP_MOVED_EVENT, h)
+    return () => window.removeEventListener(TEMP_MOVED_EVENT, h)
+  }, [])
   const dragSelect = useDragSelect({
+    keepOnSelected: canDragToFolder,
     grid: () => gridEl.current,
     scrollEl: frame.scrollEl,
     hit: (x, y) => itemAt(x, y, rows, tops, { columns: layout.columns, tileSize: layout.tileSize, gap: GAP }),
@@ -672,6 +693,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                   onDoubleClick={() => setViewer(indexOf.get(item.name) ?? 0)}
                   onToggle={() => toggle(item.name)}
                   onContextMenu={(e) => openMenu(e, item.name)}
+                  onDragStart={canDragToFolder ? dragSelected : undefined}
                 />
               ))}
             </div>

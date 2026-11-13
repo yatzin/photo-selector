@@ -80,13 +80,30 @@ export function rowHeight(tracks: number, zoom: number): number {
 }
 
 /** The horizontal zoom's range (px per second) and its default. */
-export const MIN_ZOOM = 20
-export const MAX_ZOOM = 200
+export const MIN_ZOOM = 10
+export const MAX_ZOOM = 360
 export const DEFAULT_ZOOM = 60
 
 /** The horizontal zoom kept between MIN_ZOOM and MAX_ZOOM; DEFAULT_ZOOM for anything not a number. */
 export function clampZoom(z: number): number {
   return Number.isFinite(z) ? Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) : DEFAULT_ZOOM
+}
+
+/**
+ * The zoom slider's position (0 to 1) for a zoom: DEFAULT_ZOOM in the middle,
+ * MIN_ZOOM at 0 and MAX_ZOOM at 1, on a log scale so equal distances are equal
+ * zoom factors (the range is the same factor either side of the default).
+ */
+export function zoomToSlider(z: number): number {
+  const half = Math.log(MAX_ZOOM / DEFAULT_ZOOM)
+  return 0.5 + Math.log(clampZoom(z) / DEFAULT_ZOOM) / (2 * half)
+}
+
+/** The zoom (px per second) for a slider position (0 to 1; anything else is clamped); the inverse of zoomToSlider. */
+export function sliderToZoom(s: number): number {
+  if (!Number.isFinite(s)) return DEFAULT_ZOOM
+  const half = Math.log(MAX_ZOOM / DEFAULT_ZOOM)
+  return clampZoom(DEFAULT_ZOOM * Math.exp((Math.min(1, Math.max(0, s)) - 0.5) * 2 * half))
 }
 
 /**

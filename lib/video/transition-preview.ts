@@ -6,7 +6,7 @@ import { isCustomTransition, type CustomTransition, type CutAudio, type Edge, ty
 import { cutGains } from "./transitions"
 
 // How the preview draws a transition: CSS for the outgoing picture (`from`),
-// the incoming one (`to`, drawn over it) and an optional flat colour over both
+// the incoming one (`to`, drawn over it) and an optional flat color over both
 // (`tint`), at progress p from 0 to 1. Each picture sits in a canvas-sized
 // layer, so percentages are of the canvas. Fades, wipes, slides, the circles,
 // the radial sweep and zoom follow ffmpeg's xfade (the export); pixelate and
@@ -17,7 +17,7 @@ import { cutGains } from "./transitions"
 // either picture (`fromCopies`, `toCopies`: a clone of the layer, styled on its
 // own, drawn just over it), boxes over everything (`overlays`, fractions of
 // the canvas) and the outgoing picture over the incoming one (`fromOnTop`).
-// Their colour splits and blurs use SVG filters by id (TRANSITION_FILTERS).
+// Their color splits and blurs use SVG filters by id (TRANSITION_FILTERS).
 
 export type LayerStyle = {
   opacity?: number
@@ -46,7 +46,7 @@ export type TransitionLook = {
 }
 
 /**
- * The SVG filters the looks name (each `url(#id)`): one colour channel kept
+ * The SVG filters the looks name (each `url(#id)`): one color channel kept
  * (r, g, b), and a whip's motion blur, sideways (h) or up and down (v), at
  * levels 1 to 3 (transition-fx's WHIP_LEVELS).
  */
@@ -176,7 +176,7 @@ function customLook(type: CustomTransition, q: number, aspect: number): Transiti
       return { from: {}, to: { maskImage: heartImage(), maskSize: `${pct((1.5 * s) / aspect)} ${pct(1.5 * s)}`, maskPosition: "50% 50%", maskRepeat: "no-repeat" } }
     }
     case "glitch": {
-      // The picture on show (the outgoing one, then the incoming one from the middle) in three colour channels, red and blue
+      // The picture on show (the outgoing one, then the incoming one from the middle) in three color channels, red and blue
       // pulled apart, with three strips of it shifted sideways over them, and two noise blocks.
       const g = glitchAmount(num, q)
       const f = glitchFrame(glitchStep(q))
@@ -201,7 +201,7 @@ function customLook(type: CustomTransition, q: number, aspect: number): Transiti
       }
     }
     case "glitchreveal": {
-      // Strips that have swapped show the incoming picture; the ones swapping show it shifted, its colours split.
+      // Strips that have swapped show the incoming picture; the ones swapping show it shifted, its colors split.
       const states = Array.from({ length: GLITCH_STRIPS }, (_, k) => {
         const at = stripSwap(num, k)
         return q >= at + STRIP_GLITCH ? "in" : q >= at - STRIP_GLITCH ? "glitch" : "out"

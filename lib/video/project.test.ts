@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  addClip, addTextClip, dropZone, moveOnClip, pasteClip, placeDropped, placeOnClip, retimeClip, rippleRemoveClip, assetLabel, clipLength, newClipLength, expandLoops, maxLoopLength, MAX_LOOP_COPIES, isLooping, setClipLoop, showsSourceWindow, tailHandle, headHandle, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
+  addClip, addTextClip, dropZone, moveOnClip, pasteClip, placeDropped, placeDroppedText, placeOnClip, retimeClip, rippleRemoveClip, assetLabel, clipLength, newClipLength, expandLoops, maxLoopLength, MAX_LOOP_COPIES, isLooping, setClipLoop, showsSourceWindow, tailHandle, headHandle, addTrack, allClips, assetKind, baseInsertion, clipsAt, DEFAULT_IMAGE, endToEnd, findAssetsBySource, freeTrackFor, isContiguousFromZero, leftTrimDraft, MAX_CLIPS, MAX_IMAGE, MAX_TIMELINE,
   MAX_TRACKS, mergeClientProject, MIN_CLIP, moveClip, newProject, packBase, parseProject, removeAsset, removeClip, removeTrack, isStill, isTextClip, resolveStart, setBaseMagnetic, setClipKey, setClipMuted, setClipText, setTransform,
   splitClip, totalLength, trackClipAt, trackEnd, trackStarts, trimClip, type Asset, type Clip, type Edit, type Project,
 } from "./project"
@@ -1434,6 +1434,19 @@ describe("text clips", () => {
     const p = withText([textClip()])
     expect(addTextClip(p, { ...text, content: " " }, 0, {}, "y")).toBe(p)
     expect(addTextClip(p, text, 0, {}, "x")).toBe(p)
+  })
+
+  it("placeDroppedText puts text in front of or behind a clip, treating a replace as behind, else at the time", () => {
+    const p = withText([{ id: "v", asset: "a", in: 0, out: 4, start: 2 }, { id: "w", asset: "a", in: 0, out: 4, start: 6 }])
+    const before = placeDroppedText(p, text, 0, { start: 2, on: { clip: "v", mode: "before" } }, "x")
+    expect(before.tracks[0].clips.map((c) => [c.id, c.start])).toEqual([["x", 2], ["v", 2 + DEFAULT_IMAGE], ["w", 6 + DEFAULT_IMAGE]])
+    const after = placeDroppedText(p, text, 0, { on: { clip: "v", mode: "after" } }, "x")
+    expect(after.tracks[0].clips.find((c) => c.id === "x")?.start).toBe(6)
+    const replace = placeDroppedText(p, text, 0, { on: { clip: "v", mode: "replace" } }, "x")
+    expect(replace.tracks[0].clips.map((c) => c.id).sort()).toEqual(["v", "w", "x"])
+    expect(replace.tracks[0].clips.find((c) => c.id === "x")?.start).toBe(6)
+    expect(placeDroppedText(p, text, 1, { start: 3 }, "x")).toEqual(addTextClip(p, text, 1, { start: 3 }, "x"))
+    expect(placeDroppedText(p, { ...text, content: " " }, 0, { on: { clip: "v", mode: "before" } }, "x")).toBe(p)
   })
 
   it("sets the text (one edit), refusing invalid text, a media clip and no change", () => {

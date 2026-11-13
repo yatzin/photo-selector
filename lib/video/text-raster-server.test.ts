@@ -33,7 +33,7 @@ describe("textFontPath", () => {
   })
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
 
-  /** Its size, how many pixels are see-through and how many are fully opaque, and the opaque ones' mean colour. */
+  /** Its size, how many pixels are see-through and how many are fully opaque, and the opaque ones' mean color. */
   async function read(file: string) {
     const { data, info } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
     let clear = 0
@@ -46,10 +46,10 @@ describe("textFontPath", () => {
         for (let k = 0; k < 3; k++) sum[k] += data[i + k]
       }
     }
-    return { w: info.width, h: info.height, clear, solid, colour: sum.map((v) => v / Math.max(1, solid)), data }
+    return { w: info.width, h: info.height, clear, solid, color: sum.map((v) => v / Math.max(1, solid)), data }
   }
 
-  it("draws horizontal text in its colour on a transparent PNG the size of its content box", async () => {
+  it("draws horizontal text in its color on a transparent PNG the size of its content box", async () => {
     const text: ClipText = { content: "Hello\nab", color: "#ff8800", orientation: "horizontal" }
     const out = path.join(dir, "h.png")
     await rasteriseText(text, 100, out, dir)
@@ -58,12 +58,22 @@ describe("textFontPath", () => {
     expect([r.w, r.h]).toEqual([Math.ceil(box.w), Math.ceil(box.h)])
     expect(r.solid).toBeGreaterThan(1000)
     expect(r.clear).toBeGreaterThan(r.w * r.h * 0.5)
-    expect(r.colour[0]).toBeGreaterThan(240)
-    expect(Math.abs(r.colour[1] - 136)).toBeLessThan(10)
-    expect(r.colour[2]).toBeLessThan(15)
+    expect(r.color[0]).toBeGreaterThan(240)
+    expect(Math.abs(r.color[1] - 136)).toBeLessThan(10)
+    expect(r.color[2]).toBeLessThan(15)
     // The padding is clear all round; the work folder is gone.
     for (let x = 0; x < r.w; x++) expect(r.data[x * 4 + 3]).toBe(0)
     expect(fs.readdirSync(dir).filter((f) => f.startsWith("text-"))).toEqual([])
+  }, 30_000)
+
+  it("draws a shadow: pixels of the shadow color appear down and right of the letters", async () => {
+    const text: ClipText = { content: "I", color: "#ffffff", orientation: "horizontal", shadow: { color: "#ff0000", angle: 45, distance: 10 } }
+    const out = path.join(dir, "s.png")
+    await rasteriseText(text, 100, out, dir)
+    const r = await read(out)
+    let red = 0
+    for (let i = 0; i < r.data.length; i += 4) if (r.data[i + 3] > 200 && r.data[i] > 200 && r.data[i + 1] < 60) red++
+    expect(red).toBeGreaterThan(50)
   }, 30_000)
 
   it("stacks vertical text: taller than wide for a multi-character string", async () => {

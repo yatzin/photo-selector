@@ -3,12 +3,12 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useMemo, useState, useSyncExternalStore, useTransition } from "react"
-import { ArrowDown, ArrowUp, Clapperboard, FolderPlus, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Clapperboard, FolderPlus, Layers, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { FieldHelp } from "@/components/ui/field-help"
 import { Input } from "@/components/ui/input"
-import { createProjectAction, deleteProjectAction, renameProjectAction } from "@/lib/actions/video-projects"
+import { createProjectAction, deleteProjectAction, renameProjectAction, startFromTemplateAction } from "@/lib/actions/video-projects"
 import { formatBytes } from "@/lib/format"
 import { firstDir, formatLength, sortProjects, type SortDir, type SortKey } from "@/lib/video/project-sort"
 import { cn } from "@/lib/utils"
@@ -19,8 +19,8 @@ import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialo
 // file in a details list (name, modified, clips, length, size), sorted by clicking a column heading (name or date to start with),
 // filtered by the search box, opened by clicking its name. Projects are
 
-type Project = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number }
-type Dialogue = { kind: "new" } | { kind: "rename"; project: Project } | { kind: "delete"; project: Project }
+type Project = { folder: string; name: string; clips: number; modified: number; duration: number; bytes: number; /** A template: how many slots it has, and its description. */ template?: { slots: number; description?: string } }
+type Dialogue = { kind: "new" } | { kind: "rename"; project: Project } | { kind: "delete"; project: Project } | { kind: "use"; project: Project }
 
 const subscribeNothing = () => () => {}
 
@@ -33,7 +33,10 @@ const COLUMNS: { key: SortKey | null; label: string; align?: "right" }[] = [
   { key: "size", label: "Size", align: "right" },
 ]
 
-export function ProjectList({ projects }: { projects: Project[] }) {
+export function ProjectList({ projects: all }: { projects: Project[] }) {
+  // Templates are listed apart from projects.
+  const projects = useMemo(() => all.filter((p) => !p.template), [all])
+  const templates = useMemo(() => all.filter((p) => p.template).sort((a, b) => a.name.localeCompare(b.name)), [all])
   const [dialog, setDialog] = useState<Dialogue | null>(null)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "modified", dir: "desc" })
   const [query, setQuery] = useState("")
@@ -150,6 +153,44 @@ export function ProjectList({ projects }: { projects: Project[] }) {
         </div>
       )}
 
+      {templates.length > 0 && (
+        <section aria-label="Templates" className="space-y-2">
+          <div>
+            <h2 className="font-heading text-lg font-semibold">Templates</h2>
+            <p className="text-sm text-muted-foreground">Start a project from one, then fill its slots with your own media.</p>
+          </div>
+          <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {templates.map((t) => (
+              <li key={t.folder} className="flex items-start gap-3 rounded-xl border bg-card p-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-link/10 text-link">
+                  <Layers className="size-5" strokeWidth={1.5} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <Link href={`/tools/video-editing/${encodeURIComponent(t.folder)}`} className="block truncate font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" title="Open the template to edit it">
+                    {t.name}
+                  </Link>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t.template!.slots} replaceable &middot; {formatLength(t.duration)}
+                    {t.template!.description ? <> &middot; {t.template!.description}</> : null}
+                  </p>
+                  <div className="mt-2 flex items-center gap-1">
+                    <Button size="sm" onClick={() => open({ kind: "use", project: t })}>Use template</Button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => open({ kind: "rename", project: t })}>
+                      <Pencil className="h-4 w-4" />
+                      <span className="sr-only">Rename {t.name}</span>
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => open({ kind: "delete", project: t })}>
+                      <Trash2 className="h-4 w-4" />
+                      <span className="sr-only">Delete {t.name}</span>
+                    </Button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {dialog && <ProjectDialog key={dialog.kind + (dialog.kind === "new" ? "" : dialog.project.folder)} dialog={dialog} onClose={() => setDialog(null)} />}
     </div>
   )
@@ -159,7 +200,7 @@ export function ProjectList({ projects }: { projects: Project[] }) {
 function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => void }) {
   const router = useRouter()
   const dialogState = useEditorDialog(onClose)
-  const [name, setName] = useState(dialog.kind === "rename" ? dialog.project.name : "")
+  const [name, setName] = useState(dialog.kind === "rename" ? dialog.project.name : dialog.kind === "use" ? `${dialog.project.name} project` : "")
   const [pending, startTransition] = useTransition()
 
   function submit() {
@@ -167,6 +208,11 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
     startTransition(async () => {
       if (dialog.kind === "new") {
         const res = await createProjectAction(name)
+        if ("error" in res) return void toast.error(res.error)
+        dialogState.close()
+        router.push(`/tools/video-editing/${encodeURIComponent(res.folder)}`)
+      } else if (dialog.kind === "use") {
+        const res = await startFromTemplateAction(dialog.project.folder, name)
         if ("error" in res) return void toast.error(res.error)
         dialogState.close()
         router.push(`/tools/video-editing/${encodeURIComponent(res.folder)}`)
@@ -187,9 +233,9 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
   return (
     <EditorDialog
       state={dialogState}
-      icon={dialog.kind === "new" ? FolderPlus : dialog.kind === "rename" ? Pencil : Trash2}
-      title={dialog.kind === "new" ? "New project" : dialog.kind === "rename" ? "Rename project" : "Delete project"}
-      subtitle={dialog.kind === "new" ? "Clips, settings and exports live in its own folder." : dialog.project.name}
+      icon={dialog.kind === "new" ? FolderPlus : dialog.kind === "use" ? Layers : dialog.kind === "rename" ? Pencil : Trash2}
+      title={dialog.kind === "new" ? "New project" : dialog.kind === "use" ? "New project from template" : dialog.kind === "rename" ? "Rename project" : "Delete project"}
+      subtitle={dialog.kind === "new" ? "Clips, settings and exports live in its own folder." : dialog.kind === "use" ? `From the template “${dialog.project.name}”` : dialog.project.name}
       size="sm"
       dismissible={!pending}
       onSubmit={submit}
@@ -202,7 +248,7 @@ function ProjectDialog({ dialog, onClose }: { dialog: Dialogue; onClose: () => v
             className={dialog.kind === "delete" ? "bg-destructive text-white hover:bg-destructive/90 dark:text-neutral-950" : undefined}
           >
             {pending && <Loader2 className="motion-safe:animate-spin" />}
-            {dialog.kind === "new" ? "Create project" : dialog.kind === "rename" ? "Rename project" : "Delete project"}
+            {dialog.kind === "new" ? "Create project" : dialog.kind === "use" ? "Create from template" : dialog.kind === "rename" ? "Rename project" : "Delete project"}
           </PrimaryButton>
         </DialogFooter>
       }

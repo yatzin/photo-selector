@@ -127,12 +127,12 @@ export const TRANSITION_GUIDES: Record<TransitionType | "none", TransitionGuide>
     avoid: "Business, news or serious subjects; repeated use in one video, where it gets cheesy; a next shot whose subject sits in a corner, which shows last.",
   },
   glitch: {
-    does: "Both clips break up like a bad video signal: the colours split apart (chromatic aberration), strips of the picture jump sideways and noisy blocks flash, with a hard switch at the peak.",
+    does: "Both clips break up like a bad video signal: the colors split apart (chromatic aberration), strips of the picture jump sideways and noisy blocks flash, with a hard switch at the peak.",
     bestFor: "Spooky Halloween videos; product launches and tech promos; energetic social media edits and music videos.",
     avoid: "Calm or sentimental footage; viewers sensitive to flashing images; long transitions, where the effect wears thin.",
   },
   glitchreveal: {
-    does: "The next clip appears strip by strip, each horizontal strip swapping over at its own moment and jittering with split colours as it does.",
+    does: "The next clip appears strip by strip, each horizontal strip swapping over at its own moment and jittering with split colors as it does.",
     bestFor: "Tech and gaming content; reveals with a digital or hacked look; intros, title cards and social clips that need some edge.",
     avoid: "Soft, romantic or natural footage; two shots with very different brightness, where the strips look broken; flash-sensitive audiences.",
   },

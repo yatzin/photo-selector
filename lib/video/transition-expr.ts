@@ -126,7 +126,7 @@ function glitch(q: number): string {
   const f = glitchFrame(glitchStep(q))
   const src = q < 0.5 ? "a" : "b"
   return perPlane((p) => {
-    // Red pulled right and blue left (a pixel shows red from its left): the colour split on everything outside the strips.
+    // Red pulled right and blue left (a pixel shows red from its left): the color split on everything outside the strips.
     const split = f.split * g
     let e = split === 0 ? (src === "a" ? "A" : "B") : at(src, p, p === 2 ? `X-${w(split)}` : p === 1 ? `X+${w(split)}` : "X", "Y")
     for (const band of f.bands) {

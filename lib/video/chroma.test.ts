@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { isValidKey, keyHex, keyVideoPixels, pixelAt, removeBackground, rgbToLab, videoKeyParams } from "./chroma"
 
-const COLOURS: Record<string, [number, number, number]> = { w: [255, 255, 255], r: [220, 20, 30], g: [30, 200, 60] }
-/** A RGBA picture from rows of single-letter colours. */
+const COLORS: Record<string, [number, number, number]> = { w: [255, 255, 255], r: [220, 20, 30], g: [30, 200, 60] }
+/** A RGBA picture from rows of single-letter colors. */
 function pic(rows: string[]) {
   const h = rows.length
   const w = rows[0].length
   const d = new Uint8ClampedArray(w * h * 4)
-  rows.forEach((row, y) => [...row].forEach((ch, x) => d.set([...COLOURS[ch], 255], (y * w + x) * 4)))
+  rows.forEach((row, y) => [...row].forEach((ch, x) => d.set([...COLORS[ch], 255], (y * w + x) * 4)))
   return { d, w, h }
 }
 /** Rows of "." (transparent), "#" (opaque) and "~" (partly). */
@@ -31,12 +31,12 @@ describe("rgbToLab", () => {
 describe("removeBackground", () => {
   const rows = ["wwwwwww", "wrrrrrw", "wrwwwrw", "wrrrrrw", "wwwwwww"]
 
-  it("clears the border-connected background and keeps same-coloured islands inside the subject", () => {
+  it("clears the border-connected background and keeps same-colored islands inside the subject", () => {
     const { d, w, h } = pic(rows)
     expect(alphaRows(removeBackground(d, w, h, WHITE), w, h)).toEqual([".......", ".#####.", ".#####.", ".#####.", "......."])
   })
 
-  it("with contiguous off, the enclosed same-coloured area goes too", () => {
+  it("with contiguous off, the enclosed same-colored area goes too", () => {
     const { d, w, h } = pic(rows)
     expect(alphaRows(removeBackground(d, w, h, { ...WHITE, contiguous: false }), w, h)[2]).toBe(".#...#.")
   })
@@ -73,7 +73,7 @@ describe("removeBackground", () => {
 })
 
 describe("pixelAt", () => {
-  it("reads a colour, and nothing outside or see-through", () => {
+  it("reads a color, and nothing outside or see-through", () => {
     const { d, w, h } = pic(["wr"])
     expect(pixelAt(d, w, h, 1, 0)).toEqual([220, 20, 30])
     expect(pixelAt(d, w, h, 2, 0)).toBeNull()
@@ -102,10 +102,10 @@ describe("the video key (ffmpeg colorkey's maths)", () => {
     expect(videoKeyParams(20).similarity).toBeCloseTo(0.1)
     expect(videoKeyParams(500).similarity).toBe(0.5)
   })
-  it("keyHex writes ffmpeg's colour", () => {
+  it("keyHex writes ffmpeg's color", () => {
     expect(keyHex([0, 255, 16])).toBe("0x00ff10")
   })
-  it("keyVideoPixels clears the key, keeps a far colour and fades between", () => {
+  it("keyVideoPixels clears the key, keeps a far color and fades between", () => {
     const px = Uint8ClampedArray.from([0, 255, 0, 255, 0, 250, 0, 255, 255, 0, 0, 255, 60, 230, 40, 255])
     const out = keyVideoPixels(px, { key: [0, 255, 0], tolerance: 20 })
     expect(out[3]).toBe(0)

@@ -19,6 +19,8 @@ type Options = {
   /** The photo index at (x, y) from the grid's top-left, or -1 (e.g. over a month header). */
   hit: (x: number, y: number) => number
   names: string[]
+  /** Mouse: a press on a selected photo is left alone (it starts dragging the selection elsewhere) instead of deselecting the range. */
+  keepOnSelected?: boolean
   /** Photos a range should skip (in a collapsed month). */
   hidden?: (index: number) => boolean
   selected: Set<string>
@@ -119,6 +121,7 @@ export function useDragSelect(options: Options) {
     }
     d.start = indexAtPointer(d)
     if (d.start < 0) return
+    if (!touch && opts.current.keepOnSelected && opts.current.selected.has(opts.current.names[d.start])) return
     if (!touch) e.preventDefault() // no text selection while dragging
     drag.current = d
     if (touch) d.timer = setTimeout(() => drag.current === d && begin(d), LONG_PRESS_MS)

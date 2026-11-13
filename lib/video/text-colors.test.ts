@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Clip, Project } from "./project"
-import { DARK_BACKDROP, LIGHT_BACKDROP, MAX_USED_COLOURS, previewBackdrop, usedTextColours } from "./text-colours"
+import { DARK_BACKDROP, LIGHT_BACKDROP, MAX_USED_COLORS, MID_BACKDROP, previewBackdrop, shadowBackdrop, usedTextColors } from "./text-colors"
 
 const text = (id: string, start: number, color: string): Clip => ({ id, asset: "", in: 0, out: 1, start, text: { content: "a", color, orientation: "horizontal" } })
 const video = (id: string, start: number): Clip => ({ id, asset: "a.mp4", in: 0, out: 1, start })
@@ -9,14 +9,14 @@ const project = (...tracks: Clip[][]): Project => ({
   tracks: tracks.map((clips, i) => ({ id: `t${i}`, clips })),
 })
 
-describe("usedTextColours", () => {
+describe("usedTextColors", () => {
   it("is empty with no text clips", () => {
-    expect(usedTextColours(project([video("v", 0)]))).toEqual([])
-    expect(usedTextColours(project())).toEqual([])
+    expect(usedTextColors(project([video("v", 0)]))).toEqual([])
+    expect(usedTextColors(project())).toEqual([])
   })
 
-  it("lists each colour once, ignoring case, in lower case", () => {
-    expect(usedTextColours(project([text("a", 0, "#FF0000"), text("b", 2, "#ff0000"), text("c", 4, "#00Ff00")]))).toEqual(["#ff0000", "#00ff00"])
+  it("lists each color once, ignoring case, in lower case", () => {
+    expect(usedTextColors(project([text("a", 0, "#FF0000"), text("b", 2, "#ff0000"), text("c", 4, "#00Ff00")]))).toEqual(["#ff0000", "#00ff00"])
   })
 
   it("orders by how many clips use it, then by the earliest clip's time, across layers", () => {
@@ -24,28 +24,28 @@ describe("usedTextColours", () => {
       [text("a", 0, "#111111"), text("b", 5, "#222222"), text("c", 9, "#222222")],
       [text("d", 3, "#333333"), text("e", 1, "#444444")],
     )
-    expect(usedTextColours(p)).toEqual(["#222222", "#111111", "#444444", "#333333"])
+    expect(usedTextColors(p)).toEqual(["#222222", "#111111", "#444444", "#333333"])
   })
 
-  it("leaves out the clip being edited unless another clip uses its colour", () => {
+  it("leaves out the clip being edited unless another clip uses its color", () => {
     const p = project([text("a", 0, "#111111"), text("b", 2, "#222222"), text("c", 4, "#222222")], [text("d", 1, "#333333")])
-    expect(usedTextColours(p, "a")).toEqual(["#222222", "#333333"])
-    expect(usedTextColours(p, "b")).toEqual(["#111111", "#333333", "#222222"])
-    expect(usedTextColours(project([text("a", 0, "#111111")]), "a")).toEqual([])
+    expect(usedTextColors(p, "a")).toEqual(["#222222", "#333333"])
+    expect(usedTextColors(p, "b")).toEqual(["#111111", "#333333", "#222222"])
+    expect(usedTextColors(project([text("a", 0, "#111111")]), "a")).toEqual([])
   })
 
-  it("keeps at most MAX_USED_COLOURS, the most used", () => {
+  it("keeps at most MAX_USED_COLORS, the most used", () => {
     const clips = Array.from({ length: 14 }, (_, i) => text(`c${i}`, i, `#0000${(i + 16).toString(16)}`))
     clips.push(text("x", 20, "#00001d"))
-    const used = usedTextColours(project(clips))
-    expect(used).toHaveLength(MAX_USED_COLOURS)
+    const used = usedTextColors(project(clips))
+    expect(used).toHaveLength(MAX_USED_COLORS)
     expect(used[0]).toBe("#00001d")
     expect(used).not.toContain("#00001c")
   })
 })
 
 describe("previewBackdrop", () => {
-  it("puts light colours on the dark backdrop and dark ones on the light", () => {
+  it("puts light colors on the dark backdrop and dark ones on the light", () => {
     expect(previewBackdrop("#ffffff").background).toBe(DARK_BACKDROP)
     expect(previewBackdrop("#FFFF00").background).toBe(DARK_BACKDROP)
     expect(previewBackdrop("#000000").background).toBe(LIGHT_BACKDROP)
@@ -66,7 +66,16 @@ describe("previewBackdrop", () => {
     expect(previewBackdrop("#000000").contrast).toBeCloseTo(19.3, 0)
   })
 
-  it("treats an invalid colour as white", () => {
+  it("treats an invalid color as white", () => {
     for (const bad of ["", "white", "#fff", "#gggggg", "#ffffffff"]) expect(previewBackdrop(bad)).toEqual(previewBackdrop("#ffffff"))
+  })
+})
+
+describe("shadowBackdrop", () => {
+  it("shows white letters with a black shadow on a middle gray, where both stand out", () => {
+    expect(shadowBackdrop("#ffffff", "#000000").background).toBe(MID_BACKDROP)
+  })
+  it("uses a dark backdrop for light letters and a light shadow", () => {
+    expect(shadowBackdrop("#ffffff", "#ffff00").background).toBe(DARK_BACKDROP)
   })
 })

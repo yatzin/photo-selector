@@ -3,7 +3,7 @@ import { execFile } from "child_process"
 import fs from "fs/promises"
 import path from "path"
 import { DEFAULT_FONT, fontById } from "./fonts"
-import { textLayout, type ClipText } from "./text"
+import { shadowOffset, textLayout, type ClipText } from "./text"
 
 // A text clip's picture for the export: its text drawn by ffmpeg's drawtext
 // (HarfBuzz and FreeType, with the text's bundled font file, so no system font is involved) into a
@@ -40,6 +40,10 @@ export async function rasteriseText(text: ClipText, fontPx: number, outFile: str
     // and leave the line's centre where it was. Mono's ink stays inside its advances: as it was.
     const font = fontById(text.font)
     const ends = font.id === DEFAULT_FONT ? "" : " ".repeat(Math.ceil((font.pad * font.upm) / font.advances[0]))
+    // The shadow is drawtext's own (whole pixels, at least one a side it falls on).
+    const off = text.shadow ? shadowOffset(text.shadow, fontPx) : null
+    const whole = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.max(1, Math.round(Math.abs(n))))
+    const shadow = text.shadow && off ? `:shadowcolor=0x${text.shadow.color.slice(1)}:shadowx=${whole(off.dx)}:shadowy=${whole(off.dy)}` : ""
     let n = 0
     for (const line of layout.lines) {
       if (line.text.trim() === "") continue
@@ -47,7 +51,7 @@ export async function rasteriseText(text: ClipText, fontPx: number, outFile: str
       await fs.writeFile(path.join(dir, file), ends + line.text + ends)
       // expansion=none: the text is drawn as it is (no %{...} sequences).
       filters.push(
-        `drawtext=fontfile=font.ttf:textfile=${file}:expansion=none:fontsize=${fontPx}:fontcolor=0x${text.color.slice(1)}:x=(w-text_w)/2:y=${Number(line.baseline.toFixed(3))}:y_align=baseline`
+        `drawtext=fontfile=font.ttf:textfile=${file}:expansion=none:fontsize=${fontPx}:fontcolor=0x${text.color.slice(1)}:x=(w-text_w)/2:y=${Number(line.baseline.toFixed(3))}:y_align=baseline${shadow}`
       )
     }
     // Through a file: a long vertical text makes hundreds of filters, past Windows' command line limit.
