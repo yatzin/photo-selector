@@ -10,6 +10,15 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[i]}`
 }
 
+/** A video's length for a thumbnail: m:ss, or h:mm:ss from an hour up. */
+export function formatClock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const two = (n: number) => String(n).padStart(2, "0")
+  return h > 0 ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`
+}
+
 /** The first `max` characters of `text` on one line, with "…" when there was more. */
 export function preview(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim()

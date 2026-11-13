@@ -1,6 +1,6 @@
 import {
   COLLAGE_ROWS, COLLAGE_SWIPE, collageCols, collageTile, exchangeParams, GLITCH_BLOCKS_FROM, GLITCH_STRIPS, glitchAmount, glitchFrame, glitchStep, heartOutline, heartScale, num, PAGE_SHADOW,
-  pageParams, PAPER, revealOffset, STRIP_GLITCH, STRIP_SPLIT, stripJitter, stripStep, stripSwap, WHIP_VECTORS, whipBlurLevel, whipDir, whipOffset,
+  pageParams, PAPER, revealOffset, STRIP_GLITCH, STRIP_SPLIT, stripJitter, stripStep, stripSwap, WHIP_VECTORS, whipBlurLevel, whipDir, whipOffset, ZOOM_SAMPLE_PLACE, zoomKind, zoomParams, zoomPlaceOf, type ZoomPlace,
 } from "./transition-fx"
 import { isCustomTransition, type CustomTransition, type CutAudio, type Edge, type TransitionType } from "./transition-types"
 import { cutGains } from "./transitions"
@@ -58,10 +58,13 @@ export const TRANSITION_FILTERS = {
 const pct = (n: number) => `${Math.round(n * 10000) / 100}%`
 const round = (n: number) => Math.round(n * 1000) / 1000
 
+/** The two clips' transforms, for the zoom transitions (they move a picture between full screen and its own place). Absent: a sample's small place. */
+export type ZoomClips = { outgoing?: { scale: number; x: number; y: number }; incoming?: { scale: number; x: number; y: number } }
+
 /** What the two pictures look like `p` (0 to 1) of the way through a transition of `type`, on a canvas `aspect` (width / height) wide. */
-export function transitionLook(type: TransitionType, p: number, aspect = 16 / 9): TransitionLook {
+export function transitionLook(type: TransitionType, p: number, aspect = 16 / 9, clips?: ZoomClips): TransitionLook {
   const q = Math.min(1, Math.max(0, p))
-  if (isCustomTransition(type)) return customLook(type, q, aspect)
+  if (isCustomTransition(type)) return customLook(type, q, aspect, clips)
   const rest = 1 - q
   // Rising to 1 at the middle and back: how far through the dip (black, white, blur) it is.
   const dip = 1 - Math.abs(2 * q - 1)
@@ -130,8 +133,17 @@ function stripMask(on: boolean[]): string {
   return `linear-gradient(to bottom, ${stops.join(", ")})`
 }
 
-function customLook(type: CustomTransition, q: number, aspect: number): TransitionLook {
+function customLook(type: CustomTransition, q: number, aspect: number, clips?: ZoomClips): TransitionLook {
   switch (type) {
+    case "zoomfromfull":
+    case "zoomtofull": {
+      // The clip on show moves between full screen and its own place; the other one is gone while it does.
+      const kind = zoomKind(type)!
+      const place: ZoomPlace = clips ? zoomPlaceOf(kind === "from" ? clips.incoming : clips.outgoing) : ZOOM_SAMPLE_PLACE
+      const z = zoomParams(kind, q, place)
+      const move: LayerStyle = { transform: `${translate(z.dx, z.dy)} scale(${round(z.k)})` }
+      return kind === "from" ? { from: { opacity: 0 }, to: move } : { from: move, to: { opacity: 0 } }
+    }
     case "collage": {
       // Each square of the outgoing picture is a copy clipped to it, shrinking about its centre as it swipes right.
       const cols = collageCols(aspect)

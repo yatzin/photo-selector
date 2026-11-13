@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { clockStalled, resyncTo } from "@/lib/video/follow"
 import { endAction } from "@/lib/video/loop"
 import { audioCutState, audioEdgeState, combineFx, PLAIN, pictureEdgeGain } from "@/lib/video/audio-fx"
+import { expandZoomCuts } from "@/lib/video/zoom-cut"
 import { clipLength, expandLoops, isStill, MAX_TRACKS, totalLength, trackStarts, type Clip, type Project } from "@/lib/video/project"
 import { isAudioTransitionType, isTransitionType } from "@/lib/video/transition-types"
 import { cutGains, edgeAt, entrySourceTime, laneClipAt, laneElementAt, overlapAt, tailSourceTime, transitionAt } from "@/lib/video/transitions"
@@ -85,7 +86,7 @@ function sameClips(a: Clip[][], b: Clip[][]): boolean {
 
 export function usePreviewPlayer(stored: Project, urlFor: (assetId: string) => string, audioUrlFor: (assetId: string) => string, loop = false) {
   // A looping clip plays as back-to-back copies (expandLoops); the editor's own project is never changed.
-  const project = useMemo(() => expandLoops(stored), [stored])
+  const project = useMemo(() => expandZoomCuts(expandLoops(stored)), [stored])
   const els = useRef<(HTMLVideoElement | null)[][]>(Array.from({ length: MAX_TRACKS }, () => [null, null]))
   // The audio layer's two elements, the clip each holds (id and asset), the one playing and the clip at the playhead (-1: none).
   const audioEls = useRef<(HTMLAudioElement | null)[]>([null, null])
@@ -775,10 +776,33 @@ export function usePreviewPlayer(stored: Project, urlFor: (assetId: string) => s
   const onVideoError = useCallback(
     (lane: number, slot: number) => {
       const id = lanes.current[lane].loaded[slot]
-      if (id) markFailed(id)
+      if (!id) return
+      const error = el(lane, slot)?.error
+      console.warn("Preview video error", { asset: id, code: error?.code, message: error?.message })
+      markFailed(id)
     },
     [markFailed]
   )
+
+  /**
+   * A slot's video can play: whatever failed it earlier (a load cut short by a
+   * split's second clip taking over the file, say) was temporary, so the
+   * "can't preview" notice goes. A file the browser really can't play never gets here.
+   */
+  const onVideoPlayable = useCallback((lane: number, slot: number) => {
+    const id = lanes.current[lane].loaded[slot]
+    if (!id || !failedRef.current.has(id)) return
+    const next = new Set(failedRef.current)
+    next.delete(id)
+    failedRef.current = next
+    setFailed(next)
+    setMissing((m) => {
+      if (!m.has(id)) return m
+      const n = new Set(m)
+      n.delete(id)
+      return n
+    })
+  }, [])
 
   /**
    * The playhead at every animation frame, for the few things that follow it
@@ -795,7 +819,7 @@ export function usePreviewPlayer(stored: Project, urlFor: (assetId: string) => s
 
   // The timeline was emptied while playing: adding a clip later mustn't come back "playing".
   if (!hasClips && playing) setPlaying(false)
-  return { playback: project, attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, playFromStart, pause, toggle, seek, onVideoError, subscribeFrame, frameTime }
+  return { playback: project, attach, attachAudio, assetIn, videoAt, active, playing: playing && hasClips, time: hasClips ? time : 0, failed, missing, play, playFromStart, pause, toggle, seek, onVideoError, onVideoPlayable, subscribeFrame, frameTime }
 
 }
 

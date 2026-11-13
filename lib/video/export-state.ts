@@ -1,5 +1,5 @@
 import { createHash } from "crypto"
-import { allClips, assetKind, isTextClip, type Project, type Track } from "./project"
+import { allClips, assetKind, DEFAULT_BACKGROUND, backgroundOf, isTextClip, type Project, type Track } from "./project"
 import { isIdentity, type Transform } from "./transform"
 
 // What the last export was made from. output/.export-state.json names the one
@@ -22,7 +22,7 @@ function canonical(value: unknown): string {
 
 /**
  * SHA-256 (hex) of everything that changes the exported video: size, frame
- * rate, the tracks in order (clips with ids, assets, trims, starts and
+ * rate, the canvas color when it isn't black, the tracks in order (clips with ids, assets, trims, starts and
  * transforms, an identity one counting as none and a zero left or right crop
  * as an absent one, as are a zero rotation and a false flip, each clip's mute, a text clip's text, its animations too, a transition, an audio overlap, its edge transitions and its audio levels; the audio layer's clips too, when there are any) and the file, kind, length and audio of each
  * asset a clip uses. The project's name and unused assets don't count, so
@@ -49,5 +49,7 @@ export function exportFingerprint(p: Project): string {
   const tracks = p.tracks.map(trackKey)
   // The audio layer counts only when there is one, so a project without audio keeps its fingerprint.
   const audio = p.audioTrack ? { audioTrack: trackKey(p.audioTrack) } : {}
-  return createHash("sha256").update(canonical({ width: p.width, height: p.height, fps: p.fps, tracks, ...audio, assets })).digest("hex")
+  // The canvas color counts only when it isn't black, so a project without one keeps its fingerprint.
+  const background = backgroundOf(p) === DEFAULT_BACKGROUND ? {} : { background: backgroundOf(p) }
+  return createHash("sha256").update(canonical({ width: p.width, height: p.height, fps: p.fps, tracks, ...audio, ...background, assets })).digest("hex")
 }

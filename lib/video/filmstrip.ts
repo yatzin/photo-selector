@@ -12,20 +12,23 @@ export type FilmTile = {
   width: number
 }
 
-/** The source time a picture is taken at, to the millisecond (the cache key). */
-export const frameKey = (t: number): number => Math.round(t * 1000)
-
 /**
  * The tiles covering source `[inSec, outSec)` at `zoom` px per second, each
  * `tileWidth` px wide when whole. Tiles sit on a fixed grid of the source, so
- * the same moment gets the same tile whatever the clip's trim.
+ * the same moment gets the same tile whatever the clip's trim. With `view`, only
+ * the tiles in that window are returned (so a long clip isn't cut off at some count).
  */
-export function filmstripTiles(o: { inSec: number; outSec: number; zoom: number; tileWidth: number; duration: number }): FilmTile[] {
+export function filmstripTiles(o: { inSec: number; outSec: number; zoom: number; tileWidth: number; duration: number; view?: { from: number; to: number } }): FilmTile[] {
   const { inSec, outSec, zoom, duration } = o
   if (!(zoom > 0) || !(o.tileWidth > 0) || !(outSec > inSec)) return []
   const step = o.tileWidth / zoom
-  const first = Math.floor(inSec / step + 1e-9)
-  const last = Math.ceil(outSec / step - 1e-9)
+  let first = Math.floor(inSec / step + 1e-9)
+  let last = Math.ceil(outSec / step - 1e-9)
+  // Only the tiles reaching into `view` (px from the clip's left edge) are made, so a long clip never has more than a screenful.
+  if (o.view) {
+    first = Math.max(first, Math.floor((inSec + o.view.from / zoom) / step + 1e-9))
+    last = Math.min(last, Math.ceil((inSec + o.view.to / zoom) / step - 1e-9))
+  }
   const tiles: FilmTile[] = []
   for (let k = first; k < last && tiles.length < 400; k++) {
     const from = k * step

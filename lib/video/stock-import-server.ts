@@ -5,7 +5,9 @@ import { z } from "zod"
 import { loadStockConfig } from "@/lib/stock/config"
 import { downloadToFile } from "@/lib/stock/download"
 import { convertGifToMp4, GIF_TOO_LARGE, gifTooLarge } from "@/lib/stock/gif"
+import { createFreesound } from "@/lib/stock/freesound"
 import { createOpenverse } from "@/lib/stock/openverse"
+import { safePageUrl } from "@/lib/stock/panel-state"
 import { createPexels } from "@/lib/stock/pexels"
 import { createPixabay } from "@/lib/stock/pixabay"
 import type { StockClient, StockRef, StockSource } from "@/lib/stock/types"
@@ -36,7 +38,7 @@ export const stockSourceKey = (ref: StockRef): string => `stock:${ref.source}:${
 
 const refSchema = z
   .object({
-    source: z.enum(["openverse", "pixabay", "pexels"]),
+    source: z.enum(["openverse", "pixabay", "pexels", "freesound"]),
     // Every provider's ids are digits or a UUID; this also keeps the key plain.
     id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
     kind: z.enum(["image", "gif", "video", "audio"]),
@@ -63,6 +65,7 @@ async function clientFor(source: StockSource): Promise<StockClient> {
   const cfg = await loadStockConfig()
   if (source === "openverse") return createOpenverse({ clientId: cfg.openverseClientId, clientSecret: cfg.openverseClientSecret })
   if (source === "pixabay") return createPixabay({ key: cfg.pixabayKey })
+  if (source === "freesound") return createFreesound({ key: cfg.freesoundKey })
   return createPexels({ key: cfg.pexelsKey })
 }
 
@@ -158,7 +161,7 @@ async function fetchAndAdd(userFolder: string, folder: string, ref: StockRef, ke
       if (existing) return { ...existing, reused: true as const }
       const done = await finishDownload(userFolder, folder, ready, readyName)
       if ("error" in done) return { error: done.error }
-      const asset: Asset = { ...done.asset, source: key, ...(file.title ? { title: file.title } : {}), ...(file.gif && done.asset.kind === undefined ? { loopByDefault: true as const } : {}) }
+      const asset: Asset = { ...done.asset, source: key, ...(file.title ? { title: file.title } : {}), ...(safePageUrl(file.pageUrl) ? { link: safePageUrl(file.pageUrl)! } : {}), ...(file.gif && done.asset.kind === undefined ? { loopByDefault: true as const } : {}) }
       const format = await formatForFirstPicture(userFolder, folder, project, asset)
       try {
         await writeProject(userFolder, folder, { ...project, ...format, assets: { ...project.assets, [done.id]: asset } })

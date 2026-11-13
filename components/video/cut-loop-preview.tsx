@@ -5,7 +5,7 @@ import { clipLength, isStill, isTextClip, type Clip, type Project } from "@/lib/
 import { textSize } from "@/lib/video/text"
 import { IDENTITY } from "@/lib/video/transform"
 import { loopFrame, loopPlan, loopSound, transitionLook } from "@/lib/video/transition-preview"
-import type { CutAudio, TransitionType } from "@/lib/video/transition-types"
+import { isZoomFullTransition, type CutAudio, type TransitionType } from "@/lib/video/transition-types"
 import { placement, TextPicture } from "./preview"
 import { FxCopies, FxOverlays, fxStyle, TransitionFxDefs, VideoMirror } from "./transition-layers"
 import { PreviewMonitor, PreviewTransport, TransportLegend, type TransportBand } from "./ui/preview-transport"
@@ -58,7 +58,9 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
   videoUrl: (assetId: string) => string
   imageUrl: (assetId: string) => string
 }) {
-  const plan = loopPlan(clipLength(from), clipLength(to), type === "none" ? 0 : duration)
+  // A zoom cut has no overlap: the loop plays it as a hard cut, the zoom inside one clip.
+  const zoomCut = isZoomFullTransition(type)
+  const plan = loopPlan(clipLength(from), clipLength(to), type === "none" || zoomCut ? 0 : duration)
   const [playing, setPlaying] = useState(() => !reducedMotion())
   const [t, setT] = useState(() => (reducedMotion() ? plan.cut : 0))
   const [aspects, setAspects] = useState<Record<string, number>>({})
@@ -146,7 +148,10 @@ export function CutLoopPreview({ project, from, to, type, duration, audio, video
     drive(toRef.current, to, toAt, frame.to || sound.to.plays, sound.to.gain, to.in + Math.max(0, plan.cut - Math.max(plan.duration / 2, audio?.mode === "j" ? audio.duration : 0)) - plan.cut)
   })
 
-  const look = frame.progress !== null && type !== "none" ? transitionLook(type, frame.progress, W / H) : null
+  // A zoom cut's window: the first `duration` s of the incoming clip, or the last of the outgoing one.
+  const zoomAt = zoomCut ? (type === "zoomfromfull" ? (t - plan.cut) / Math.max(duration, 0.001) : (t - (plan.cut - duration)) / Math.max(duration, 0.001)) : null
+  const progress = zoomCut ? (zoomAt !== null && zoomAt >= 0 && zoomAt < 1 ? zoomAt : null) : frame.progress
+  const look = progress !== null && type !== "none" ? transitionLook(type, progress, W / H, { outgoing: from.transform, incoming: to.transform }) : null
   const learn = (assetId: string, w: number, h: number) => {
     if (!(w > 0 && h > 0)) return
     setAspects((a) => (a[assetId] === w / h ? a : { ...a, [assetId]: w / h }))

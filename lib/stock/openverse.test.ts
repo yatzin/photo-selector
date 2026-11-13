@@ -272,13 +272,13 @@ describe("openverse resolve", () => {
     const base = await start((_q, res) => json(res, img({ id: U1 })))
     const d = await createOpenverse({ baseUrl: base }).resolve({ source: "openverse", id: U1, kind: "image" })
     expect(new URL(seen[0].url, "http://x").pathname).toBe(`/v1/images/${U1}/`)
-    expect(d).toEqual({ url: "https://cdn.example/a.jpg", fileName: `${U1}.jpg`, gif: false, title: "A cat" })
+    expect(d).toMatchObject({ url: "https://cdn.example/a.jpg", fileName: `${U1}.jpg`, gif: false, title: "A cat" })
   })
 
   it("returns the detail record's title, sanitised, and omits it when missing or blank", async () => {
     const titled = await start((_q, res) => json(res, { id: U3, url: "https://c/a.mp3", license: "cc0", filetype: "mp3", title: "  Soft \n rain   at\tnight " }))
     const d = await createOpenverse({ baseUrl: titled }).resolve({ source: "openverse", id: U3, kind: "audio" })
-    expect(d).toEqual({ url: "https://c/a.mp3", fileName: `${U3}.mp3`, gif: false, title: "Soft rain at night" })
+    expect(d).toMatchObject({ url: "https://c/a.mp3", fileName: `${U3}.mp3`, gif: false, title: "Soft rain at night" })
     const long = await start((_q, res) => json(res, { id: U3, url: "https://c/a.mp3", license: "cc0", filetype: "mp3", title: "y".repeat(500) }))
     expect((await createOpenverse({ baseUrl: long }).resolve({ source: "openverse", id: U3, kind: "audio" })).title).toBe("y".repeat(120))
     for (const title of [undefined, "  ", 7]) {

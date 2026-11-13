@@ -9,7 +9,7 @@ import { buildSearchUrl, dragPayload, errorNotes, formatDuration, hasMore, merge
 import { STOCK_DRAG_TYPE } from "./timeline"
 
 // The Stock tab of the left panel: search free stock media (Openverse, Pixabay,
-// Pexels), filter by type and source, and drag a result onto the timeline or
+// Pexels, Freesound), filter by type and source, and drag a result onto the timeline or
 // player. Results, query and filters live in this component's state; the tab bar
 // keeps the panel mounted (hidden) when another tab is shown, so they survive.
 
@@ -22,7 +22,7 @@ const KINDS: { value: StockKind | "all"; label: string }[] = [
 ]
 const SOURCES: { value: StockSource | "all"; label: string }[] = [
   { value: "all", label: "All sources" },
-  ...(["openverse", "pixabay", "pexels"] as const).map((s) => ({ value: s, label: SOURCE_NAMES[s] })),
+  ...(["openverse", "pixabay", "pexels", "freesound"] as const).map((s) => ({ value: s, label: SOURCE_NAMES[s] })),
 ]
 
 type SearchResponse = {

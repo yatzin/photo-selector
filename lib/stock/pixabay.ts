@@ -159,12 +159,14 @@ export function createPixabay(cfg: Cfg): StockClient {
       if (isVideo) {
         const file = pickVideoFile(videoFiles(hit))
         if (!file) throw new Error("Pixabay video has no downloadable file")
-        return { url: file.url, fileName: `pixabay-${ref.id}.${extOf(file.url, "mp4")}`, gif: false }
+        const pageUrl = str(hit.pageURL)
+        return { url: file.url, fileName: `pixabay-${ref.id}.${extOf(file.url, "mp4")}`, gif: false, ...(pageUrl ? { pageUrl } : {}) }
       }
       const url = str(hit.largeImageURL) ?? str(hit.webformatURL)
       if (!url) throw new Error("Pixabay item has no download URL")
       const ext = extOf(url, "jpg")
-      return { url, fileName: `pixabay-${ref.id}.${ext}`, gif: ext === "gif" }
+      const pageUrl = str(hit.pageURL)
+      return { url, fileName: `pixabay-${ref.id}.${ext}`, gif: ext === "gif", ...(pageUrl ? { pageUrl } : {}) }
     },
   }
 }

@@ -8,6 +8,7 @@ import type { StockSettingsInput } from "./settings-schema"
 export type StockUpdate = {
   pixabayKeyEnc?: string | null
   pexelsKeyEnc?: string | null
+  freesoundKeyEnc?: string | null
   openverseClientSecretEnc?: string | null
   openverseClientId?: string | null
 }
@@ -24,6 +25,7 @@ export function resolveStockUpdate(v: StockSettingsInput, encrypt: (plain: strin
   const fields: StockUpdate = {
     pixabayKeyEnc: resolveSecretUpdate(v.clearPixabayKey, v.pixabayKey, encrypt),
     pexelsKeyEnc: resolveSecretUpdate(v.clearPexelsKey, v.pexelsKey, encrypt),
+    freesoundKeyEnc: resolveSecretUpdate(v.clearFreesoundKey, v.freesoundKey, encrypt),
     openverseClientSecretEnc: resolveSecretUpdate(v.clearOpenverseSecret, v.openverseClientSecret, encrypt),
     openverseClientId: v.clearOpenverseSecret ? null : v.openverseClientId,
   }

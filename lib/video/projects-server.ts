@@ -8,8 +8,9 @@ import { isPlainName, mediaKind, numberedName, projectFolderName, resolveInside 
 import { probeMedia } from "./ffmpeg-server"
 import { formatFromSource, sizeFor, turnTo, type Orientation, type ResolutionId } from "./format"
 import { mediaSize } from "./media-size-server"
+import { filmDirName } from "./film"
 import { peaksFileName } from "./peaks"
-import { allClips, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, setBaseMagnetic, totalLength, type Asset, type Project } from "./project"
+import { allClips, DEFAULT_BACKGROUND, DEFAULT_IMAGE, findAssetsBySource, MIN_CLIP, newProject, parseProject, removeAsset, setBaseMagnetic, totalLength, type Asset, type Project } from "./project"
 
 // Video projects live at <video-projects>/<user>/<project>/ with assets/,
 // output/, config/export.json and project.json. Every user-supplied name goes
@@ -324,6 +325,9 @@ export async function deleteAsset(userFolder: string, folder: string, assetId: s
     } catch {
       // Never made (no waveform was shown), or already gone.
     }
+    // Its filmstrip snapshots, if any were made.
+    const film = assetPath(userFolder, folder, filmDirName(file))
+    if (film) await fs.rm(film, { recursive: true, force: true }).catch(() => {})
   }
   return { ok: true, removedClips }
 }
@@ -376,4 +380,14 @@ export async function setProjectFormat(userFolder: string, folder: string, chang
       : { width: project.width, height: project.height }
   await writeProject(userFolder, folder, { ...project, width: size.width, height: size.height, formatChosen: true })
   return size
+}
+
+/** Sets the canvas color under every layer, "#rrggbb" (call under the project's lock; not while it exports). Black is stored as no color. */
+export async function setProjectBackground(userFolder: string, folder: string, color: string): Promise<{ background: string } | { error: string }> {
+  const project = await readProject(userFolder, folder)
+  if (!project) return { error: "Project not found." }
+  const rest = { ...project }
+  delete rest.background
+  await writeProject(userFolder, folder, color === DEFAULT_BACKGROUND ? rest : { ...rest, background: color })
+  return { background: color }
 }

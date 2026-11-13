@@ -2,8 +2,8 @@ import type { StockKind, StockSource } from "./types"
 import type { SearchInput } from "./search"
 
 const KINDS = ["all", "image", "gif", "video", "audio"] as const
-const SOURCES = ["all", "openverse", "pixabay", "pexels"] as const
-const REAL_SOURCES: readonly string[] = ["openverse", "pixabay", "pexels"]
+const SOURCES = ["all", "openverse", "pixabay", "pexels", "freesound"] as const
+const REAL_SOURCES: readonly string[] = ["openverse", "pixabay", "pexels", "freesound"]
 export const MAX_QUERY_LENGTH = 200
 
 export function parseSearchParams(params: URLSearchParams): { error: string } | { value: SearchInput } {

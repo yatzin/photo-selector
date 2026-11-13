@@ -7,9 +7,9 @@ import { prisma } from "@/lib/prisma"
 import { listDirectory } from "@/lib/library-server"
 import { isPlainName, safeSegments, tempFolderName } from "@/lib/media"
 import { exportRunning, exportStatus, startExport, type ExportStatus } from "@/lib/video/export-jobs-server"
-import { MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset, type Project } from "@/lib/video/project"
+import { isBackground, MAX_CLIPS, MAX_TRACKS, mergeClientProject, type Asset, type Project } from "@/lib/video/project"
 import { withLock } from "@/lib/video/project-lock-server"
-import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectFormat, writeProject } from "@/lib/video/projects-server"
+import { createProject, deleteAsset, deleteProject, formatForFirstPicture, importAsset, readProject, renameProject, reusableAsset, setProjectBackground, setProjectFormat, writeProject } from "@/lib/video/projects-server"
 import { previewRetime, retimeAsset } from "@/lib/video/retime-server"
 import { createTemplate, saveTemplateSlots, startFromTemplate } from "@/lib/video/template-server"
 import { ORIENTATIONS, RESOLUTIONS, type Orientation, type ResolutionId } from "@/lib/video/format"
@@ -169,6 +169,19 @@ export async function setFormatAction(folder: string, change: { orientation?: st
   if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
   try {
     return await withLock(`${userFolder}/${f.data}`, () => setProjectFormat(userFolder, f.data, { orientation, resolution }))
+  } catch (error) {
+    return { error: errorText(error) }
+  }
+}
+
+/** Sets the canvas color under every layer ("#rrggbb"). Not while it exports. */
+export async function setBackgroundAction(folder: string, color: string): Promise<{ background: string } | { error: string }> {
+  const { userFolder } = await requireUserFolder()
+  const f = plainName.safeParse(folder)
+  if (!f.success || !isBackground(color)) return { error: "Invalid request." }
+  if (exportRunning(userFolder, f.data)) return { error: EXPORT_RUNNING }
+  try {
+    return await withLock(`${userFolder}/${f.data}`, () => setProjectBackground(userFolder, f.data, color))
   } catch (error) {
     return { error: errorText(error) }
   }

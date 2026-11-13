@@ -1,20 +1,20 @@
 import {
   addTrack, adjoins, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, cutReach, endToEnd, fixEdges, fixTransitions, hasSound, headHandle, isAudioClip, isLooping, isMagnetic, isStill, isTextClip, linksBefore, MAX_TIMELINE, MIN_CLIP,
-  resolveStart, tailHandle, trackAt, trackClipAt, transitionFits, withTrack,
+  resolveStart, tailHandle, trackAt, trackClipAt, transitionFits, withTrack, zoomCutLimits,
   type Clip, type Project, type Track,
 } from "./project"
 import {
-  CUT_AUDIO_FADE, isCutAudioMode, isEdgeType, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
+  CUT_AUDIO_FADE, isCutAudioMode, isEdgeType, isZoomFullTransition, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
   type AnyTransitionType, type AudioTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition, type TransitionType,
 } from "./transition-types"
 
-export { cutAudioLimits, transitionLimits } from "./project"
+export { cutAudioLimits, transitionLimits, zoomCutLimits } from "./project"
 
 // Transitions between adjoining clips on one track (the model is Clip.transition
 // in project.ts: stored on the later clip, centred on the cut). This holds the
 // catalogue the dialog shows and the edits the timeline makes with them.
 
-export type TransitionGroup = "Fade" | "Wipe" | "Slide" | "Shape" | "Effect" | "Creative" | "Glitch and whip"
+export type TransitionGroup = "Fade" | "Wipe" | "Slide" | "Shape" | "Effect" | "Zoom" | "Creative" | "Glitch and whip"
 
 export const TRANSITION_INFO: Record<TransitionType, { name: string; group: TransitionGroup }> = {
   fade: { name: "Crossfade", group: "Fade" },
@@ -46,9 +46,11 @@ export const TRANSITION_INFO: Record<TransitionType, { name: string; group: Tran
   "whip-right": { name: "Whip right", group: "Glitch and whip" },
   "whip-up": { name: "Whip up", group: "Glitch and whip" },
   "whip-down": { name: "Whip down", group: "Glitch and whip" },
+  zoomfromfull: { name: "Zoom from full screen", group: "Zoom" },
+  zoomtofull: { name: "Zoom to full screen", group: "Zoom" },
 }
 
-export const TRANSITION_GROUPS: TransitionGroup[] = ["Fade", "Wipe", "Slide", "Shape", "Effect", "Creative", "Glitch and whip"]
+export const TRANSITION_GROUPS: TransitionGroup[] = ["Fade", "Wipe", "Slide", "Shape", "Effect", "Zoom", "Creative", "Glitch and whip"]
 
 /** The audio layer's transitions, as the dialog groups them. */
 export type AudioTransitionGroup = "Crossfade curves" | "Creative"
@@ -210,7 +212,8 @@ export type CutTrims = { outgoing: number; incoming: number; ripple: number }
 /** An edit at a cut with the trims it takes (CutTrims), or why it can't be had. */
 export type CutPlan = { ok: true; project: Project; duration: number; trims: CutTrims } | { ok: false; reason: Exclude<CutRange["reason"], "ok"> }
 
-const shapeOf = (c: Clip): CutShape => ({ half: c.transition ? c.transition.duration / 2 : 0, j: c.cutAudio?.mode === "j" ? c.cutAudio.duration : 0, l: c.cutAudio?.mode === "l" ? c.cutAudio.duration : 0 })
+// A zoom cut has no overlap, so its half is 0.
+const shapeOf = (c: Clip): CutShape => ({ half: c.transition && !isZoomFullTransition(c.transition.type) ? c.transition.duration / 2 : 0, j: c.cutAudio?.mode === "j" ? c.cutAudio.duration : 0, l: c.cutAudio?.mode === "l" ? c.cutAudio.duration : 0 })
 
 const noRange = (reason: CutRange["reason"], x: CutContext | null): CutRange => ({ max: 0, reason, limit: null, lengths: { outgoing: x?.outLength ?? 0, incoming: x?.inLength ?? 0 } })
 
@@ -224,13 +227,23 @@ export function transitionRange(p: Project, clipId: string): CutRange {
   return max < MIN_TRANSITION - 1e-9 ? noRange("too-short", x) : { max, reason: "ok", limit, lengths: { outgoing: x.outLength, incoming: x.inLength } }
 }
 
+/** How long a zoom cut into `clipId` may be, as a CutRange (it runs inside one clip, so nothing is trimmed: zoomCutLimits). */
+export function zoomCutRange(p: Project, clipId: string, type: "zoomfromfull" | "zoomtofull"): CutRange {
+  const x = cutContext(p, clipId)
+  const limits = zoomCutLimits(p, clipId, type)
+  if (limits.reason === "not-adjoining" || !x) return noRange("not-adjoining", x)
+  return limits.reason === "ok"
+    ? { max: limits.max, reason: "ok", limit: limits.max >= MAX_TRANSITION - 1e-9 ? "cap" : type === "zoomfromfull" ? "incoming" : "outgoing", lengths: { outgoing: x.outLength, incoming: x.inLength } }
+    : noRange("too-short", x)
+}
+
 /** How long a J-cut or an L-cut at the cut into `clipId` may be (with its transition as it is), trimming the clips as it needs. */
 export function cutAudioRange(p: Project, clipId: string): Record<CutAudio["mode"], CutRange> {
   const x = cutContext(p, clipId)
   // The audio layer's clips have no picture for the sound to lead or trail.
   if (!x || x.track === AUDIO_TRACK) return { j: noRange("not-adjoining", null), l: noRange("not-adjoining", null) }
   if (x.loop) return { j: noRange("loop", x), l: noRange("loop", x) }
-  const half = x.clip.transition ? x.clip.transition.duration / 2 : 0
+  const half = x.clip.transition && !isZoomFullTransition(x.clip.transition.type) ? x.clip.transition.duration / 2 : 0
   const range = (mode: CutAudio["mode"]): CutRange => {
     if (!hasSound(p, mode === "j" ? x.clip : x.prev)) return noRange("no-audio", x)
     const { max, limit } = longest(x, (d) => ({ half, j: mode === "j" ? d : 0, l: mode === "l" ? d : 0 }), MIN_CUT_AUDIO, MAX_CUT_AUDIO)
@@ -293,6 +306,14 @@ export function setTransition(p: Project, clipId: string, spec: Transition | nul
   }
   // The family must suit the clip: an audio type between audio clips, a picture type between any others.
   if (!transitionFits(p, at.clip, spec.type) || !Number.isFinite(spec.duration)) return p
+  // A zoom cut runs inside one clip: no footage to find, nothing trimmed or moved.
+  if (isZoomFullTransition(spec.type)) {
+    const limits = zoomCutLimits(p, clipId, spec.type)
+    if (limits.reason !== "ok") return p
+    const duration = Math.round(Math.max(MIN_TRANSITION, Math.min(limits.max, spec.duration)) * 1000) / 1000
+    if (old && old.type === spec.type && old.duration === duration) return p
+    return withClips(p, at.track, trackAt(p, at.track)!.clips.map((c) => (c.id === clipId ? { ...c, transition: { type: spec.type, duration } } : c)))
+  }
   const plan = transitionPlan(p, clipId, spec)
   if (!plan.ok) return p
   if (old && old.type === spec.type && old.duration === plan.duration && plan.trims.ripple === 0) return p

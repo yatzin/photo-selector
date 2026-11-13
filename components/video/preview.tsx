@@ -2,7 +2,8 @@
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react"
 import { TriangleAlert } from "lucide-react"
-import { assetKind, assetLabel, clipLength, isStill, isTextClip, loopSourceId, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
+import { zoomAway, zoomedTransform } from "@/lib/video/zoom-fullscreen"
+import { assetKind, assetLabel, backgroundOf, clipLength, isStill, isTextClip, loopSourceId, MAX_TRACKS, setTransform, totalLength, trackStarts, type ActiveClip, type Clip, type Project } from "@/lib/video/project"
 import { edgeLook, transitionLook, type LayerStyle, type TransitionLook } from "@/lib/video/transition-preview"
 import { edgeAt, laneClipAt, laneElementAt, overlapAt, transitionAt } from "@/lib/video/transitions"
 import { isTransitionType } from "@/lib/video/transition-types"
@@ -35,7 +36,7 @@ const HINT_ROOM = 26 // px the hint needs below the canvas to sit outside it
 // lowest track first, each picture fit to the canvas and then moved, scaled,
 // flipped, cropped and turned by its clip's transform (lib/video/transform), so a lower layer
 // shows wherever an upper one doesn't cover and black shows where nothing
-// does. A clip with no transform fills the canvas letterboxed in black, as it
+// does (the project's background color, black unless set). A clip with no transform fills the canvas letterboxed in black, as it
 // always has (and as the export draws it). An image clip shows as a still in its track's place, and a
 // text clip as its text (TextPicture) in its content box, placed the same way, its in or out
 // animation drawn as it is at the playhead (AnimatedText). Clicking the
@@ -208,7 +209,7 @@ function useLoadedFonts(families: string): ReadonlySet<string> {
 }
 
 export function Preview({
-  player, project, imageUrl, selectedId, onSelect, onChange, onDrop, onEditText,
+  player, project, imageUrl, selectedId, onSelect, onChange, onDrop, onEditText, onBackgroundMenu,
 }: {
   player: PreviewPlayer
   project: Project
@@ -221,6 +222,8 @@ export function Preview({
   onDrop: (drop: MediaDrop) => void
   /** A text clip was double-clicked on the canvas: edit its text. */
   onEditText: (id: string) => void
+  /** Right-click on the canvas where no clip is: open the background color picker at the pointer (absent while the project exports). */
+  onBackgroundMenu?: (x: number, y: number) => void
 }) {
   const [brokenImage, setBrokenImage] = useState<string | null>(null)
   // A canvas drag in progress (for the Alt hint), and a file dragged over the canvas.
@@ -370,7 +373,7 @@ export function Preview({
   // Each lane's look: its running transition's, else its clip's running edge transition's (against nothing, lib/video/transition-preview edgeLook).
   const looks = playback.tracks.map((_, lane): TransitionLook | null => {
     const w = windows[lane]
-    if (w) return isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H) : null
+    if (w) return isTransitionType(w.type) ? transitionLook(w.type, w.progress, W / H, { outgoing: playback.tracks[lane].clips[w.from]?.transform, incoming: hits[lane]?.clip.transform }) : null
     const hit = hits[lane]
     const e = hit ? edgeAt(hit.clip, look) : null
     return e && isTransitionType(e.type) ? edgeLook(e.type, e.edge, e.progress, W / H) : null
@@ -385,6 +388,17 @@ export function Preview({
   }
   const transformOf = (clip: Clip) => (draft?.id === loopSourceId(clip.id) ? draft.transform : clip.transform ?? IDENTITY)
   const aspectOf = (assetId: string) => aspects[assetId] ?? W / H
+  /**
+   * A picture or video clip's place as it shows now: with a zoom cut's zoom running inside it (lib/video/zoom-fullscreen),
+   * moved part of the way to full screen (the handles keep the clip's own place, transformOf). A clip with a zoom is
+   * always placed in its own box: no black letterbox, as in the export, where the canvas color shows.
+   */
+  const hasZoom = (clip: Clip) => !isTextClip(clip) && (clip.zoomIn !== undefined || clip.zoomOut !== undefined)
+  const shownPlacement = (clip: Clip, exact = false) => {
+    const t = transformOf(clip)
+    const away = hasZoom(clip) ? zoomAway(clip, clipLength(clip), look - clip.start) : 0
+    return placement(aspectOf(clip.asset), W, H, zoomedTransform(t, away), exact || hasZoom(clip))
+  }
   /** What clipRect places for a clip: a text's content box, else its picture's aspect. */
   const contentOf = (clip: Clip): Content => (isTextClip(clip) ? textSize(clip.text, Math.min(W, H)) : aspectOf(clip.asset))
   const learnAspect = (assetId: string | null, w: number, h: number) => {
@@ -422,7 +436,7 @@ export function Preview({
           alt=""
           draggable={false}
           className="absolute max-w-none object-contain"
-          style={placement(aspectOf(clip.asset), W, H, transformOf(clip))}
+          style={shownPlacement(clip)}
           onLoad={(e) => learnAspect(clip.asset, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
           onError={() => setBrokenImage(still)}
         />
@@ -549,9 +563,16 @@ export function Preview({
           onDragOver={dragOver}
           onDragLeave={dragLeave}
           onDrop={drop}
+          onContextMenu={(e) => {
+            const r = canvas.current?.getBoundingClientRect()
+            if (!onBackgroundMenu || !r || r.width === 0 || r.height === 0) return
+            if (hitTest(((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H)) return
+            e.preventDefault()
+            onBackgroundMenu(e.clientX, e.clientY)
+          }}
         >
           {/* isolate: the layers' z-index stays inside the canvas, under the overlay. */}
-          <div className="absolute inset-0 isolate overflow-hidden rounded-md bg-black">
+          <div className="absolute inset-0 isolate overflow-hidden rounded-md" style={{ backgroundColor: backgroundOf(project) }}>
             <TransitionFxDefs />
             {/* Each video sits in a canvas-sized layer that a transition styles (lib/video/transition-preview). */}
             {lanes.map((track, lane) => {
@@ -574,7 +595,7 @@ export function Preview({
                 const outgoing = held !== undefined && held === from
                 const shown = held !== undefined && (held === clip || outgoing) ? held : undefined
                 const z = outgoing ? outgoingZ(lane, fx) : laneZ(lane, "incoming")
-                const videoStyle = shown ? placement(aspectOf(shown.asset), W, H, transformOf(shown)) : undefined
+                const videoStyle = shown ? shownPlacement(shown) : undefined
                 // A keyed clip is drawn by a canvas (the shader); its video plays unseen.
                 const keyed = shown?.key && !keyFailed ? shown.key : undefined
                 return (
@@ -586,6 +607,7 @@ export function Preview({
                         preload="auto"
                         aria-hidden={!shown}
                         onError={() => player.onVideoError(lane, slot)}
+                        onCanPlay={() => player.onVideoPlayable(lane, slot)}
                         onLoadedMetadata={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                         onResize={(e) => learnAspect(player.assetIn(lane, slot), e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
                         className={cn("absolute max-w-none object-contain", shown && !keyed ? "opacity-100" : shown ? "opacity-0" : "inset-0 h-full w-full opacity-0")}
@@ -596,7 +618,7 @@ export function Preview({
                           video={() => player.videoAt(lane, slot)}
                           keyColor={keyed.key}
                           tolerance={keyed.tolerance}
-                          style={placement(aspectOf(shown.asset), W, H, transformOf(shown), true)}
+                          style={shownPlacement(shown, true)}
                           onUnsupported={() => setKeyFailed(true)}
                         />
                       )}

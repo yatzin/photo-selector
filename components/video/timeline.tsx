@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Blend, Film, Image as ImageIcon, LockOpen, Magnet, Music, Plus, Replace, SlidersHorizontal, Type, Volume2, VolumeX, X } from "lucide-react"
+import { Blend, Film, Image as ImageIcon, Loader2, LockOpen, Magnet, Music, Plus, Replace, SlidersHorizontal, Type, Volume2, VolumeX, X } from "lucide-react"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 import { cn } from "@/lib/utils"
 import {
@@ -98,6 +98,9 @@ export type PasteAt = { track: number; start: number; on?: { clip: string; mode:
 
 /** `on`: the clip the media was dropped on and what the drop does to it (before it, after it, in its place); `start` is where the new clip begins (the clip's start, its end for after). */
 export type DropTarget = { track: number; start: number; refused?: boolean; on?: DropOn }
+
+/** A dropped file still downloading: where its clip will land (a row index, AUDIO_TRACK, or the row count for a new layer) and how long it is. */
+export type PendingDrop = { track: number; start: number; length: number; audio: boolean }
 
 /** What the audio layer refuses. */
 const AUDIO_ONLY = "Only sound files go on the audio layer."
@@ -210,7 +213,7 @@ function UnlockBadge({ deadline }: { deadline: number }) {
 }
 
 export function Timeline({
-  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, onDropText, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null, onCopy, onPaste, canPaste, onSpeed, pasteAt,
+  project, folder, thumbUrl, mediaUrl, selectedId, playhead, zoom, waveforms, onZoom, onSelect, onSeek, onScrub, onChange, onDropInbox, onDropStock, pending = null, playing = false, onDropText, onEditText, onTransition, onEdgeTransition, onEditAudio, onEditLength, transitionFor = null, onCopy, onPaste, canPaste, onSpeed, pasteAt,
 }: {
   project: Project
   /** The project's folder, for the waveform peaks route. */
@@ -236,7 +239,11 @@ export function Timeline({
   /** An Inbox file was dropped: import it, then add it at `target`. */
   onDropInbox: (folder: string, name: string, target: DropTarget) => void
   /** A Stock tab result was dropped: download it, then add it at `target`. */
-  onDropStock: (ref: StockRef, target: DropTarget) => void
+  onDropStock: (ref: StockRef, target: DropTarget, length: number) => void
+  /** A dropped file that is still downloading: a placeholder with a spinner shows where it will land. */
+  pending?: PendingDrop | null
+  /** The preview is playing: the view pages on when the playhead runs off its right edge. */
+  playing?: boolean
   /** The Add text button dropped at `target` (never on the audio layer; a replace never occurs). */
   onDropText: (target: DropTarget) => void
   /** The timeline fills this with a function giving where a paste goes: under the mouse (its row, the time under it, and the clip under it), or null when the mouse isn't over the rows. */
@@ -405,6 +412,18 @@ export function Timeline({
   const row = rowHeight(rowCount, rowZoom)
   const tight = row < TIGHT_ROW
   const header = tight ? TIGHT_HEADER : HEADER
+
+  // While playing, the playhead running off the right edge turns the page: it is brought back near the left edge at the same zoom.
+  // Only a playhead that was in view a moment ago pages on, so scrolling away by hand mid-play isn't undone.
+  const lastPlayhead = useRef(playhead)
+  useEffect(() => {
+    const before = lastPlayhead.current
+    lastPlayhead.current = playhead
+    const el = scroller.current
+    if (!playing || !el) return
+    const inView = (t: number) => t * zoom >= el.scrollLeft && t * zoom <= el.scrollLeft + el.clientWidth - header - 8
+    if (inView(before) && !inView(playhead)) el.scrollLeft = Math.max(0, playhead * zoom - 24)
+  }, [playhead, playing, zoom, header])
   const newRow = Math.max(MIN_NEW_ROW, Math.min(NEW_ROW, row))
 
   // The latest props for window listeners and the pan loop, which outlive the render that added them.
@@ -802,7 +821,8 @@ export function Timeline({
   /**
    * Press on empty timeline space (a row's background, the lines between rows,
    * below them): a drag pans the view with the hand, both ways, 1:1 and
-   * clamped at the ends; a click on a row's background clears the selection.
+   * clamped at the ends; a click on any of that empty space (a row's background,
+   * the lines between rows, the space below them) clears the selection.
    * Mouse only: touch and pen already scroll the view natively, with momentum.
    * Esc ends a pan where it is. Not while another drag runs.
    */
@@ -812,7 +832,6 @@ export function Timeline({
     if (!(e.target instanceof Element) || !e.target.hasAttribute("data-pan")) return
     // No text selection or native drag from the press.
     e.preventDefault()
-    const onRow = e.target.hasAttribute("data-track")
     const id = e.pointerId
     const start = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop }
     let moved = false
@@ -830,7 +849,7 @@ export function Timeline({
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== id) return
       stop()
-      if (!moved && onRow && ev.type === "pointerup") onSelect(null)
+      if (!moved && ev.type === "pointerup") onSelect(null)
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return
@@ -1112,7 +1131,7 @@ export function Timeline({
       // The clip's real length is known after the download; addClip slides it clear of overlaps again then.
       const to = onClip && (track === AUDIO_TRACK) === (stock.kind === "audio") ? onClip : targetFor(track, t, outside?.length ?? DEFAULT_IMAGE, undefined, undefined, snapOn, stock.kind === "audio").to
       if (to.refused) return refuse(null, { text: AUDIO_ONLY })
-      onDropStock({ source: stock.source, id: stock.id, kind: stock.kind }, to)
+      onDropStock({ source: stock.source, id: stock.id, kind: stock.kind }, to, outside?.length ?? DEFAULT_IMAGE)
       return
     }
     try {
@@ -1254,6 +1273,23 @@ export function Timeline({
       {refused && <span className="truncate px-1">Sound files only</span>}
     </div>
   )
+  // A download in progress: the clip's place held with a spinner until the file arrives.
+  const pendingBlock = (p: PendingDrop, shift = 0) => (
+    <div
+      role="status"
+      aria-label="Downloading"
+      data-pending=""
+      className={cn(
+        "pointer-events-none absolute z-10 flex items-center justify-center gap-1.5 overflow-hidden rounded-lg border-2 border-dashed text-[10px] font-medium",
+        inset,
+        p.audio ? "border-teal-500 bg-teal-500/15" : "border-editor-accent bg-editor-accent/10"
+      )}
+      style={{ left: p.start * zoom + shift, width: Math.max(p.length * zoom - 2, 8) }}
+    >
+      <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 animate-spin" />
+      <span className="truncate">Downloading…</span>
+    </div>
+  )
   // On a snapped V1: where the clip goes in, between two clips.
   const insertLine = (start: number) => (
     <div className="pointer-events-none absolute inset-y-0.5 z-30 w-1 -translate-x-1/2 rounded-full bg-editor-accent" style={{ left: start * zoom }} />
@@ -1293,8 +1329,8 @@ export function Timeline({
   const guide = snapHint && !snapHint.off ? snapHint.at : null
 
   const allEmpty = project.tracks.every((t) => t.clips.length === 0) && !hasAudioClips
-  // The audio layer, below the base, while it has clips or a sound file is dragged in.
-  const showAudioRow = hasAudioClips || outside?.audio === true
+  // The audio layer, below the base, while it has clips, a sound file is dragged in, or one is still downloading into it.
+  const showAudioRow = hasAudioClips || outside?.audio === true || (pending?.audio === true && pending.track === AUDIO_TRACK)
   useEffect(() => {
     pasteAt.current = () => {
       const pt = lastPointer.current
@@ -1378,6 +1414,7 @@ export function Timeline({
                 </span>
                 {/* -2 px: the ghost sits inside this row's border, and lines up with the time grid. */}
                 {target?.track === project.tracks.length && ghost(target.start, -2)}
+                {pending?.track === project.tracks.length && pendingBlock(pending, -2)}
               </div>
             </div>
           )}
@@ -1568,7 +1605,8 @@ export function Timeline({
                           </span>
                         ) : audio ? null : asset && !image && asset.duration > 0 ? (
                           <FilmStrip
-                            url={mediaUrl(clip.asset)}
+                            folder={folder}
+                            assetId={clip.asset}
                             poster={thumbUrl(clip.asset)}
                             inSec={clip.in}
                             outSec={clip.out}
@@ -1576,6 +1614,8 @@ export function Timeline({
                             loop={clip.loop}
                             zoom={zoom}
                             height={row - (tight ? 8 : 16) - 2}
+                            left={left * zoom}
+                            scroller={scroller}
                             className={isBase ? "opacity-80" : "opacity-70"}
                           />
                         ) : (
@@ -1726,7 +1766,8 @@ export function Timeline({
                     ]
                     // The audio layer's cuts have no audio overlap.
                     const what = isAudio ? "Transition" : "Transition / audio overlap"
-                    return cuts.map(({ side, at, holder }) => {
+                    // A cut with a transition already has its orange band (it opens the same dialog): the circle is only for a cut without one.
+                    return cuts.filter(({ holder }) => !holder.transition).map(({ side, at, holder }) => {
                       const tr = holder.transition
                       const a = holder.cutAudio
                       const set = [tr ? `${transitionName(tr.type)}, ${secs(tr.duration)} s` : "", a ? `${a.mode === "j" ? "J" : "L"}-cut ${secs(a.duration)} s` : ""].filter(Boolean).join("; ")
@@ -1790,6 +1831,7 @@ export function Timeline({
                     })
                   })()}
                   {target?.track === i && (target.on?.mode === "replace" ? replaceMarker(target.on.clip, track) : target.on ? insertLine(target.start) : isBase && magnetic ? insertLine(target.start) : ghost(target.start, 0, target.refused))}
+                  {pending?.track === i && pendingBlock(pending)}
                 </div>
               </div>
             )

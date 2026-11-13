@@ -157,7 +157,7 @@ describe("pexels", () => {
     const d = await c.resolve({ source: "pexels", id: "2014422", kind: "image" })
     expect(new URL(seen[0].url, "http://x").pathname).toBe("/v1/photos/2014422")
     expect(seen[0].auth).toBe(KEY)
-    expect(d).toEqual({ url: "https://images.pexels.com/photos/2014422/l2.jpeg", fileName: "pexels-2014422.jpeg", gif: false })
+    expect(d).toMatchObject({ url: "https://images.pexels.com/photos/2014422/l2.jpeg", fileName: "pexels-2014422.jpeg", gif: false })
   })
 
   it("resolve video picks the 1080p file", async () => {
@@ -165,7 +165,7 @@ describe("pexels", () => {
     const c = createPexels({ baseUrl: base, key: KEY })
     const d = await c.resolve({ source: "pexels", id: "3571264", kind: "video" })
     expect(new URL(seen[0].url, "http://x").pathname).toBe("/v1/videos/videos/3571264")
-    expect(d).toEqual({ url: "https://v/hd.mp4", fileName: "pexels-3571264.mp4", gif: false })
+    expect(d).toMatchObject({ url: "https://v/hd.mp4", fileName: "pexels-3571264.mp4", gif: false })
   })
 
   it("invalid ids throw with no request; unsupported kind throws", async () => {

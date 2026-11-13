@@ -13,7 +13,7 @@ import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
 import { listTempFolderPaths, listTempTrash, moveFromTrash, restoreTrash } from "@/lib/temp-trash-server"
 import type { TrashBatch } from "@/lib/temp-trash"
-import { createTempFolder, renameTempFile, renameTempFolder, trashTempFolder } from "@/lib/temp-folders-server"
+import { createTempFolder, moveTempFolder, renameTempFile, renameTempFolder, trashTempFolder } from "@/lib/temp-folders-server"
 import { clearRootCounts } from "@/lib/library-server"
 
 // Personal Storage: a staging folder per user. Photos and videos are moved or
@@ -123,6 +123,21 @@ export async function renameTempFolderAction(parent: string[], name: string, new
   const segments = p.success ? safeSegments(p.data) : null
   if (!segments || !isPlainName(name) || typeof newName !== "string" || newName.length > 200) return { error: "Invalid request." }
   const result = await renameTempFolder(segments, name, newName)
+  if (!("error" in result)) refresh()
+  return result
+}
+
+/** Moves a subfolder, with what's in it, into another folder of Personal Storage (a user's folder or below). */
+export async function moveTempFolderAction(parent: string[], name: string, destination: string[]): Promise<{ name: string; to: string } | { error: string }> {
+  await requireUser()
+  const p = folderPath.safeParse(parent)
+  const d = folderPath.safeParse(destination)
+  const source = p.success ? safeSegments(p.data) : null
+  const target = d.success ? safeSegments(d.data) : null
+  if (!source || !target || !isPlainName(name)) return { error: "Invalid request." }
+  // A running AI scan is reading these folders: nothing moves in or out of them meanwhile.
+  if ((await folderLocked("temp", [...source, name])) || (await folderLocked("temp", target))) return { error: SCAN_LOCK_MESSAGE }
+  const result = await moveTempFolder(source, name, target)
   if (!("error" in result)) refresh()
   return result
 }

@@ -166,6 +166,10 @@ function whip(t: CustomTransition, q: number): string {
 export function customExpr(t: CustomTransition, aspect: number, steps: number): string {
   return stepped(steps, (q) => {
     switch (t) {
+      case "zoomfromfull":
+      case "zoomtofull":
+        // Zoom cuts have no overlap: the export turns them into a zoom inside one clip first (lib/video/zoom-cut).
+        throw new Error("A zoom cut is not an xfade transition")
       case "collage":
         return collage(q, aspect)
       case "exchange":

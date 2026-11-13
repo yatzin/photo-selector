@@ -143,14 +143,16 @@ export function createPexels(cfg: Cfg): StockClient {
         })
         const file = pickVideoFile(files)
         if (!file) throw new Error("Pexels video has no downloadable file")
-        return { url: file.url, fileName: `pexels-${ref.id}.${extOf(file.url, "mp4")}`, gif: false }
+        const pageUrl = str(v.url)
+        return { url: file.url, fileName: `pexels-${ref.id}.${extOf(file.url, "mp4")}`, gif: false, ...(pageUrl ? { pageUrl } : {}) }
       }
       const p = await get(`/v1/photos/${ref.id}`)
       if (String(p.id) !== ref.id) throw new Error("Pexels item not found")
       const src = (p.src ?? {}) as Raw
       const url = str(src.large2x) ?? str(src.large)
       if (!url) throw new Error("Pexels item has no download URL")
-      return { url, fileName: `pexels-${ref.id}.${extOf(url, "jpeg")}`, gif: false }
+      const pageUrl = str(p.url)
+      return { url, fileName: `pexels-${ref.id}.${extOf(url, "jpeg")}`, gif: false, ...(pageUrl ? { pageUrl } : {}) }
     },
   }
 }

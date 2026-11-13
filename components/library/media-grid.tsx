@@ -1,17 +1,17 @@
 "use client"
 
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useTransition } from "react"
+import { createContext, useCallback, useContext, useEffect, useEffectEvent, useMemo, useRef, useState, useTransition } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Check, ChevronDown, FolderOutput, Grid3x3, ImageOff, Inbox, LayoutGrid, List, Loader2, Play, RotateCcw, RotateCw, Square, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { formatBytes, mediaUrl, preview } from "@/lib/format"
+import { formatBytes, formatClock, mediaUrl, preview } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { TEMP_MEDIA_DRAG, TEMP_MOVED_EVENT } from "@/lib/temp-drag"
 import { DRAG_BADGE_EVENT } from "@/lib/drag-ghost"
-import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
+import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction, videoDurationsAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
 import type { QualityFlags } from "@/lib/ai/flags-server"
 import type { TempNoteView } from "@/lib/temp-notes-server"
@@ -88,6 +88,28 @@ function isTyping(target: EventTarget | null): boolean {
   return !!el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))
 }
 
+/** Video lengths found so far, by durationKey. */
+const DurationsContext = createContext<Record<string, number>>({})
+const durationKey = (root: string, folder: string[], item: FileEntry) => `${root}/${folder.join("/")}/${item.name}@${item.version}`
+/** How many videos are measured per request. */
+const DURATION_BATCH = 24
+
+/** A video's length in the corner of its thumbnail (nothing for a photo, or until it is measured). `compact` is for the list view's small thumbnail. */
+function DurationBadge({ root, folder, item, compact = false }: { root: string; folder: string[]; item: FileEntry; compact?: boolean }) {
+  const seconds = useContext(DurationsContext)[durationKey(root, folder, item)]
+  if (item.kind !== "video" || seconds === undefined) return null
+  return (
+    <span
+      className={cn(
+        "pointer-events-none absolute rounded bg-black/65 font-medium tabular-nums text-white",
+        compact ? "bottom-0 right-0 rounded-br-none rounded-tr-none px-0.5 text-[9px] leading-3" : "bottom-1.5 right-1.5 px-1.5 text-[11px] leading-5"
+      )}
+    >
+      {formatClock(seconds)}
+    </span>
+  )
+}
+
 function Tile({
   root, folder, item, flagged, note, tempNote, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu, onDragStart, caption = false,
 }: {
@@ -142,6 +164,7 @@ function Tile({
           </span>
         </span>
       )}
+      <DurationBadge root={root} folder={folder} item={item} />
       {flagged && (
         <>
           <span aria-hidden className="pointer-events-none absolute inset-0 rounded-md border-[3px] border-red-600" />
@@ -231,6 +254,7 @@ function ListRow({
       <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded bg-muted">
         <PhotoImage src={mediaUrl(root, folder, item.name, "thumb", item.version)} alt="" delayMs={THUMB_DELAY_MS} fallbackLabel="" />
         {item.kind === "video" && <Play className="pointer-events-none absolute inset-0 m-auto h-4 w-4 fill-white text-white drop-shadow" />}
+        <DurationBadge root={root} folder={folder} item={item} compact />
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{item.name}</div>
@@ -270,6 +294,36 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   // Names waiting in the "Send to Personal Storage" dialog.
   const [temp, setTemp] = useState<string[] | null>(null)
   const [, startTransition] = useTransition()
+  // Video lengths for the thumbnail badges: asked for in small batches once the folder shows, and remembered by the server.
+  const [durations, setDurations] = useState<Record<string, number>>({})
+  const asked = useRef(new Set<string>())
+  useEffect(() => {
+    const want = files.filter((f) => f.kind === "video" && !asked.current.has(durationKey(root, folder, f)))
+    if (want.length === 0) return
+    let live = true
+    const waiting = new Set(want.map((f) => durationKey(root, folder, f)))
+    for (const k of waiting) asked.current.add(k)
+    void (async () => {
+      for (let i = 0; i < want.length && live; i += DURATION_BATCH) {
+        const batch = want.slice(i, i + DURATION_BATCH)
+        const found = await videoDurationsAction({ root, folder, names: batch.map((f) => f.name) }).catch(() => ({}) as Record<string, number>)
+        if (!live) return
+        const add: Record<string, number> = {}
+        for (const f of batch) {
+          waiting.delete(durationKey(root, folder, f))
+          if (found[f.name] !== undefined) add[durationKey(root, folder, f)] = found[f.name]
+        }
+        if (Object.keys(add).length > 0) setDurations((d) => ({ ...d, ...add }))
+      }
+    })()
+    return () => {
+      live = false
+      // Anything not answered yet is asked for again next time.
+      for (const k of waiting) asked.current.delete(k)
+    }
+    // `folder` is a new array every render; its path is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files, root, folder.join("/")])
   // Measured on the client: the grid's width, the scrolling <main>, and how
   // far below the top of the scroll area the grid starts (folders, toolbar).
   const [frame, setFrame] = useState<{ width: number; scrollEl: HTMLElement | null; offset: number }>({ width: 0, scrollEl: null, offset: 0 })
@@ -608,6 +662,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   const names = chosen.map((f) => f.name)
 
   return (
+    <DurationsContext.Provider value={durations}>
     <div className="space-y-3">
       <div className="sticky -top-6 z-10 -mx-6 flex flex-wrap items-center gap-2 border-b border-border/60 bg-background/95 px-6 py-2 backdrop-blur-sm">
         {chosen.length > 0 ? (
@@ -828,5 +883,6 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
         />
       )}
     </div>
+    </DurationsContext.Provider>
   )
 }

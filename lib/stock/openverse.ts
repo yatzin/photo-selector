@@ -146,7 +146,8 @@ export function createOpenverse(cfg: Cfg): StockClient {
       const ext = extOf(r, media === "audio" ? "mp3" : "jpg")
       if (ext === "gif") throw new Error(NO_GIFS)
       const title = str(r.title)?.replace(/\s+/g, " ").slice(0, 120).trim()
-      return { url, fileName: `${id}.${ext}`, gif: false, ...(title ? { title } : {}) }
+      const pageUrl = str(r.foreign_landing_url)
+      return { url, fileName: `${id}.${ext}`, gif: false, ...(title ? { title } : {}), ...(pageUrl ? { pageUrl } : {}) }
     },
   }
 }

@@ -4,11 +4,11 @@ import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { InHeader } from "@/components/header-slot"
-import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Layers, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, Repeat, RotateCcw, SkipBack, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
+import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Layers, Palette, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, Repeat, RotateCcw, SkipBack, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
-import { deleteAssetAction, exportStatusAction, createTemplateAction, importAssetAction, previewRetimeAction, retimeAssetAction, saveTemplateSlotsAction, startExportAction } from "@/lib/actions/video-projects"
+import { deleteAssetAction, setBackgroundAction, exportStatusAction, createTemplateAction, importAssetAction, previewRetimeAction, retimeAssetAction, saveTemplateSlotsAction, startExportAction } from "@/lib/actions/video-projects"
 import { importStockAction } from "@/lib/actions/stock"
 import { stockKey } from "@/lib/stock/drag"
 import type { StockRef } from "@/lib/stock/types"
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 import { newId } from "@/lib/video/ids"
 import { canRedo, canUndo, commit, createHistory, redo, undo, type History } from "@/lib/video/history"
 import {
-  addClip, addTextClip, allClips, placeDropped, placeDroppedText, assetLabel, newClipLength, assetKind, AUDIO_TRACK, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
+  addClip, addTextClip, allClips, placeDropped, placeDroppedText, assetLabel, newClipLength, assetKind, AUDIO_TRACK, backgroundOf, baseInsertion, clipEnd, clipLength, clipsAt, DEFAULT_BACKGROUND, DEFAULT_IMAGE, editOf, freeTrackFor, isAudioClip, isLooping, isMagnetic, isTextClip, MAX_TRACKS, removeAsset,
   pasteClip, removeClip, resolveStart, retimeClip, rippleRemoveClip, setClipAudio, setClipKey, setClipMuted, setClipText, setTransform, splitClip, totalLength, trackAt, trackEnd, type Asset, type Clip, type Edit, type Project,
 } from "@/lib/video/project"
 import { withStockDropSize } from "@/lib/video/stock-drop"
@@ -36,13 +36,14 @@ import type { Edge } from "@/lib/video/transition-types"
 import { AudioLevelsDialog } from "./audio-levels-dialog"
 import { EditTextDialog, type TextSection } from "./edit-text-dialog"
 import { FileTree, type TempFolder } from "./file-tree"
+import { BackgroundPicker } from "./background-picker"
 import { FormatMenus } from "./format-menu"
 import { ORIENTATIONS, orientationOf, RESOLUTIONS, resolutionOf, sizeText, type Orientation } from "@/lib/video/format"
 import { ImportButton } from "./import-button"
 import { Preview, type MediaDrop } from "./preview"
 import { ResizeHandle } from "./resize-handle"
 import { usePreviewPlayer } from "./use-preview-player"
-import { TEXT_DRAG_TYPE, Timeline, type DropTarget, type PasteAt } from "./timeline"
+import { TEXT_DRAG_TYPE, Timeline, type DropTarget, type PasteAt, type PendingDrop } from "./timeline"
 import { TransitionDialog, type TransitionTarget } from "./transition-dialog"
 import { useAutosave } from "./use-autosave"
 import { useMediaImport } from "./use-media-import"
@@ -152,6 +153,8 @@ export function Editor({
   const [storedWaveforms, setStoredWaveforms] = useStoredValue("ps.video.waveforms")
   const waveforms = storedWaveforms !== "0"
   const [importing, setImporting] = useState<string | null>(null)
+  // A Stock result dropped on the timeline and still downloading: the timeline holds its place with a spinner.
+  const [pending, setPending] = useState<PendingDrop | null>(null)
   // The guard against a second import: a ref, so two quick drops in one render can't both start.
   const importingRef = useRef(false)
   const { state: save, flush, isDirty } = useAutosave(folder, project)
@@ -264,6 +267,24 @@ export function Editor({
       toast.info(`Video set to ${orientation}, ${named ? named.label : sizeText(size.width, size.height)}, to match your first clip. Change it in the top bar.`)
     }
   }, [])
+  /** The canvas color: the preview follows at once, the server (which owns it) is told once the picking pauses. */
+  const [bgPicker, setBgPicker] = useState<{ x: number; y: number } | null>(null)
+  const closeBgPicker = useCallback(() => setBgPicker(null), [])
+  const bgSave = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const setBackground = useCallback(
+    (color: string) => {
+      setEditor((s) => {
+        const meta = { ...s.meta }
+        delete meta.background
+        return { ...s, meta: color === DEFAULT_BACKGROUND ? meta : { ...meta, background: color } }
+      })
+      if (bgSave.current) clearTimeout(bgSave.current)
+      bgSave.current = setTimeout(() => {
+        void setBackgroundAction(folder, color).then((r) => "error" in r && toast.error(r.error), () => toast.error("Couldn't save the background color."))
+      }, 400)
+    },
+    [folder]
+  )
   const importer = useMediaImport(folder, (id, asset, format) => {
     setEditor((s) => ({ ...s, meta: { ...s.meta, assets: { ...s.meta.assets, [id]: asset } } }))
     if (format) applySize(format, true)
@@ -393,8 +414,14 @@ export function Editor({
   }
 
   /** A Stock tab result dropped on the timeline: download it, then put it where it was dropped (a sound on the audio layer). */
-  async function dropFromStock(ref: StockRef, target: DropTarget) {
-    const imported = await importStock(ref)
+  async function dropFromStock(ref: StockRef, target: DropTarget, shownLength: number) {
+    setPending({ track: target.track, start: target.start, length: shownLength, audio: ref.kind === "audio" })
+    let imported: Awaited<ReturnType<typeof importStock>>
+    try {
+      imported = await importStock(ref)
+    } finally {
+      setPending(null)
+    }
     if (!imported) return
     const audio = assetKind(imported.asset) === "audio"
     // Dropped on the audio layer as an audio result, but the file isn't a sound file: the layer takes sound only.
@@ -837,6 +864,7 @@ export function Editor({
 
   return (
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
+      {bgPicker && <BackgroundPicker x={bgPicker.x} y={bgPicker.y} color={backgroundOf(project)} onChange={setBackground} onClose={closeBgPicker} />}
       <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="flex min-w-0 items-center gap-3">
         {/* The way back, the project's name and its save status live in the site header. */}
@@ -923,6 +951,22 @@ export function Editor({
         </div>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-3">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={exportProgress !== null}
+          aria-haspopup="dialog"
+          aria-label="Background color"
+          title={exportProgress !== null ? "Not while exporting" : "Color shown where no clip covers the picture"}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            setBgPicker({ x: r.right - 224, y: r.bottom + 4 })
+          }}
+        >
+          <Palette className="h-4 w-4" />
+          <span aria-hidden className="size-3.5 rounded-sm ring-1 ring-black/20 ring-inset dark:ring-white/30" style={{ backgroundColor: backgroundOf(project) }} />
+        </Button>
         <FormatMenus width={project.width} height={project.height} folder={folder} disabled={exportProgress !== null} onChanged={(size) => {
           // Turning the video to the other orientation brings that orientation's remembered layout with it.
           applySize(size)
@@ -963,7 +1007,7 @@ export function Editor({
             className={cn("flex flex-col", sideBySide ? "min-w-[220px]" : "min-h-[120px]", !sideBySide && previewHeight === null && "flex-1")}
             style={sideBySide ? { flex: `0 1 ${previewWidth ?? defaultPreviewW ?? "40%"}${typeof (previewWidth ?? defaultPreviewW) === "number" ? "px" : ""}` } : previewHeight === null ? undefined : { flex: `0 1 ${previewHeight}px` }}
           >
-            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={openText} />
+            <Preview player={player} project={project} imageUrl={imageUrl} selectedId={selectedId} onSelect={setSelectedId} onChange={edit} onDrop={(d) => void dropOnPlayer(d)} onEditText={openText} onBackgroundMenu={exportProgress === null ? (x, y) => setBgPicker({ x, y }) : undefined} />
           </div>
           {sideBySide ? (
             <ResizeHandle
@@ -1067,7 +1111,7 @@ export function Editor({
                 </label>
               </div>
             </div>
-            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t) => void dropFromStock(r, t)} onDropText={dropText} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
+            <Timeline project={project} folder={folder} thumbUrl={thumbUrl} selectedId={selectedId} playhead={playhead} zoom={zoom} waveforms={waveforms} onZoom={setZoom} onSelect={setSelectedId} onSeek={player.seek} onScrub={scrub} onChange={edit} onDropInbox={(f, n, t) => void dropFromInbox(f, n, t)} onDropStock={(r, t, len) => void dropFromStock(r, t, len)} pending={pending} playing={player.playing} onDropText={dropText} onEditText={openText} onTransition={openTransition} onEdgeTransition={openEdge} onEditAudio={openAudio} mediaUrl={lengthMediaUrl} onEditLength={player.pause} transitionFor={transitionFor} onCopy={copyClip} onPaste={pasteCopied} canPaste={clipboard !== null} pasteAt={pasteAt} onSpeed={(id) => { player.pause(); setSpeedFor(id) }} />
           </div>
         </div>
       </div>

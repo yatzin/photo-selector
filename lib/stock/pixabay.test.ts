@@ -165,14 +165,14 @@ describe("pixabay", () => {
     const c = createPixabay({ baseUrl: base, key: KEY })
     const d = await c.resolve({ source: "pixabay", id: "195893", kind: "image" })
     expect(new URL(seen[0], "http://x").searchParams.get("id")).toBe("195893")
-    expect(d).toEqual({ url: "https://pixabay.com/l/195893_1280.jpg", fileName: "pixabay-195893.jpg", gif: false })
+    expect(d).toMatchObject({ url: "https://pixabay.com/l/195893_1280.jpg", fileName: "pixabay-195893.jpg", gif: false })
   })
 
   it("resolve gif returns gif: true", async () => {
     const base = await start((_q, res) => json(res, { hits: [hit({ largeImageURL: "https://pixabay.com/l/195893.gif" })] }))
     const c = createPixabay({ baseUrl: base, key: KEY })
     const d = await c.resolve({ source: "pixabay", id: "195893", kind: "gif" })
-    expect(d).toEqual({ url: "https://pixabay.com/l/195893.gif", fileName: "pixabay-195893.gif", gif: true })
+    expect(d).toMatchObject({ url: "https://pixabay.com/l/195893.gif", fileName: "pixabay-195893.gif", gif: true })
   })
 
   it("resolve video picks the 1080p file", async () => {
@@ -180,7 +180,7 @@ describe("pixabay", () => {
     const c = createPixabay({ baseUrl: base, key: KEY })
     const d = await c.resolve({ source: "pixabay", id: "77", kind: "video" })
     expect(new URL(seen[0], "http://x").pathname).toBe("/api/videos/")
-    expect(d).toEqual({ url: "https://v/77_1080.mp4", fileName: "pixabay-77.mp4", gif: false })
+    expect(d).toMatchObject({ url: "https://v/77_1080.mp4", fileName: "pixabay-77.mp4", gif: false })
   })
 
   it("invalid ids throw with no request; resolve with no hit throws", async () => {
