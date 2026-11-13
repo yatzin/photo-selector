@@ -3,6 +3,7 @@
 import { FieldHelp } from "@/components/ui/field-help"
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { InHeader } from "@/components/header-slot"
 import { ArrowLeft, AudioWaveform, Blend, Check, Download, Loader2, Eraser, Layers, PanelLeftClose, PanelLeftOpen, Pause, Play, Redo2, Repeat, RotateCcw, SkipBack, SquareSplitHorizontal, Trash2, TriangleAlert, Type, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -164,9 +165,13 @@ export function Editor({
   const [dragHeight, setDragHeight] = useState<number | null>(null)
   const parsedHeight = storedHeight ? Number(storedHeight) : NaN
   const previewHeight = dragHeight ?? (parsedHeight >= MIN_PREVIEW ? parsedHeight : null)
-  // Preview layout: above the timeline, or on the right of it. None chosen (for this project, in this browser) follows the project's orientation.
-  const [storedLayout, setStoredLayout] = useStoredValue(`ps.video.previewLayout.${folder}`)
-  const layout: Orientation = storedLayout === "horizontal" || storedLayout === "vertical" ? storedLayout : orientationOf(project.width, project.height)
+  // Preview layout: above the timeline, or on the right of it. Each video orientation remembers the layout last chosen for it (in this browser) and every project of that orientation opens with it; until one is chosen the preview follows the orientation.
+  const videoOrientation = orientationOf(project.width, project.height)
+  const [horizontalLayout, setHorizontalLayout] = useStoredValue("ps.video.previewLayout.horizontal")
+  const [verticalLayout, setVerticalLayout] = useStoredValue("ps.video.previewLayout.vertical")
+  const storedLayout = videoOrientation === "horizontal" ? horizontalLayout : verticalLayout
+  const setStoredLayout = videoOrientation === "horizontal" ? setHorizontalLayout : setVerticalLayout
+  const layout: Orientation = storedLayout === "horizontal" || storedLayout === "vertical" ? storedLayout : videoOrientation
   const sideBySide = layout === "vertical"
   // The media panel on the left: folded to a thin rail, remembered in this browser (the server and first paint show it open).
   const [storedCollapsed, setStoredCollapsed] = useStoredValue("ps.video.mediaCollapsed")
@@ -834,19 +839,22 @@ export function Editor({
     <div className="-m-6 flex h-[calc(100%+3rem)] flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4">
         <div className="flex min-w-0 items-center gap-3">
-        <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
-          <ArrowLeft className="h-4 w-4" />
-          <span className="sr-only">All projects</span>
-        </Link>
-        <h1 className="min-w-0 truncate font-heading text-base font-semibold">{project.name}</h1>
-        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          {save === "saving" && <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>}
-          {save === "saved" && <><Check className="h-3 w-3" /> Saved</>}
-          {/* Only a failure is announced; Saving/Saved after every edit would be noise. */}
-          <span aria-live="polite">
-            {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
+        {/* The way back, the project's name and its save status live in the site header. */}
+        <InHeader>
+          <Link href="/tools/video-editing" title="All projects" className={buttonVariants({ variant: "ghost", size: "icon-sm" })}>
+            <ArrowLeft className="h-4 w-4" />
+            <span className="sr-only">All projects</span>
+          </Link>
+          <h1 className="min-w-0 truncate font-heading text-base font-semibold">{project.name}</h1>
+          <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            {save === "saving" && <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>}
+            {save === "saved" && <><Check className="h-3 w-3" /> Saved</>}
+            {/* Only a failure is announced; Saving/Saved after every edit would be noise. */}
+            <span aria-live="polite">
+              {save === "error" && <span className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" /> Couldn&apos;t save</span>}
+            </span>
           </span>
-        </span>
+        </InHeader>
         <ImportButton importer={importer} />
         {project.template?.master && (
           <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateSetup("edit")} title="Change which clips are replaceable and their labels">
@@ -916,8 +924,7 @@ export function Editor({
         </div>
         <div className="flex shrink-0 items-center justify-end gap-3">
         <FormatMenus width={project.width} height={project.height} folder={folder} disabled={exportProgress !== null} onChanged={(size) => {
-          // Turning the video to the other orientation turns the preview layout with it.
-          if (orientationOf(size.width, size.height) !== orientationOf(project.width, project.height)) setStoredLayout(orientationOf(size.width, size.height))
+          // Turning the video to the other orientation brings that orientation's remembered layout with it.
           applySize(size)
         }} layout={layout} onLayout={setStoredLayout} />
         <Button type="button" size="sm" onClick={startExport} disabled={allClips(project).length === 0 || exportProgress !== null}>

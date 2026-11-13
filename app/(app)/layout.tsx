@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { rootMediaCounts } from "@/lib/library-server"
 import { Sidebar, MobileSidebarTrigger } from "@/components/sidebar"
 import { UserMenu } from "@/components/user-menu"
+import { HEADER_SLOT_ID } from "@/components/header-slot"
 import { ThemeToggle } from "@/components/theme-toggle"
 import packageJson from "@/package.json"
 
@@ -24,7 +25,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-card/80 backdrop-blur-sm px-4">
           <MobileSidebarTrigger aiPending={aiPending} counts={counts} />
-          <div className="flex-1" />
+          {/* Where a page can show its own title and status (components/header-slot). */}
+          <div id={HEADER_SLOT_ID} className="flex min-w-0 flex-1 items-center gap-3" />
           <div className="flex shrink-0 items-center gap-2">
             <ThemeToggle />
             <UserMenu name={session.user.name ?? "User"} email={session.user.email ?? ""} />
