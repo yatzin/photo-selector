@@ -500,3 +500,9 @@
     color: var(--foreground);
   }
 }
+
+/* While a clip is dragged along the editor's timeline: the arrow with a small box and plus, wherever the pointer is. */
+html[data-clip-dragging],
+html[data-clip-dragging] * {
+  cursor: copy !important;
+}

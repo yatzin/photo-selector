@@ -26,6 +26,7 @@ import { ClipWaveform } from "./clip-waveform"
 import { EditLengthDialog } from "./edit-length-dialog"
 import { FilmStrip } from "./film-strip"
 import { Thumb } from "./thumb"
+import { TimelineDragGhost } from "./timeline-drag-ghost"
 
 // The bottom timeline: a ruler and stacked tracks (layers), the top layer at
 // the top and the base track (layer 1) at the bottom. Clips on every track sit at
@@ -267,7 +268,7 @@ export function Timeline({
   const [snap, setSnap] = useState<{ off: boolean; at: number | null } | null>(null)
   // A clip being dragged: how far it has moved (content px, scrolling included), where it would land and where its end is.
   // A dragged unlocked group: `group` its clip ids (they all move by dx) and `length` its span.
-  const [drag, setDrag] = useState<{ id: string; group?: string[]; length: number; dx: number; dy: number; target: DropTarget | null; end: number } | null>(null)
+  const [drag, setDrag] = useState<{ id: string; group?: string[]; length: number; dx: number; dy: number; /** The pointer, in the window. */ px: number; py: number; target: DropTarget | null; end: number } | null>(null)
   // The clips last dropped by a drag: they land where the ghost was, without sliding there from where they started (until the next press).
   const [landed, setLanded] = useState<string[] | null>(null)
   // A file from the left panel being dragged (anywhere): its clip length, when known, for the ghost, and whether it's a sound file.
@@ -914,7 +915,7 @@ export function Timeline({
           // An audio chain stays on the audio layer, moving in time only.
           const r = groupTarget(new Set(group.ids), audio ? AUDIO_TRACK : rowAt(ev.clientY), Math.max(0, group.start + dx / live.current.zoom), group.length, group.at, !off, audio)
           to = r.to
-          setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy, target: r.to, end: r.to.start + group.length })
+          setDrag({ id: clip.id, group: group.ids, length: group.length, dx, dy, px: ev.clientX, py: ev.clientY, target: r.to, end: r.to.start + group.length })
           setSnap(snapState(r.to.track, off, r.guide))
           return
         }
@@ -924,7 +925,7 @@ export function Timeline({
         const onClip = onClipTarget(row, ev.clientX, clipUnder(ev.clientX, ev.clientY, clip.id), audio)
         const r = onClip ? { to: onClip, guide: null } : targetFor(row, newLeft, length, clip.id, timeAt(ev.clientX), !off, audio)
         to = r.to
-        setDrag({ id: clip.id, length, dx, dy, target: r.to, end: Math.max(newLeft, r.to.start) + length })
+        setDrag({ id: clip.id, length, dx, dy, px: ev.clientX, py: ev.clientY, target: r.to, end: Math.max(newLeft, r.to.start) + length })
         setSnap(snapState(r.to.track, off, r.guide))
       },
       () => {
@@ -1285,7 +1286,6 @@ export function Timeline({
   }
   const magnetic = isMagnetic(project)
   // A group being dragged takes its transitions and audio overlap bands along.
-  const groupShift = (id: string) => (drag?.group?.includes(id) ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined)
   // The unlocked groups whose window is running, each with its countdown badge.
   const badges = Object.entries(locks.unlocked).flatMap(([key, e]) => (e.deadline === null ? [] : [{ key, deadline: e.deadline, ids: chainIds(key) }]))
   // A drag that snaps shows the Alt hint, and the guide line while it's snapped.
@@ -1321,6 +1321,7 @@ export function Timeline({
 
   return (
     <div className="relative flex min-h-0 flex-1">
+      {drag && <TimelineDragGhost id={drag.id} count={drag.group?.length ?? 1} x={drag.px} y={drag.py} />}
       <div
         ref={scroller}
         data-pan=""
@@ -1496,12 +1497,11 @@ export function Timeline({
                               : isBase
                               ? "border-border hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
                               : "border-sky-500/60 hover:border-sky-400 focus-visible:ring-2 focus-visible:ring-ring",
-                          moving ? "pointer-events-none z-20 cursor-grabbing opacity-70 shadow-lg" : "cursor-grab"
+                          moving ? "pointer-events-none cursor-grabbing opacity-40" : "cursor-grab"
                         )}
                         style={{
                           left: left * zoom,
                           width: clipWidth,
-                          transform: moving && drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
                         }}
                         title={text ? `${text.content} (double-click to edit)` : file}
                       >
@@ -1691,7 +1691,7 @@ export function Timeline({
                           "border-amber-600/80 bg-amber-300/90 text-amber-950 hover:bg-amber-200 dark:border-amber-300/80 dark:bg-amber-500/85 dark:text-amber-950 dark:hover:bg-amber-400",
                           tight ? "h-4" : "h-5"
                         )}
-                        style={{ left: clip.start * zoom - w / 2, width: w, transform: groupShift(clip.id) }}
+                        style={{ left: clip.start * zoom - w / 2, width: w }}
                       >
                         <Blend aria-hidden className="h-3 w-3 shrink-0" />
                         {w >= 70 && <span className="truncate">{name}</span>}
@@ -1710,7 +1710,7 @@ export function Timeline({
                         title={label}
                         data-cut-audio={a.mode}
                         className="absolute bottom-0.5 z-[14] h-1 rounded-full bg-teal-500 ring-1 ring-teal-900/40 dark:bg-teal-300 dark:ring-teal-950/60"
-                        style={{ left: (a.mode === "j" ? clip.start - a.duration : clip.start) * zoom, width: Math.max(2, a.duration * zoom), transform: groupShift(clip.id) }}
+                        style={{ left: (a.mode === "j" ? clip.start - a.duration : clip.start) * zoom, width: Math.max(2, a.duration * zoom) }}
                       />
                     )
                   })}

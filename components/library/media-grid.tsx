@@ -4,12 +4,13 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, useT
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Check, ChevronDown, FolderOutput, ImageOff, Inbox, Loader2, Play, RotateCcw, RotateCw, Trash2, X } from "lucide-react"
+import { Check, ChevronDown, FolderOutput, Grid3x3, ImageOff, Inbox, LayoutGrid, List, Loader2, Play, RotateCcw, RotateCw, Square, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { formatBytes, mediaUrl, preview } from "@/lib/format"
 import { useStoredState } from "@/lib/hooks/use-stored-state"
 import { TEMP_MEDIA_DRAG, TEMP_MOVED_EVENT } from "@/lib/temp-drag"
+import { DRAG_BADGE_EVENT } from "@/lib/drag-ghost"
 import { deleteAction, moveToDropoffAction, rotateAction, undoDeleteAction } from "@/lib/actions/media"
 import type { FileEntry } from "@/lib/library-server"
 import type { QualityFlags } from "@/lib/ai/flags-server"
@@ -55,7 +56,16 @@ const HEADER_H = 48
 const OVERSCAN_ROWS = 3
 // A tile asks for its thumbnail only after this long on screen.
 const THUMB_DELAY_MS = 150
-type SizeKey = keyof typeof SIZES
+/** The view: small, medium or large thumbnails, or a list with each file's details. */
+type SizeKey = keyof typeof SIZES | "list"
+const VIEWS: { key: SizeKey; label: string; Icon: typeof Square }[] = [
+  { key: "s", label: "Small thumbnails", Icon: Grid3x3 },
+  { key: "m", label: "Medium thumbnails", Icon: LayoutGrid },
+  { key: "l", label: "Large thumbnails", Icon: Square },
+  { key: "list", label: "List with details", Icon: List },
+]
+/** A list row's height (the room under it is the grid's gap). */
+const LIST_ROW_H = 48
 const ORDERS = ["newest", "oldest", "name"] as const
 type Order = (typeof ORDERS)[number]
 
@@ -95,7 +105,7 @@ function Tile({
   onDoubleClick: () => void
   onToggle: () => void
   onContextMenu: (e: React.MouseEvent) => void
-  /** Personal Storage: a selected photo can be dragged onto a folder in the side navigation. */
+  /** Personal Storage: the photo can be dragged onto a folder in the side navigation. */
   onDragStart?: (e: React.DragEvent) => void
   /** Show the start of `tempNote` under the tile (Personal Storage). */
   caption?: boolean
@@ -114,7 +124,7 @@ function Tile({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      draggable={onDragStart !== undefined && selected}
+      draggable={onDragStart !== undefined}
       onDragStart={onDragStart}
       title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : tempNote ? `${item.name} — ${tempNote}` : item.name}
     >
@@ -180,6 +190,62 @@ function Tile({
   )
 }
 
+const KIND_LABEL = { image: "Photo", video: "Video" } as const
+
+/** The list view's row for one photo or video: select circle, small thumbnail, name (and its note), type, size and date. Behaves as a Tile does. */
+function ListRow({
+  root, folder, item, flagged, note, tempNote, selected, focused, onClick, onDoubleClick, onToggle, onContextMenu, onDragStart,
+}: React.ComponentProps<typeof Tile>) {
+  return (
+    <div
+      data-name={item.name}
+      draggable={onDragStart !== undefined}
+      onDragStart={onDragStart}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      title={flagged ? `${item.name} — bad photo${note ? `: ${note}` : ""}` : tempNote ? `${item.name} — ${tempNote}` : item.name}
+      style={{ height: LIST_ROW_H, touchAction: "manipulation", WebkitTouchCallout: "none" }}
+      className={cn(
+        "group flex cursor-pointer select-none items-center gap-3 rounded-md border px-2 transition-colors",
+        selected ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted/60",
+        flagged && "border-red-600",
+        focused && !selected && "ring-2 ring-ring/60"
+      )}
+    >
+      <button
+        type="button"
+        aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggle()
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+          selected ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/50 text-transparent group-hover:border-primary"
+        )}
+      >
+        <Check className="h-3 w-3" strokeWidth={3} />
+      </button>
+      <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded bg-muted">
+        <PhotoImage src={mediaUrl(root, folder, item.name, "thumb", item.version)} alt="" delayMs={THUMB_DELAY_MS} fallbackLabel="" />
+        {item.kind === "video" && <Play className="pointer-events-none absolute inset-0 m-auto h-4 w-4 fill-white text-white drop-shadow" />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{item.name}</div>
+        {tempNote && <div className="truncate text-xs text-muted-foreground">{preview(tempNote, NOTE_CHARS)}</div>}
+      </div>
+      {flagged && <ImageOff className="h-4 w-4 shrink-0 text-red-600" aria-label="Bad photo" />}
+      <span className="hidden w-14 shrink-0 text-xs text-muted-foreground sm:block">{KIND_LABEL[item.kind]}</span>
+      <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">{formatBytes(item.size)}</span>
+      <span className="hidden w-36 shrink-0 text-right text-xs text-muted-foreground tabular-nums md:block">
+        {new Date(item.modified).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+      </span>
+    </div>
+  )
+}
+
 /** Shown before the grid has measured its width (server render, first paint). */
 function SkeletonGrid({ tile }: { tile: number }) {
   return (
@@ -193,7 +259,7 @@ const NO_FLAGS: QualityFlags = { runs: [], photos: {} }
 
 export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, notes, canMove, canEdit }: Props) {
   const router = useRouter()
-  const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l"])
+  const [sizeKey, setSizeKey] = useStoredState<SizeKey>("ps.tileSize", "m", ["s", "m", "l", "list"])
   const [order, setOrder] = useStoredState<Order>("ps.order", "newest", ORDERS)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
@@ -336,9 +402,13 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   const viewerIndex = viewer === null ? null : Math.min(viewer, items.length - 1)
   const viewerOpen = viewerIndex !== null && viewerIndex >= 0
 
-  const tile = SIZES[sizeKey]
-  // Phones get at least two columns, like the old 40vw rule.
-  const layout = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length, caption: notes ? CAPTION_H : 0 })
+  const listView = sizeKey === "list"
+  const tile = SIZES[listView ? "m" : sizeKey]
+  // Phones get at least two columns, like the old 40vw rule. The list is one column of rows.
+  const gridded = gridLayout({ width: frame.width, minTile: Math.min(tile, frame.width * 0.42 || tile), gap: GAP, count: items.length, caption: notes ? CAPTION_H : 0 })
+  const layout = listView
+    ? { ...gridded, columns: 1, tileSize: frame.width, rowHeight: LIST_ROW_H + GAP, rows: items.length, rowOf: (i: number) => i }
+    : gridded
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const toggleCollapsed = (key: string) =>
@@ -429,9 +499,12 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
   }
   // Personal Storage, below a user's own folder: the selected photos can be dragged onto a folder in the side navigation to move them there.
   const canDragToFolder = root === "temp" && folder.length > 0 && canEdit
-  const dragSelected = (e: React.DragEvent) => {
-    e.dataTransfer.setData(TEMP_MEDIA_DRAG, JSON.stringify({ folder, names: chosen.map((f) => f.name) }))
+  // Dragging a selected photo takes the whole selection; any other photo goes alone.
+  const dragTile = (e: React.DragEvent, name: string) => {
+    const names = selected.has(name) ? chosen.map((f) => f.name) : [name]
+    e.dataTransfer.setData(TEMP_MEDIA_DRAG, JSON.stringify({ folder, names }))
     e.dataTransfer.effectAllowed = "move"
+    window.dispatchEvent(new CustomEvent(DRAG_BADGE_EVENT, { detail: names.length }))
   }
   const onMoved = useEffectEvent((e: Event) => {
     const d = (e as CustomEvent<{ folder: string[]; names: string[] }>).detail
@@ -443,7 +516,7 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
     return () => window.removeEventListener(TEMP_MOVED_EVENT, h)
   }, [])
   const dragSelect = useDragSelect({
-    keepOnSelected: canDragToFolder,
+    leaveMouse: canDragToFolder,
     grid: () => gridEl.current,
     scrollEl: frame.scrollEl,
     hit: (x, y) => itemAt(x, y, rows, tops, { columns: layout.columns, tileSize: layout.tileSize, gap: GAP }),
@@ -593,19 +666,21 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                 <option value="oldest">Oldest first</option>
                 <option value="name">Name</option>
               </select>
-              <div className="flex rounded-lg border border-input p-0.5" role="group" aria-label="Thumbnail size">
-                {(Object.keys(SIZES) as SizeKey[]).map((k) => (
+              <div className="flex rounded-lg border border-input p-0.5" role="group" aria-label="View">
+                {VIEWS.map(({ key, label, Icon }) => (
                   <button
-                    key={k}
+                    key={key}
                     type="button"
-                    onClick={() => setSizeKey(k)}
-                    aria-pressed={sizeKey === k}
+                    onClick={() => setSizeKey(key)}
+                    aria-pressed={sizeKey === key}
+                    aria-label={label}
+                    title={label}
                     className={cn(
-                      "h-7 w-7 rounded-md text-xs font-medium uppercase",
-                      sizeKey === k ? "bg-primary/10 text-link" : "text-muted-foreground hover:text-foreground"
+                      "flex h-7 w-7 items-center justify-center rounded-md",
+                      sizeKey === key ? "bg-primary/10 text-link" : "text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    {k}
+                    <Icon className="h-4 w-4" />
                   </button>
                 ))}
               </div>
@@ -677,8 +752,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                 gap: GAP,
               }}
             >
-              {items.slice(row.start, row.end).map((item) => (
-                <Tile
+              {items.slice(row.start, row.end).map((item) => {
+                const Item = listView ? ListRow : Tile
+                return (
+                <Item
                   key={item.name}
                   root={root}
                   folder={folder}
@@ -693,9 +770,10 @@ export function MediaGrid({ root, rootDir, folder, files, flags = NO_FLAGS, note
                   onDoubleClick={() => setViewer(indexOf.get(item.name) ?? 0)}
                   onToggle={() => toggle(item.name)}
                   onContextMenu={(e) => openMenu(e, item.name)}
-                  onDragStart={canDragToFolder ? dragSelected : undefined}
+                  onDragStart={canDragToFolder ? (e) => dragTile(e, item.name) : undefined}
                 />
-              ))}
+                )
+              })}
             </div>
             )
           })

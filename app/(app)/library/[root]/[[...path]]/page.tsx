@@ -84,7 +84,8 @@ export default async function LibraryPage({
           {root === "temp" && (
             <div className="flex items-center gap-2">
               {personal && <UploadMediaButton />}
-              {personal && <NewTempFolderButton />}
+              {/* With the side navigation on screen, folders are made there; here only where it is hidden (a narrow screen). */}
+              {personal && <NewTempFolderButton className={cn(sideNav && "lg:hidden")} />}
               <TrashButton />
             </div>
           )}
