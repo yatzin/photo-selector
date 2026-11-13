@@ -10,6 +10,7 @@ import { folderLocked } from "@/lib/ai/lock-server"
 import { SCAN_LOCK_MESSAGE } from "@/lib/ai/lock"
 import { dropTempNotes } from "@/lib/temp-notes-server"
 import { clearRootCounts } from "@/lib/library-server"
+import { videoDurations } from "@/lib/duration-server"
 
 const MAX_BATCH = 2000
 
@@ -33,6 +34,18 @@ async function parse(input: unknown): Promise<Target | { error: string }> {
   if (isReadOnlyRoot(root)) return { error: READ_ONLY_ROOT_MESSAGE }
   if (await folderLocked(root, folder)) return { error: SCAN_LOCK_MESSAGE }
   return { root, folder, names: parsed.data.names }
+}
+
+/** The length in seconds of each video named (in a library folder), for the badge on its thumbnail; one it can't read is left out. */
+export async function videoDurationsAction(input: { root: string; folder: string[]; names: string[] }): Promise<Record<string, number>> {
+  const session = await auth()
+  if (!session) redirect("/login")
+  const parsed = z
+    .object({ root: z.string().refine(isRootKey), folder: z.array(z.string()).max(64), names: z.array(z.string().max(400)).min(1).max(40) })
+    .safeParse(input)
+  const folder = parsed.success ? safeSegments(parsed.data.folder) : null
+  if (!parsed.success || !folder) return {}
+  return videoDurations(parsed.data.root as RootKey, folder, parsed.data.names)
 }
 
 function done<T extends ActionResult>(result: T): T {

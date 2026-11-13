@@ -6,9 +6,9 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, Loader2, Pencil, Trash2 } from "lucide-react"
 import { listTempFolderAction } from "@/lib/actions/video-projects"
-import { moveTempFilesAction } from "@/lib/actions/temp"
+import { moveTempFilesAction, moveTempFolderAction } from "@/lib/actions/temp"
 import { libraryHref } from "@/lib/format"
-import { parseTempMediaDrag, TEMP_MEDIA_DRAG, TEMP_MOVED_EVENT } from "@/lib/temp-drag"
+import { canDropFolder, folderDrag, parseTempFolderDrag, parseTempMediaDrag, TEMP_FOLDER_DRAG, TEMP_MEDIA_DRAG, TEMP_MOVED_EVENT, type TempFolderDrag } from "@/lib/temp-drag"
 import { cn } from "@/lib/utils"
 import { useMenuState, type MenuItem } from "@/components/video/popup-menu"
 import { DeleteTempDialog, NewFolderDialog, RenameDialog } from "@/components/video/temp-dialogs"
@@ -23,7 +23,7 @@ import { DeleteTempDialog, NewFolderDialog, RenameDialog } from "@/components/vi
 // (acting on the folder whose page is open) or from the right-click menu of
 // any folder in the tree (a user's own folder, the first level, can only get
 // new folders). Dragging photos from the page onto a folder moves them there;
-// hovering a closed folder while dragging opens it.
+// hovering a closed folder while dragging opens it. A folder (not a user's own) can be dragged onto another folder to move it, as in the editor.
 
 type Dialog =
   | { kind: "new"; parent: string[] }
@@ -39,6 +39,8 @@ type Ctx = {
   counts: React.RefObject<Map<string, number>>
   ask: (d: Dialog) => void
   moved: (from: string[], to: string[], names: string[]) => Promise<void>
+  /** A folder was dropped on another: move it (the page follows it when it is the one open, or holds it). */
+  movedFolder: (drag: TempFolderDrag, to: string[]) => Promise<void>
 }
 const NavContext = createContext<Ctx | null>(null)
 
@@ -103,8 +105,22 @@ function Node({ segments, count }: { segments: string[]; count?: number }) {
     <li>
       <div
         onContextMenu={menu.onContextMenu}
+        // A folder (not a user's own) is dragged onto another folder to move it.
+        draggable={editable}
+        onDragStart={(e) => {
+          if (!editable) return
+          const drag: TempFolderDrag = { parent: segments.slice(0, -1), name }
+          e.dataTransfer.setData(TEMP_FOLDER_DRAG, JSON.stringify(drag))
+          e.dataTransfer.effectAllowed = "move"
+          folderDrag.current = drag
+        }}
+        onDragEnd={() => {
+          folderDrag.current = null
+        }}
         onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(TEMP_MEDIA_DRAG)) return
+          const types = e.dataTransfer.types
+          const dragged = folderDrag.current
+          if (!types.includes(TEMP_MEDIA_DRAG) && !(types.includes(TEMP_FOLDER_DRAG) && dragged && canDropFolder(dragged, segments))) return
           e.preventDefault()
           e.dataTransfer.dropEffect = "move"
           setOver(true)
@@ -117,9 +133,17 @@ function Node({ segments, count }: { segments: string[]; count?: number }) {
           clearTimer()
         }}
         onDrop={(e) => {
+          const folderMove = parseTempFolderDrag(e.dataTransfer.getData(TEMP_FOLDER_DRAG))
           const drag = parseTempMediaDrag(e.dataTransfer.getData(TEMP_MEDIA_DRAG))
           setOver(false)
           clearTimer()
+          folderDrag.current = null
+          if (folderMove) {
+            if (!canDropFolder(folderMove, segments)) return
+            e.preventDefault()
+            void ctx.movedFolder(folderMove, segments)
+            return
+          }
           if (!drag) return
           e.preventDefault()
           void ctx.moved(drag.folder, segments, drag.names)
@@ -209,13 +233,23 @@ export function TempNav({ current }: { current: string[] }) {
     changed()
   }
 
+  async function movedFolder(drag: TempFolderDrag, to: string[]) {
+    const r = await moveTempFolderAction(drag.parent, drag.name, to)
+    if ("error" in r) return void toast.error(r.error)
+    toast.success(`Moved ${drag.name} to ${r.to}`)
+    changed()
+    // The page was in the moved folder (or inside it): follow it to its new place.
+    const from = [...drag.parent, drag.name]
+    if (onPathOf(from, current)) router.push(libraryHref("temp", [...to, drag.name, ...current.slice(from.length)]))
+  }
+
   const here = current.length >= 2
   const parent = current.slice(0, -1)
   const name = current[current.length - 1]
   const tool = "flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
 
   return (
-    <NavContext.Provider value={{ current, isOpen, setOpen, version, counts, ask: setDialog, moved }}>
+    <NavContext.Provider value={{ current, isOpen, setOpen, version, counts, ask: setDialog, moved, movedFolder }}>
       <nav aria-label="Personal Storage folders" className="text-sm">
         <div className="mb-1.5 flex items-center gap-0.5 px-1">
           <p className="mr-auto text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Personal Storage</p>

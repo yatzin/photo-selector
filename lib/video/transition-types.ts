@@ -13,14 +13,26 @@ export const TRANSITION_TYPES = [
   "pixelize", "dissolve", "zoomin", "hblur",
   "collage", "exchange", "pageturn", "reveal", "heart",
   "glitch", "glitchreveal", "whip-left", "whip-right", "whip-up", "whip-down",
+  "zoomfromfull", "zoomtofull",
 ] as const
 
 export type TransitionType = (typeof TRANSITION_TYPES)[number]
 
 /** The transitions xfade has no built-in for: the export draws them itself (lib/video/transition-fx). */
-export const CUSTOM_TRANSITIONS = ["collage", "exchange", "pageturn", "reveal", "heart", "glitch", "glitchreveal", "whip-left", "whip-right", "whip-up", "whip-down"] as const satisfies readonly TransitionType[]
+export const CUSTOM_TRANSITIONS = ["collage", "exchange", "pageturn", "reveal", "heart", "glitch", "glitchreveal", "whip-left", "whip-right", "whip-up", "whip-down", "zoomfromfull", "zoomtofull"] as const satisfies readonly TransitionType[]
 export type CustomTransition = (typeof CUSTOM_TRANSITIONS)[number]
 export const isCustomTransition = (t: TransitionType): t is CustomTransition => (CUSTOM_TRANSITIONS as readonly string[]).includes(t)
+
+/**
+ * The two zoom transitions between clips, which move a picture between full
+ * screen and the place it was given (its size and position): `zoomfromfull`
+ * brings the incoming clip from full screen into its place, with the outgoing
+ * one gone; `zoomtofull` takes the outgoing clip from its place out to full
+ * screen, with the incoming one held back until it ends. They need two
+ * adjoining clips, so a free edge never offers them (EDGE_PICTURE_TYPES).
+ */
+export const ZOOM_FULL_TRANSITIONS = ["zoomfromfull", "zoomtofull"] as const satisfies readonly TransitionType[]
+export const isZoomFullTransition = (t: unknown): t is (typeof ZOOM_FULL_TRANSITIONS)[number] => typeof t === "string" && (ZOOM_FULL_TRANSITIONS as readonly string[]).includes(t)
 
 /**
  * The transitions between two adjoining audio clips (the audio layer's), as
@@ -80,8 +92,8 @@ export const DEFAULT_EDGE = 1
  * outgoing picture's, so those two come in only at an out edge.
  */
 export const EDGE_PICTURE_TYPES: Record<Edge, readonly TransitionType[]> = {
-  in: TRANSITION_TYPES.filter((t) => t !== "fadeblack" && t !== "fadewhite" && t !== "zoomin" && t !== "collage"),
-  out: TRANSITION_TYPES.filter((t) => t !== "fadeblack" && t !== "fadewhite"),
+  in: TRANSITION_TYPES.filter((t) => t !== "fadeblack" && t !== "fadewhite" && t !== "zoomin" && t !== "collage" && !isZoomFullTransition(t)),
+  out: TRANSITION_TYPES.filter((t) => t !== "fadeblack" && t !== "fadewhite" && !isZoomFullTransition(t)),
 }
 
 /** The sound fades a free edge of an audio clip offers: the five curves, a low-pass sweep, a tape start (in) or stop (out), and an echo tail (out only). */

@@ -1,15 +1,18 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { ChevronDown, ChevronRight, Copy, Folder, FolderPlus, Loader2, Music, Pencil, Play, Plus, Trash2, Upload } from "lucide-react"
+import { useCallback, useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react"
+import { ChevronDown, ChevronRight, Copy, Folder, FolderPlus, Info, Loader2, Music, Pencil, Play, Plus, Trash2, Upload } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { formatBytes, mediaUrl } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useStoredValue } from "@/lib/hooks/use-stored-state"
 
 import { formatTimecode } from "@/lib/video/time"
-import { allClips, assetKind, assetLabel, type Project } from "@/lib/video/project"
+import { allClips, assetKind, assetLabel, type Asset, type Project } from "@/lib/video/project"
 import { listTempFolderAction, type TempListing } from "@/lib/actions/video-projects"
+import { moveTempFilesAction, moveTempFolderAction } from "@/lib/actions/temp"
+import { canDropFolder, folderDrag, parseTempFolderDrag, parseTempMediaDrag, TEMP_FOLDER_DRAG, TEMP_MEDIA_DRAG, type TempFolderDrag } from "@/lib/temp-drag"
 import { Thumb } from "./thumb"
 import { Callout } from "./ui/callout"
 import { EllipsisButton, useMenuState, type MenuItem } from "./popup-menu"
@@ -18,7 +21,8 @@ import { DeleteTempDialog, NewFolderDialog, RenameDialog, TempPreviewDialog, typ
 import { useTempUpload } from "./use-temp-upload"
 import { CancelButton, DialogFooter, EditorDialog, PrimaryButton, useEditorDialog } from "./ui/editor-dialog"
 import { isStockKey, parseStockDrag } from "@/lib/stock/drag"
-import type { StockRef } from "@/lib/stock/types"
+import type { StockRef, StockSource } from "@/lib/stock/types"
+import { safePageUrl, SOURCE_NAMES } from "@/lib/stock/panel-state"
 import { ASSET_DRAG_TYPE, INBOX_DRAG_TYPE, STOCK_DRAG_TYPE } from "./timeline"
 import { StockPanel } from "./stock-panel"
 
@@ -44,6 +48,13 @@ type FileActions = {
 }
 
 /** One photo or video in a Personal Storage folder: draggable onto the timeline, the player or Project media, with an ellipsis menu and the same menu on right-click. */
+/** Where a stock import came from (its asset source is "stock:<source>:<id>"): the provider's name and, when it was kept, the item's page. */
+function stockOrigin(a: Asset): { name: string; link: string | null } | null {
+  const m = /^stock:([a-z]+):/.exec(a.source ?? "")
+  const name = m ? SOURCE_NAMES[m[1] as StockSource] : undefined
+  return name ? { name, link: safePageUrl(a.link) } : null
+}
+
 function TempFileRow({ segments, file, importing, actions }: { segments: string[]; file: TempFile; importing: string | null; actions: FileActions }) {
   const folder = segments.join("/")
   const key = `${folder}/${file.name}`
@@ -63,7 +74,9 @@ function TempFileRow({ segments, file, importing, actions }: { segments: string[
       title="Double-click to preview"
       onDragStart={(e) => {
         e.dataTransfer.setData(INBOX_DRAG_TYPE, JSON.stringify({ folder, name: file.name }))
-        e.dataTransfer.effectAllowed = "copy"
+        // Dropped on a folder here it moves; dropped on the timeline, the player or Project media it copies in.
+        e.dataTransfer.setData(TEMP_MEDIA_DRAG, JSON.stringify({ folder: segments, names: [file.name] }))
+        e.dataTransfer.effectAllowed = "copyMove"
       }}
       onDoubleClick={(e) => {
         if ((e.target as HTMLElement).closest("button")) return
@@ -83,6 +96,9 @@ function TempFileRow({ segments, file, importing, actions }: { segments: string[
     </li>
   )
 }
+
+/** Dispatched on window after files moved between folders: every open folder here reloads its list. */
+const STORAGE_CHANGED = "ps-video-storage-changed"
 
 /** Shown on row hover or focus (always on touch screens). */
 const HOVER_ONLY = "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
@@ -106,6 +122,13 @@ function TempFolderNode({ segments, count, importing, onCopy, onChanged }: { seg
   >(null)
   const folder = segments.join("/")
   const name = segments[segments.length - 1]
+  // A file dragged over the folder's row: it is outlined, and resting on a closed one opens it.
+  const [over, setOver] = useState(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearTimer = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+    hoverTimer.current = null
+  }
   // A user's own folder (the first level) is never renamed or deleted from here.
   const editable = segments.length >= 2
 
@@ -125,6 +148,43 @@ function TempFolderNode({ segments, count, importing, onCopy, onChanged }: { seg
 
   const upload = useTempUpload(segments, load)
 
+  // Files moved into or out of any folder: an open one shows its new contents (and counts).
+  const reloadIfOpen = useEffectEvent(() => {
+    if (open) load()
+  })
+  useEffect(() => {
+    const h = () => reloadIfOpen()
+    window.addEventListener(STORAGE_CHANGED, h)
+    return () => {
+      window.removeEventListener(STORAGE_CHANGED, h)
+      clearTimer()
+    }
+  }, [])
+
+  async function moveHere(drag: { folder: string[]; names: string[] }) {
+    if (drag.folder.join("/") === folder) return void toast.info("They're already in that folder.")
+    const r = await moveTempFilesAction(drag.folder, drag.names, segments)
+    if ("error" in r) return void toast.error(r.error)
+    if (r.ok.length) toast.success(`Moved ${r.ok.length} to ${name}`)
+    if (r.failed.length) toast.error(`Couldn't move ${r.failed.length} item${r.failed.length === 1 ? "" : "s"}`, { description: r.failed.slice(0, 3).map((f) => `${f.name}: ${f.error}`).join("\n") })
+    refreshHere()
+    window.dispatchEvent(new Event(STORAGE_CHANGED))
+  }
+
+  async function moveFolderHere(drag: TempFolderDrag) {
+    const r = await moveTempFolderAction(drag.parent, drag.name, segments)
+    if ("error" in r) return void toast.error(r.error)
+    toast.success(`Moved ${drag.name} to ${name}`)
+    refreshHere()
+    window.dispatchEvent(new Event(STORAGE_CHANGED))
+  }
+
+  /** Opens this folder with a fresh list (its cached one may be out of date after a move). */
+  function refreshHere() {
+    setOpen(true)
+    load()
+  }
+
   const menu = useMenuState(
     () => [
       { label: "New folder…", icon: FolderPlus, onSelect: () => setDialog({ kind: "new" }) },
@@ -142,7 +202,52 @@ function TempFolderNode({ segments, count, importing, onCopy, onChanged }: { seg
 
   return (
     <div className="px-2" onContextMenu={menu.onContextMenu}>
-      <div className="group/row flex items-center rounded-md hover:bg-muted/60">
+      <div
+        className={cn("group/row flex items-center rounded-md", over ? "bg-editor-accent/20 ring-2 ring-editor-accent" : "hover:bg-muted/60")}
+        // A folder (not a user's own) is dragged onto another folder to move it.
+        draggable={editable}
+        onDragStart={(e) => {
+          if (!editable) return
+          const drag: TempFolderDrag = { parent: segments.slice(0, -1), name }
+          e.dataTransfer.setData(TEMP_FOLDER_DRAG, JSON.stringify(drag))
+          e.dataTransfer.effectAllowed = "move"
+          folderDrag.current = drag
+        }}
+        onDragEnd={() => {
+          folderDrag.current = null
+        }}
+        onDragOver={(e) => {
+          const types = e.dataTransfer.types
+          const media = types.includes(TEMP_MEDIA_DRAG)
+          const dragged = folderDrag.current
+          if (!media && !(types.includes(TEMP_FOLDER_DRAG) && dragged && canDropFolder(dragged, segments))) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "move"
+          setOver(true)
+          if (!open && !hoverTimer.current) hoverTimer.current = setTimeout(reveal, 700)
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+          setOver(false)
+          clearTimer()
+        }}
+        onDrop={(e) => {
+          const folderMove = parseTempFolderDrag(e.dataTransfer.getData(TEMP_FOLDER_DRAG))
+          const drag = parseTempMediaDrag(e.dataTransfer.getData(TEMP_MEDIA_DRAG))
+          setOver(false)
+          clearTimer()
+          folderDrag.current = null
+          if (folderMove) {
+            if (!canDropFolder(folderMove, segments)) return
+            e.preventDefault()
+            void moveFolderHere(folderMove)
+            return
+          }
+          if (!drag) return
+          e.preventDefault()
+          void moveHere(drag)
+        }}
+      >
         <button
           type="button"
           aria-expanded={open}
@@ -449,7 +554,9 @@ export function FileTree({
           <p className="flex items-center gap-1.5 px-3 pb-1 text-xs text-muted-foreground" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Downloading…</p>
         )}
         <ul className="px-2">
-          {assets.map(([id, a]) => (
+          {assets.map(([id, a]) => {
+            const origin = stockOrigin(a)
+            return (
             <li
               key={id}
               draggable
@@ -474,17 +581,45 @@ export function FileTree({
               }}
               className="group flex cursor-grab items-center gap-2 rounded-md p-1 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
             >
-              {assetKind(a) === "audio" ? (
-                <span aria-hidden className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-teal-500/20 text-teal-700 dark:bg-teal-400/20 dark:text-teal-200">
-                  <Music className="h-4 w-4" />
-                </span>
-              ) : (
-                <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
-              )}
+              <span className="relative shrink-0">
+                {assetKind(a) === "audio" ? (
+                  <span aria-hidden className="flex h-9 w-14 shrink-0 items-center justify-center rounded bg-teal-500/20 text-teal-700 dark:bg-teal-400/20 dark:text-teal-200">
+                    <Music className="h-4 w-4" />
+                  </span>
+                ) : (
+                  <Thumb src={thumbUrl(id)} className="h-9 w-14 shrink-0 rounded bg-muted object-cover" />
+                )}
+                {origin?.link && (
+                  // Too small for the provider's name: a round info chip on the thumbnail's corner opens the same page.
+                  <a
+                    href={origin.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    draggable={false}
+                    title={`Source: ${origin.name}. Opens the original page.`}
+                    aria-label={`Open ${assetLabel(a)} on ${origin.name}`}
+                    className="absolute left-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-neutral-900/75 text-white shadow-sm ring-1 ring-white/20 outline-none backdrop-blur-sm transition-colors hover:bg-neutral-900 focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Info aria-hidden className="h-2.5 w-2.5" />
+                  </a>
+                )}
+              </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate" title={assetLabel(a)}>{assetLabel(a)}</span>
-                <span className="block text-[11px] text-muted-foreground tabular-nums">
+                <span className="block truncate text-[11px] text-muted-foreground tabular-nums">
                   {assetKind(a) === "image" ? `Image · ${formatTimecode(a.duration)}` : assetKind(a) === "audio" ? `Audio · ${formatTimecode(a.duration)}` : formatTimecode(a.duration)}
+                  {origin && (
+                    <>
+                      {" · "}
+                      {origin.link ? (
+                        <a href={origin.link} target="_blank" rel="noopener noreferrer" draggable={false} title={`Open on ${origin.name}`} className="rounded-sm underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+                          {origin.name}
+                        </a>
+                      ) : (
+                        origin.name
+                      )}
+                    </>
+                  )}
                 </span>
               </span>
               <Button type="button" size="icon-sm" variant="ghost" className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => onAdd(id)} title="Add to timeline">
@@ -492,7 +627,8 @@ export function FileTree({
                 <span className="sr-only">Add {assetLabel(a)} to timeline</span>
               </Button>
             </li>
-          ))}
+            )
+          })}
         </ul>
       </section>
 
@@ -544,9 +680,7 @@ export function FileTree({
           hidden={lowerTab !== "storage"}
           className="min-h-0 flex-1 overflow-y-auto pb-2"
         >
-          <p className="mt-2 px-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Personal Storage</p>
-          <p className="px-3 pb-1 text-xs text-muted-foreground">Drag media to Project media or the timeline. Right-click for more.</p>
-          {temp.length === 0 && <p className="px-3 text-xs text-muted-foreground">Nothing in Personal Storage yet.</p>}
+          {temp.length === 0 && <p className="px-3 pt-2 text-xs text-muted-foreground">Nothing in Personal Storage yet.</p>}
           {temp.map((f) => (
             <TempFolderNode key={f.name} segments={[f.name]} count={f.mediaCount} importing={importing} onCopy={onCopyTemp} />
           ))}

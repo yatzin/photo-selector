@@ -8,14 +8,14 @@ import { FieldHelp } from "@/components/ui/field-help"
 import { audioCutState, audioEdgeState } from "@/lib/video/audio-fx"
 import { allClips, assetLabel, clipLength, isAudioClip, isTextClip, type Clip, type Project } from "@/lib/video/project"
 import {
-  AUDIO_CURVES, AUDIO_TRANSITION_TYPES, DEFAULT_CUT_AUDIO, DEFAULT_EDGE, DEFAULT_TRANSITION, EDGE_AUDIO_TYPES, EDGE_PICTURE_TYPES, isAudioCurve, isAudioTransitionType, isTransitionType, MAX_EDGE, MIN_CUT_AUDIO, MIN_EDGE,
+  AUDIO_CURVES, AUDIO_TRANSITION_TYPES, DEFAULT_CUT_AUDIO, DEFAULT_EDGE, DEFAULT_TRANSITION, EDGE_AUDIO_TYPES, EDGE_PICTURE_TYPES, isAudioCurve, isAudioTransitionType, isTransitionType, isZoomFullTransition, MAX_EDGE, MIN_CUT_AUDIO, MIN_EDGE,
   MIN_TRANSITION, TRANSITION_TYPES, type AnyTransitionType, type AudioTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition, type TransitionType,
 } from "@/lib/video/transition-types"
 import { edgeKeyframes, edgeLook, lookParts, transitionKeyframes } from "@/lib/video/transition-preview"
 import { AUDIO_EDGE_GUIDES, AUDIO_TRANSITION_GUIDES, transitionGuide, type AudioEdgeType, type TransitionGuide } from "@/lib/video/transition-info"
 import {
   applyCut, AUDIO_TRANSITION_GROUPS, AUDIO_TRANSITION_INFO, cutAudioRange, cutTrims, DEFAULT_AUDIO_TRANSITION, edgeLimits, edgeTransitionName, setCutAudio, setTransition, TRANSITION_GROUPS, TRANSITION_INFO, transitionName,
-  transitionRange, type CutRange, type EdgeRange,
+  transitionRange, zoomCutRange, type CutRange, type EdgeRange,
 } from "@/lib/video/transitions"
 import { CutLoopPreview } from "./cut-loop-preview"
 import { AudioLoopPreview, EdgeLoopPreview } from "./edge-loop-preview"
@@ -156,10 +156,13 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
   const currentAudio = clip?.cutAudio
   // The transition's range with the cut's audio overlap taken off (Apply sets the transition first, then the overlap).
   const bare = setCutAudio(project, clipId, null)
-  const range = transitionRange(bare, clipId)
-  const { max } = range
+  const normal = transitionRange(bare, clipId)
   const [choice, setChoice] = useState<Choice>(current && isTransitionType(current.type) ? current.type : "fade")
-  const [text, setText] = useState(fmt(current?.duration ?? Math.min(DEFAULT_TRANSITION, Math.max(MIN_TRANSITION, max))))
+  // A zoom cut runs inside one clip: its own limits, no footage to find and nothing trimmed.
+  const zoomType = isZoomFullTransition(choice) ? choice : null
+  const range = zoomType ? zoomCutRange(bare, clipId, zoomType) : normal
+  const { max } = range
+  const [text, setText] = useState(fmt(current?.duration ?? Math.min(DEFAULT_TRANSITION, Math.max(MIN_TRANSITION, normal.max))))
   const [audioMode, setAudioMode] = useState<AudioChoice>(currentAudio?.mode ?? "none")
   const [audioText, setAudioText] = useState(fmt(currentAudio?.duration ?? DEFAULT_CUT_AUDIO))
 
@@ -297,7 +300,7 @@ function PictureCutDialog({ project, clipId, thumbUrl, videoUrl, imageUrl, onApp
                 disabled={noFootage || choice === "none"}
                 disabledReason={range.reason === "loop" ? LOOP_REASON : noFootage ? "These clips are too short for a transition: each needs half of it, and 0.2 s of its own." : "A hard cut has no duration."}
                 error={choice !== "none" && !noFootage ? durationError : null}
-                hint={`Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
+                hint={zoomType ? `Up to ${fmt(max)} s. It plays inside the ${zoomType === "zoomfromfull" ? "second" : "first"} clip: the two clips run end to end with no overlap, and nothing is trimmed.` : `Up to ${fmt(max)} s ${limitNote(range, "a transition")}. Half plays each side of the cut.`}
               />
               <div className="grid content-start gap-1.5">
                 <span className="field-label flex min-h-5 items-center gap-1.5">Audio overlap<FieldHelp id="transition.audio-overlap" /></span>

@@ -94,6 +94,7 @@ export default async function SettingsPage({
               initial={{ openverseClientId: stock.openverseClientId ?? "" }}
               hasPixabayKey={stock.hasPixabayKey}
               hasPexelsKey={stock.hasPexelsKey}
+              hasFreesoundKey={stock.hasFreesoundKey}
               hasOpenverseSecret={stock.hasOpenverseSecret}
               unreadable={stock.unreadable}
             />

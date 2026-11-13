@@ -1,5 +1,6 @@
 import { auth } from "@/auth"
 import { loadStockConfig } from "@/lib/stock/config"
+import { createFreesound } from "@/lib/stock/freesound"
 import { createOpenverse } from "@/lib/stock/openverse"
 import { createPexels } from "@/lib/stock/pexels"
 import { createPixabay } from "@/lib/stock/pixabay"
@@ -29,6 +30,7 @@ export async function GET(request: Request) {
     createOpenverse({ clientId: cfg.openverseClientId, clientSecret: cfg.openverseClientSecret }),
     createPixabay({ key: cfg.pixabayKey }),
     createPexels({ key: cfg.pexelsKey }),
+    createFreesound({ key: cfg.freesoundKey }),
   ]
   return json(await searchStock(clients, parsed.value))
 }

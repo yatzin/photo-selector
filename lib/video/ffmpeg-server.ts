@@ -5,7 +5,9 @@ import fs from "fs/promises"
 import { parsePictureSize, parseStreams, type ProbedStreams } from "./import"
 import { ECHO_DELAYS, PHONE_BAND, sweepCutoff, tapeRates } from "./audio-fx"
 import { audioLevelFilters, type ClipAudio } from "./audio-levels"
-import { adjoins, allClips, clipLength, expandLoops, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
+import { zoomAwayExpr, zoomScaleExpr } from "./zoom-fullscreen"
+import { expandZoomCuts } from "./zoom-cut"
+import { adjoins, allClips, backgroundOf, clipLength, DEFAULT_BACKGROUND, expandLoops, isAudioClip, isContiguousFromZero, isStill, isTextClip, totalLength, type Clip, type Project } from "./project"
 import { baseFontPx, textLayout, textSize } from "./text"
 import { alphaWindow, animationExprs, isAnimated, printExpr, typewriterBoxes } from "./text-animation"
 import { cropLeftOf, cropRightOf, IDENTITY, isIdentity, rotatedBounds, rotationOf, type Transform } from "./transform"
@@ -78,15 +80,18 @@ export function clipSoundChain(from: number, to: number, audio: ClipAudio | unde
  * crop, w / keepW its width). With no left or right crop x is the plain form.
  * `turned`: the frame is a turned one (a rotation, or a text's spin).
  */
-export function overlayPosition(t: Transform, turned = rotationOf(t) !== 0): { x: string; y: string } {
+export function overlayPosition(t: Transform, turned = rotationOf(t) !== 0, away?: string): { x: string; y: string } {
+  // A zoom (`away`: how far from the clip's own place as an expression, 1 at full screen) moves the centre from where the clip sits to the canvas centre.
+  const dx = away ? `${signed(t.x)}*(1-(${away}))*W` : `${signed(t.x)}*W`
+  const dy = away ? `${signed(t.y)}*(1-(${away}))*H` : `${signed(t.y)}*H`
   // Turned, the picture keeps its full scaled size (the crop is transparent) and its centre is the content centre.
-  if (turned) return { x: `(W-w)/2${signed(t.x)}*W`, y: `(H-h)/2${signed(t.y)}*H` }
+  if (turned) return { x: `(W-w)/2${dx}`, y: `(H-h)/2${dy}` }
   const keep = frac(1 - t.cropTop - t.cropBottom)
   const cl = cropLeftOf(t)
   const cr = cropRightOf(t)
   const keepW = frac(1 - cl - cr)
-  const x = cl > 0 || cr > 0 ? `(W-w/${keepW})/2${signed(t.x)}*W+${frac(cl)}*w/${keepW}` : `(W-w)/2${signed(t.x)}*W`
-  return { x, y: `(H-h/${keep})/2${signed(t.y)}*H+${frac(t.cropTop)}*h/${keep}` }
+  const x = cl > 0 || cr > 0 ? `(W-w/${keepW})/2${dx}+${frac(cl)}*w/${keepW}` : `(W-w)/2${dx}`
+  return { x, y: `(H-h/${keep})/2${dy}+${frac(t.cropTop)}*h/${keep}` }
 }
 
 /** The crop filter for a transform (even sizes and offsets), or null with no crop. */
@@ -341,11 +346,15 @@ function soundSpan(p: Project, clips: Clip[], k: number): SoundSpan {
   return span
 }
 
+/** The project's canvas color as ffmpeg writes it (black by name, so a project without one exports as it always did). */
+const canvasColor = (p: Project): string => (backgroundOf(p) === DEFAULT_BACKGROUND ? "black" : `0x${backgroundOf(p).slice(1)}`)
+
 /**
  * The uniform graph, used when any clip is moved, scaled or cropped or the
  * base track has a gap: every clip, base track included, is overlaid on a
- * black canvas the timeline's length, track by track (lowest first) and
- * enabled for its own span, so a gap shows black (and is silent). A
+ * canvas (the project's background color, black unless set) the timeline's
+ * length, track by track (lowest first) and
+ * enabled for its own span, so a gap shows the background (and is silent). A
  * transformed clip is fit inside the canvas, scaled (to even sizes), cropped
  * and placed as clipRect says; an untransformed one fills the canvas
  * letterboxed in black as it always has, so it hides what's under it in both
@@ -391,7 +400,7 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
   const inputs: string[][] = []
   const parts: string[] = []
   const total = num(totalLength(p))
-  parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
+  parts.push(`color=c=${canvasColor(p)}:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
   const mix = ["[asil]"]
   const sounds = new Map<string, SoundSpan>()
   for (const track of p.tracks) track.clips.forEach((c, k) => sounds.set(c.id, soundSpan(p, track.clips, k)))
@@ -461,6 +470,9 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
     const t = c.transform ?? IDENTITY
     const text = isTextClip(c) ? textRaster(p, c) : null
     const anim = isTextClip(c) && isAnimated(c.text) ? textAnimation(p, c) : null
+    // A zoom cut's zoom inside this clip (lib/video/zoom-fullscreen): its progress on the clip's own time in the scale, and on the timeline's in the overlay.
+    const zoomed = !isTextClip(c) && (c.zoomIn !== undefined || c.zoomOut !== undefined)
+    const zoomScale = zoomed ? zoomScaleExpr(frac(t.scale), zoomAwayExpr(c, clipLength(c), `t-${num(pre)}`, num)) : ""
     // The overlay position below puts a full-canvas frame at 0, 0.
     const place = text
       ? [
@@ -468,11 +480,14 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
           ...transformFilters(t, anim ? { ...(anim.alpha ? { afterFlips: [anim.alpha] } : {}), ...(anim.angle ? { angle: anim.angle } : {}) } : {}),
           ...(anim?.scale ? [anim.scale] : []),
         ].join(",")
-      : isIdentity(c.transform) && !keepsAlpha(c)
+      : isIdentity(c.transform) && !keepsAlpha(c) && !zoomed
       ? frame
       : [
           `scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1,fps=${fps}`,
-          `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
+          zoomed
+            // The size eases between the clip's own and full screen; the picture is already fit here, so iw and ih are its fit size.
+            ? `scale=w='max(2,trunc(iw*${zoomScale}/2)*2)':h='max(2,trunc(ih*${zoomScale}/2)*2)':eval=frame`
+            : `scale=trunc(iw*${frac(t.scale)}/2)*2:trunc(ih*${frac(t.scale)}/2)*2`,
           ...transformFilters(t),
         ].join(",")
     const shift = `setpts=PTS+${num(c.start - pre)}/TB`
@@ -486,10 +501,10 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
       parts.push(`[${i}:v]trim=${num(c.in - pre)}:${num(c.out + post)},setpts=PTS-STARTPTS,${keying(c)}${place},${shift}[v${i}]`)
       sound(c, i)
     }
-    const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle))
-    // A text that moves or changes size is placed afresh every frame.
-    const moving = anim !== null && (anim.x !== null || anim.y !== null || anim.scale !== null)
-    const at = moving ? `x='${x}${anim.x ? `+${anim.x}` : ""}':y='${y}${anim.y ? `+${anim.y}` : ""}':eval=frame` : `x=${x}:y=${y}:eval=init`
+    const { x, y } = overlayPosition(t, rotationOf(t) !== 0 || Boolean(anim?.angle), zoomed ? zoomAwayExpr(c, clipLength(c), `t-${num(c.start)}`, num) : undefined)
+    // A text that moves or changes size, or a clip zooming, is placed afresh every frame.
+    const moving = zoomed || (anim !== null && (anim.x !== null || anim.y !== null || anim.scale !== null))
+    const at = moving ? `x='${x}${anim?.x ? `+${anim.x}` : ""}':y='${y}${anim?.y ? `+${anim.y}` : ""}':eval=frame` : `x=${x}:y=${y}:eval=init`
     return { label: `[v${i}]`, i, at }
   }
   // Each track's clips in runs joined by transitions; a clip with none is a run of its own.
@@ -606,7 +621,8 @@ function uniformGraph(p: Project, frame: string, fileFor: (c: Clip) => string, i
  */
 export function buildExportGraph(project: Project, files: Record<string, string>): { graph: string; inputs: string[][] } {
   // A looping clip exports as its back-to-back copies; everything below sees plain clips.
-  const p = expandLoops(project)
+  // Zoom cuts have no overlap: each is a plain cut and a zoom inside one clip (lib/video/zoom-cut).
+  const p = expandZoomCuts(expandLoops(project))
   if (allClips(p).length === 0) throw new Error("Nothing to export")
   const { width: W, height: H, fps } = p
   const inputs: string[][] = []
@@ -621,7 +637,7 @@ export function buildExportGraph(project: Project, files: Record<string, string>
   const isImage = (c: Clip) => isStill(p, c)
   if (
     (p.audioTrack?.clips.length ?? 0) > 0 ||
-    allClips(p).some((c) => !isIdentity(c.transform) || isTextClip(c) || (!isTextClip(c) && c.key !== undefined) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
+    allClips(p).some((c) => !isIdentity(c.transform) || c.zoomIn || c.zoomOut || isTextClip(c) || (!isTextClip(c) && c.key !== undefined) || c.transition || c.cutAudio || c.edgeIn || c.edgeOut || c.audio) ||
     !isContiguousFromZero(p.tracks[0].clips)
   ) return uniformGraph(p, frame, fileFor, isImage)
 
@@ -657,7 +673,7 @@ export function buildExportGraph(project: Project, files: Record<string, string>
   }
 
   const total = num(totalLength(p))
-  parts.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
+  parts.push(`color=c=${canvasColor(p)}:s=${W}x${H}:r=${fps}:d=${total},format=yuv420p[bg]`)
   const mix = ["[asil]"]
   let under = "[bg]"
   if (baseTrack.clips.length > 0) {

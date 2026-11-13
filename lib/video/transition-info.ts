@@ -156,6 +156,16 @@ export const TRANSITION_GUIDES: Record<TransitionType | "none", TransitionGuide>
     bestFor: "Dropping from the sky or a view to the ground; landing on a subject or a product; matching a fast downward tilt across the cut.",
     avoid: "Shots with upward motion; quiet or emotional moments; footage with fine text, which turns to a smear.",
   },
+  zoomfromfull: {
+    does: "The next clip starts filling the whole screen and zooms smoothly down into the size and place you gave it, while the previous clip is gone. The picture seems to shrink into the corner.",
+    bestFor: "Splitting one video, moving the second part small into a corner, then letting the picture shrink down into it; a main video that turns into a picture-in-picture.",
+    avoid: "A next clip that already fills the screen, where there is nothing to shrink into; two unrelated shots, where the full-screen start looks like a jump.",
+  },
+  zoomtofull: {
+    does: "The previous clip leaves its size and place and zooms smoothly out to fill the whole screen, and the next clip, full screen, takes over as it arrives.",
+    bestFor: "A small picture-in-picture video that grows back to full screen as the next part begins; undoing a shrink made with Zoom from full screen.",
+    avoid: "A previous clip that already fills the screen, where there is nothing to grow; a next clip that is not full screen, which jumps when it takes over.",
+  },
 }
 
 /** The guidance for a transition, or for a hard cut ("none"). */

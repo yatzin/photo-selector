@@ -26,6 +26,16 @@ describe("filmstripTiles", () => {
     expect(cut).toEqual(full.slice(0, cut.length))
   })
 
+  it("a long clip gets tiles all the way along, and a view returns only the tiles in it", () => {
+    const long = { zoom: 10, tileWidth: 50, duration: 100000 } // 5 s per tile
+    const all = filmstripTiles({ ...long, inSec: 0, outSec: 5000 })
+    expect(all.length).toBe(400) // the safety cap, without a view
+    const view = filmstripTiles({ ...long, inSec: 0, outSec: 5000, view: { from: 40000, to: 40200 } })
+    expect(view.map((x) => x.x)).toEqual([40000, 40050, 40100, 40150])
+    expect(view[0].at).toBe(4002.5)
+    expect(filmstripTiles({ ...long, inSec: 0, outSec: 5000, view: { from: 99000, to: 99500 } })).toEqual([])
+  })
+
   it("keeps the picture inside the file and handles empty or bad windows", () => {
     expect(filmstripTiles({ ...base, inSec: 0, outSec: 100 }).at(-1)!.at).toBeLessThanOrEqual(99.95)
     expect(filmstripTiles({ ...base, inSec: 5, outSec: 5 })).toEqual([])

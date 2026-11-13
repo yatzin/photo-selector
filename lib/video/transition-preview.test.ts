@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { CUSTOM_TRANSITIONS, isCustomTransition, TRANSITION_TYPES } from "./transition-types"
-import { heartCover, heartF, heartOutline } from "./transition-fx"
+import { heartCover, heartF, heartOutline, zoomParams } from "./transition-fx"
+import { EDGE_PICTURE_TYPES } from "./transition-types"
 import { cssText, lookParts, loopFrame, loopPlan, loopSound, transitionKeyframes, transitionLook } from "./transition-preview"
 
 describe("transitionLook", () => {
@@ -160,5 +161,45 @@ describe("edgeLook", () => {
     expect(edgeLook("slideleft", "out", 0.5).to.transform).toBe("translateX(-50%)")
     expect(edgeLook("heart", "out", 0.5).to.maskComposite).toBe("exclude")
     expect(edgeLook("reveal", "in", 0.5).to.clipPath).toMatch(/^inset\(0% /)
+  })
+})
+
+// -0 + 0 is +0: a move of nothing can come out as -0, which toMatchObject tells apart from 0.
+const norm = (o: object) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === "number" ? v + 0 : v]))
+
+describe("the zoom transitions", () => {
+  const place = { scale: 0.5, x: 0.25, y: -0.25 }
+
+  it("zoom from full screen: the incoming clip starts filling the screen and settles in its own place, the outgoing one gone", () => {
+    const start = zoomParams("from", 0, place)
+    expect(start.away).toBe(1)
+    expect(start.k).toBeCloseTo(2, 6)
+    // The clip's centre (0.5 + x) lands on the canvas centre: k * x + 0.5 + dx = 0.5.
+    expect(start.k * place.x + start.dx).toBeCloseTo(0, 6)
+    expect(norm(zoomParams("from", 1, place))).toMatchObject({ away: 0, k: 1, dx: 0, dy: 0 })
+    const look = transitionLook("zoomfromfull", 0.5, 16 / 9, { incoming: place })
+    expect(look.from.opacity).toBe(0)
+    expect(look.to.transform).toMatch(/^translate\(.*\) scale\(/)
+  })
+
+  it("zoom to full screen: the outgoing clip leaves its own place and ends filling the screen, the incoming one held back", () => {
+    expect(norm(zoomParams("to", 0, place))).toMatchObject({ away: 0, k: 1, dx: 0, dy: 0 })
+    const end = zoomParams("to", 1, place)
+    expect(end.away).toBe(1)
+    expect(end.k).toBeCloseTo(2, 6)
+    const look = transitionLook("zoomtofull", 0.5, 16 / 9, { outgoing: place })
+    expect(look.to.opacity).toBe(0)
+    expect(look.from.transform).toBeDefined()
+  })
+
+  it("a clip that already fills the screen has nothing to move", () => {
+    expect(norm(zoomParams("from", 0.3, { scale: 1, x: 0, y: 0 }))).toMatchObject({ k: 1, dx: 0, dy: 0 })
+  })
+
+  it("is for a cut between two clips: a free edge does not offer it", () => {
+    for (const edge of ["in", "out"] as const) {
+      expect(EDGE_PICTURE_TYPES[edge]).not.toContain("zoomfromfull")
+      expect(EDGE_PICTURE_TYPES[edge]).not.toContain("zoomtofull")
+    }
   })
 })

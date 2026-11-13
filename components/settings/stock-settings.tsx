@@ -10,7 +10,7 @@ import { updateStockSettings } from "@/lib/actions/stock-settings"
 
 export type StockSettingsInitial = { openverseClientId: string }
 
-type Clears = { pixabay: boolean; pexels: boolean; openverse: boolean }
+type Clears = { pixabay: boolean; pexels: boolean; freesound: boolean; openverse: boolean }
 
 function SecretField({
   id, label, isSet, value, onChange, clear, onClear, hint, clearLabel = "Clear", showClear = isSet,
@@ -56,19 +56,21 @@ function SecretField({
 }
 
 export function StockSettings({
-  initial, hasPixabayKey, hasPexelsKey, hasOpenverseSecret, unreadable,
+  initial, hasPixabayKey, hasPexelsKey, hasFreesoundKey, hasOpenverseSecret, unreadable,
 }: {
   initial: StockSettingsInitial
   hasPixabayKey: boolean
   hasPexelsKey: boolean
+  hasFreesoundKey: boolean
   hasOpenverseSecret: boolean
   unreadable: boolean
 }) {
   const [pixabayKey, setPixabayKey] = useState("")
   const [pexelsKey, setPexelsKey] = useState("")
+  const [freesoundKey, setFreesoundKey] = useState("")
   const [clientId, setClientId] = useState(initial.openverseClientId)
   const [clientSecret, setClientSecret] = useState("")
-  const [clear, setClear] = useState<Clears>({ pixabay: false, pexels: false, openverse: false })
+  const [clear, setClear] = useState<Clears>({ pixabay: false, pexels: false, freesound: false, openverse: false })
   const [saving, setSaving] = useState(false)
 
   async function save() {
@@ -76,10 +78,12 @@ export function StockSettings({
     const r = await updateStockSettings({
       pixabayKey: pixabayKey || undefined,
       pexelsKey: pexelsKey || undefined,
+      freesoundKey: freesoundKey || undefined,
       openverseClientId: clientId || undefined,
       openverseClientSecret: clientSecret || undefined,
       clearPixabayKey: clear.pixabay,
       clearPexelsKey: clear.pexels,
+      clearFreesoundKey: clear.freesound,
       clearOpenverseSecret: clear.openverse,
     })
     setSaving(false)
@@ -88,8 +92,9 @@ export function StockSettings({
       toast.success("Stock media settings saved.")
       setPixabayKey("")
       setPexelsKey("")
+      setFreesoundKey("")
       setClientSecret("")
-      setClear({ pixabay: false, pexels: false, openverse: false })
+      setClear({ pixabay: false, pexels: false, freesound: false, openverse: false })
     }
   }
 
@@ -98,7 +103,7 @@ export function StockSettings({
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Only CC0 / public-domain media (Openverse) and media that needs no attribution (Pixabay, Pexels) are ever offered.
+        Only CC0 / public-domain media (Openverse, Freesound) and media that needs no attribution (Pixabay, Pexels) are ever offered.
         Keys are stored encrypted and are never shown again after saving.
       </p>
 
@@ -122,6 +127,12 @@ export function StockSettings({
             value={pexelsKey} onChange={setPexelsKey}
             clear={clear.pexels} onClear={(v) => setClear((c) => ({ ...c, pexels: v }))}
             hint={<>Free. Get one at <a className={link} href="https://www.pexels.com/api/" target="_blank" rel="noreferrer">pexels.com/api</a>. Leave blank to keep the stored key.</>}
+          />
+          <SecretField
+            id="stock-freesound" label="Freesound API key" isSet={hasFreesoundKey}
+            value={freesoundKey} onChange={setFreesoundKey}
+            clear={clear.freesound} onClear={(v) => setClear((c) => ({ ...c, freesound: v }))}
+            hint={<>Free. Audio only, CC0 only. Get a key at <a className={link} href="https://freesound.org/apiv2/apply/" target="_blank" rel="noreferrer">freesound.org/apiv2/apply</a>. Leave blank to keep the stored key.</>}
           />
         </div>
       </section>

@@ -87,6 +87,35 @@ export async function renameTempFolder(parent: string[], name: string, newName: 
   return "error" in r ? r : { name: clean }
 }
 
+/**
+ * Moves the subfolder `name` of `parent`, and everything in it, into the folder `destination` (a user's folder or below).
+ * Not a user's own folder, not into itself or anything inside it, and never over a folder of the same name already there.
+ */
+export async function moveTempFolder(parent: string[], name: string, destination: string[]): Promise<{ name: string; to: string } | { error: string }> {
+  if (parent.length === 0) return { error: "A user's own folder can't be moved." }
+  if (destination.length === 0) return { error: "Open a user's folder first." }
+  if (destination.length >= MAX_TEMP_DEPTH) return { error: `Folders can go ${MAX_TEMP_DEPTH} levels deep.` }
+  const root = rootPath("temp")
+  const from = resolveInside(root, [...parent, name])
+  const destDir = resolveInside(root, destination)
+  if (!from || !destDir || path.basename(from) !== name) return { error: "Invalid folder." }
+  try {
+    if (!(await fs.lstat(from)).isDirectory()) return { error: "That isn't a folder." }
+  } catch {
+    return { error: "That folder no longer exists." }
+  }
+  try {
+    if (!(await fs.stat(destDir)).isDirectory()) return { error: "That folder no longer exists." }
+  } catch {
+    return { error: "That folder no longer exists." }
+  }
+  const rel = path.relative(from, destDir)
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return { error: "A folder can't go inside itself." }
+  if (path.resolve(path.dirname(from)) === path.resolve(destDir)) return { error: "It's already in that folder." }
+  const r = await renameNoClobber(from, path.join(destDir, name))
+  return "error" in r ? r : { name, to: destination[destination.length - 1] }
+}
+
 /** Renames the photo or video `name` in `parent`. The extension stays; `newStem` is what comes before it. The new file name. */
 export async function renameTempFile(parent: string[], name: string, newStem: string): Promise<{ name: string } | { error: string }> {
   if (parent.length === 0) return { error: "Open a user's folder first." }

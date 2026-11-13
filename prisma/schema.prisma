@@ -212,6 +212,7 @@ model StockSettings {
   /// AES-256-GCM via lib/secret-box.ts. Never leaves the server.
   pixabayKeyEnc           String?
   pexelsKeyEnc            String?
+  freesoundKeyEnc         String?
   openverseClientId       String?
   openverseClientSecretEnc String?
   updatedAt               DateTime @updatedAt

@@ -15,20 +15,24 @@ const key = z
 const schema = z.object({
   pixabayKey: key,
   pexelsKey: key,
+  freesoundKey: key,
   openverseClientId: key,
   openverseClientSecret: key,
   clearPixabayKey: z.boolean().optional(),
   clearPexelsKey: z.boolean().optional(),
+  clearFreesoundKey: z.boolean().optional(),
   clearOpenverseSecret: z.boolean().optional(),
 })
 
 export type StockSettingsInput = {
   pixabayKey?: string
   pexelsKey?: string
+  freesoundKey?: string
   openverseClientId?: string
   openverseClientSecret?: string
   clearPixabayKey?: boolean
   clearPexelsKey?: boolean
+  clearFreesoundKey?: boolean
   clearOpenverseSecret?: boolean
 }
 

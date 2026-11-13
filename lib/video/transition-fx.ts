@@ -218,3 +218,37 @@ export const WHIP_LEVELS = [0, 0.35, 0.68, 0.95]
 
 export const num = NUM
 export type { Alg }
+
+// Zoom from / to full screen. A clip's place is its transform's scale and its
+// centre's offset from the canvas centre (x, y, fractions of the canvas); full
+// screen is scale 1 at the centre. The picture on show (the incoming clip for
+// "from", the outgoing one for "to") is moved by one similarity of the whole
+// canvas layer, a scale `k` about the canvas centre and a shift (`dx`, `dy`,
+// fractions of the canvas), so crop, turn and flips move with it. At full
+// screen the clip's centre sits on the canvas centre; at its own place k is 1.
+
+/** A clip's place: its transform's scale and centre offset. */
+export type ZoomPlace = { scale: number; x: number; y: number }
+
+/** The place the Transition dialog's samples use (a small picture towards the top right), since a tile has no clip. */
+export const ZOOM_SAMPLE_PLACE: ZoomPlace = { scale: 0.45, x: 0.27, y: 0.25 }
+
+/** A clip's place from its transform (no transform: as fit, which is full screen). */
+export const zoomPlaceOf = (t: { scale: number; x: number; y: number } | undefined): ZoomPlace => (t ? { scale: t.scale, x: t.x, y: t.y } : { scale: 1, x: 0, y: 0 })
+
+/** Which clip's picture is on show: "from" zoom transitions show the incoming clip, "to" ones the outgoing one; null for any other transition. */
+export const zoomKind = (t: CustomTransition): "from" | "to" | null => (t === "zoomfromfull" ? "from" : t === "zoomtofull" ? "to" : null)
+
+/**
+ * The layer move `q` (0 to 1) through a zoom transition: how far the shown
+ * picture is from full screen (`away`, 1 at full screen: it starts there for
+ * "from" and ends there for "to", eased), the scale `k` about the canvas
+ * centre and the shift (`dx`, `dy`) that put its own place there.
+ */
+export function zoomParams(kind: "from" | "to", q: number, place: ZoomPlace): { away: number; k: number; dx: number; dy: number } {
+  const e = ease(NUM, q)
+  const away = kind === "from" ? 1 - e : e
+  const k = place.scale ** -away
+  const lift = 1 - away - k
+  return { away, k, dx: place.x * lift, dy: place.y * lift }
+}

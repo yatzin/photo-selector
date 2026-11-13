@@ -15,7 +15,7 @@ export type SearchOutput = {
   unconfigured: StockSource[]
 }
 
-const NAMES: Record<StockSource, string> = { openverse: "Openverse", pixabay: "Pixabay", pexels: "Pexels" }
+const NAMES: Record<StockSource, string> = { openverse: "Openverse", pixabay: "Pixabay", pexels: "Pexels", freesound: "Freesound" }
 
 // Short, fixed strings only: the thrown text can carry URLs or keys.
 function safeMessage(source: StockSource, e: unknown): string {

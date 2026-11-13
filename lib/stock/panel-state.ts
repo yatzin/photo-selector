@@ -2,8 +2,8 @@ import type { StockKind, StockResult, StockSource } from "./types"
 
 export type Cursors = Partial<Record<StockSource, string | null>>
 
-export const SOURCE_NAMES: Record<StockSource, string> = { openverse: "Openverse", pixabay: "Pixabay", pexels: "Pexels" }
-const SOURCE_ORDER: StockSource[] = ["openverse", "pixabay", "pexels"]
+export const SOURCE_NAMES: Record<StockSource, string> = { openverse: "Openverse", pixabay: "Pixabay", pexels: "Pexels", freesound: "Freesound" }
+const SOURCE_ORDER: StockSource[] = ["openverse", "pixabay", "pexels", "freesound"]
 
 /** The request for a page of results; `cursors` (from the previous response) asks for the next page. */
 export function buildSearchUrl(o: { q: string; kind: StockKind | "all"; source: StockSource | "all"; cursors?: Cursors }): string {

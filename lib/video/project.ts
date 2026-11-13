@@ -3,9 +3,10 @@ import { isValidKey, type KeyOptions } from "./chroma"
 import { isValidRetime, type Retime } from "./retime"
 import { normalizeTemplate, pruneTemplate, type TemplateInfo } from "./template"
 import { fitAnims, normalizeText, sameText, splitAnims, type ClipText } from "./text"
+import type { ZoomSpan } from "./zoom-fullscreen"
 import { cropLeftOf, cropRightOf, isIdentity, isValidTransform, normalizeTransform, rotationOf, type Transform } from "./transform"
 import {
-  isAnyTransitionType, isAudioTransitionType, isCutAudioMode, isEdgeType, isTransitionType, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
+  isAnyTransitionType, isAudioTransitionType, isCutAudioMode, isEdgeType, isTransitionType, isZoomFullTransition, MAX_CUT_AUDIO, MAX_EDGE, MAX_TRANSITION, MIN_CUT_AUDIO, MIN_EDGE, MIN_TRANSITION,
   type AnyTransitionType, type CutAudio, type Edge, type EdgeTransition, type Transition,
 } from "./transition-types"
 
@@ -22,8 +23,9 @@ import {
  * `retime` marks a generated copy of part of another video at another speed
  * or reversed (lib/video/retime): hidden from Project media, the original stays.
  * `title` is a human title (e.g. a stock result's), shown instead of the file name.
+ * `link` is the page a stock result came from (http or https), so the media can link back to its source.
  */
-export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string; retime?: Retime; placeholder?: { label: string } }
+export type Asset = { file: string; duration: number; hasAudio: boolean; kind?: "image" | "video" | "audio"; source?: string; loopByDefault?: true; title?: string; link?: string; retime?: Retime; placeholder?: { label: string } }
 /** The name to show for an asset: its human title (a stock result's) when it has one, else its file name. */
 export const assetLabel = (a: Asset): string => (a.title !== undefined && a.title.trim() !== "" ? a.title : a.file)
 /**
@@ -48,6 +50,8 @@ export const assetLabel = (a: Asset): string => (a.title !== undefined && a.titl
 export type Clip = {
   id: string; asset: string; in: number; out: number; start: number; transform?: Transform; muted?: boolean; text?: ClipText; transition?: Transition; cutAudio?: CutAudio
   edgeIn?: EdgeTransition; edgeOut?: EdgeTransition; audio?: ClipAudio
+  /** Derived by expandZoomCuts for the preview and the export, never stored: a zoom from or to full screen inside the clip. */
+  zoomIn?: ZoomSpan; zoomOut?: ZoomSpan
   /** A video clip that repeats its source for its whole length: in is 0 and out may pass the source duration (up to MAX_TIMELINE). */
   loop?: true
   /** An image or video clip's transparent background (the color keyed out; `contiguous` only matters for an image); the file itself is unchanged. */
@@ -82,6 +86,8 @@ export type Project = {
   fps: number
   /** Set once someone picks the orientation or resolution themselves: a new project's first picture then leaves them alone. */
   formatChosen?: true
+  /** The canvas color under every layer, as "#rrggbb". Absent: black. Server-owned like the size. */
+  background?: string
   assets: Record<string, Asset>
   tracks: Track[]
   audioTrack?: Track
@@ -343,7 +349,8 @@ export type TransitionLimits = { max: number; reason: "ok" | "not-adjoining" | "
 export function cutReach(clips: Clip[], i: number): { lead: number; trail: number } {
   const c = clips[i]
   if (!c || !linksBefore(c) || !adjoins(clips[i - 1], c)) return { lead: 0, trail: 0 }
-  const half = c.transition ? c.transition.duration / 2 : 0
+  // A zoom cut has no overlap (it runs inside one clip), so it reaches into neither.
+  const half = c.transition && !isZoomFullTransition(c.transition.type) ? c.transition.duration / 2 : 0
   const a = c.cutAudio
   return { lead: Math.max(half, a?.mode === "j" ? a.duration : 0), trail: Math.max(half, a?.mode === "l" ? a.duration : 0) }
 }
@@ -374,6 +381,26 @@ export function transitionLimits(p: Project, clipId: string): TransitionLimits {
   const roomOut = clipLength(prev!) - cutReach(clips, at.index - 1).trail
   const roomIn = clipLength(at.clip) - cutReach(clips, at.index + 1).lead
   const max = Math.floor(Math.min(MAX_TRANSITION, 2 * tailHandle(p, prev!), 2 * headHandle(p, at.clip), 2 * roomOut, 2 * roomIn) * 1000 + 1e-6) / 1000
+  return max < MIN_TRANSITION - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
+}
+
+/**
+ * How long a zoom cut (lib/video/zoom-fullscreen) into clip `clipId` may be:
+ * it runs inside one clip with no overlap, the incoming clip for "zoomfromfull"
+ * and the outgoing one for "zoomtofull", so it needs no spare footage and trims
+ * nothing. At most MAX_TRANSITION and that clip's length less a zoom the same
+ * clip has at its other end, floored to the millisecond.
+ */
+export function zoomCutLimits(p: Project, clipId: string, type: "zoomfromfull" | "zoomtofull"): TransitionLimits {
+  const at = find(p, clipId)
+  const clips = at ? trackAt(p, at.track)!.clips : []
+  const prev = at ? clips[at.index - 1] : undefined
+  if (!at || !adjoins(prev, at.clip)) return { max: 0, reason: "not-adjoining" }
+  const zoomOf = (c: Clip | undefined, t: string) => (c?.transition && c.transition.type === t ? c.transition.duration : 0)
+  const next = clips[at.index + 1]
+  // The zoom out of the incoming clip comes from the clip after it, the zoom in of the outgoing one from its own cut.
+  const room = type === "zoomfromfull" ? clipLength(at.clip) - (adjoins(at.clip, next) ? zoomOf(next, "zoomtofull") : 0) : clipLength(prev!) - (adjoins(clips[at.index - 2], prev) ? zoomOf(prev, "zoomfromfull") : 0)
+  const max = Math.floor(Math.min(MAX_TRANSITION, room) * 1000 + 1e-6) / 1000
   return max < MIN_TRANSITION - 1e-9 ? { max: 0, reason: "no-footage" } : { max, reason: "ok" }
 }
 
@@ -537,7 +564,9 @@ function fixLinks(p: Project, prev: Project | undefined, alias: Record<string, s
       const samePred = !prev || was === undefined || (pred !== undefined && (alias[pred.id] ?? pred.id) === was)
       let next = c
       if (c.transition) {
-        const limit = pred && samePred ? transitionLimits(p, c.id).max : 0
+        const kind = c.transition.type
+        const zoom = kind === "zoomfromfull" || kind === "zoomtofull" ? kind : null
+        const limit = pred && samePred ? (zoom ? zoomCutLimits(p, c.id, zoom) : transitionLimits(p, c.id)).max : 0
         if (!(limit >= MIN_TRANSITION && c.transition.duration <= limit)) {
           const { transition, ...rest } = next
           next = limit >= MIN_TRANSITION ? { ...rest, transition: { ...transition!, duration: limit } } : rest
@@ -1283,11 +1312,33 @@ function isNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v)
 }
 
+export const DEFAULT_BACKGROUND = "#000000"
+
+/** A color as "#rrggbb" in lower case; it ends up inside an ffmpeg filtergraph. */
+export function isBackground(v: unknown): v is string {
+  return typeof v === "string" && /^#[0-9a-f]{6}$/.test(v)
+}
+
+/** The canvas color under every layer. */
+export const backgroundOf = (p: Pick<Project, "background">): string => p.background ?? DEFAULT_BACKGROUND
+
 const MAX_SIZE = 7680
 const MAX_FPS = 120
 const MAX_NAME = 200
 const MAX_SOURCE = 400
 const MAX_TITLE = 120
+const MAX_LINK = 500
+
+/** An http(s) page address without credentials, or "" for anything else (a link is cosmetic, so it is dropped, never fatal). */
+function cleanLink(v: unknown): string {
+  if (typeof v !== "string" || v.length > MAX_LINK) return ""
+  try {
+    const u = new URL(v)
+    return (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password ? u.href : ""
+  } catch {
+    return ""
+  }
+}
 const MAX_TRACK_ID = 64
 
 /** A whole number from 1 to `max`; these end up inside an ffmpeg filtergraph. */
@@ -1325,6 +1376,7 @@ export function parseProject(json: unknown): Project | null {
   if (typeof name !== "string" || name.length > MAX_NAME || !isInt(width, MAX_SIZE) || !isInt(height, MAX_SIZE) || !isInt(fps, MAX_FPS)) return null
   if (!isRecord(assets)) return null
   if (json.formatChosen !== undefined && json.formatChosen !== true) return null
+  if (json.background !== undefined && !isBackground(json.background)) return null
   const rawTracks: unknown = json.version === 1 ? (Array.isArray(json.clips) ? [{ id: "t1", clips: json.clips }] : null) : json.tracks
   if (!Array.isArray(rawTracks) || rawTracks.length < 1 || rawTracks.length > MAX_TRACKS) return null
 
@@ -1354,6 +1406,8 @@ export function parseProject(json: unknown): Project | null {
     // A title is cosmetic: anything unusable is dropped rather than rejecting the project.
     const title = typeof a.title === "string" ? a.title.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE).trim() : ""
     if (title) parsedAssets[key].title = title
+    const link = cleanLink(a.link)
+    if (link) parsedAssets[key].link = link
   }
 
   // The audio layer is read after the other tracks, with the same rules and its own (audioOnly).
@@ -1473,7 +1527,7 @@ export function parseProject(json: unknown): Project | null {
   // A transition or audio overlap with no clip adjoining it goes, and one longer than its footage allows is shortened (fixTransitions).
   // A slot whose clip is gone is dropped; a project left with none is no longer one made from a template.
   const template = templateIn ? pruneTemplate(templateIn, (id) => ids.has(id)) : undefined
-  return fixTransitions({ version: 3, name, width, height, fps, ...(json.formatChosen === true ? { formatChosen: true as const } : {}), assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}), ...(template ? { template } : {}) })
+  return fixTransitions({ version: 3, name, width, height, fps, ...(json.formatChosen === true ? { formatChosen: true as const } : {}), ...(typeof json.background === "string" && json.background !== DEFAULT_BACKGROUND ? { background: json.background } : {}), assets: parsedAssets, tracks, ...(audioTrack && audioTrack.clips.length > 0 ? { audioTrack } : {}), ...(template ? { template } : {}) })
 }
 
 /**
@@ -1494,7 +1548,7 @@ export function mergeClientProject(client: unknown, stored: Project): Project | 
   if (clips.length > MAX_CLIPS) return null
   // A text clip uses no asset.
   if (!clips.every((c) => isTextClip(c) || Object.hasOwn(stored.assets, c.asset))) return null
-  const { name, width, height, fps, assets, formatChosen, template } = stored
+  const { name, width, height, fps, assets, formatChosen, background, template } = stored
   // The template belongs to the server: whatever the client sent is replaced by the stored one.
-  return parseProject({ ...parsed, name, width, height, fps, formatChosen, assets, template })
+  return parseProject({ ...parsed, name, width, height, fps, formatChosen, background, assets, template })
 }

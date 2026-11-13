@@ -4,7 +4,7 @@ import type { StockKind, StockRef, StockSource } from "./types"
 // drop side. Drag data can come from any page, so everything is checked and
 // only { source, id, kind, duration? } survives. Client-safe: no server imports.
 
-const SOURCES: readonly StockSource[] = ["openverse", "pixabay", "pexels"]
+const SOURCES: readonly StockSource[] = ["openverse", "pixabay", "pexels", "freesound"]
 const KINDS: readonly StockKind[] = ["image", "gif", "video", "audio"]
 const ID = /^[A-Za-z0-9_-]{1,64}$/
 

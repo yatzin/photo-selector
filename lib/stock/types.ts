@@ -1,4 +1,4 @@
-export type StockSource = "openverse" | "pixabay" | "pexels"
+export type StockSource = "openverse" | "pixabay" | "pexels" | "freesound"
 export type StockKind = "image" | "gif" | "video" | "audio"
 
 export type StockRef = { source: StockSource; id: string; kind: StockKind }
@@ -16,7 +16,8 @@ export type StockResult = StockRef & {
 
 export type StockPage = { results: StockResult[]; next: string | null }
 
-export type StockDownload = { url: string; fileName: string; gif: boolean; title?: string }
+/** `pageUrl` is the item's own page at the provider (kept with the imported media so it can link back). */
+export type StockDownload = { url: string; fileName: string; gif: boolean; title?: string; pageUrl?: string }
 
 export type StockQuery = { query: string; kind: StockKind | "all"; cursor: string | null }
 

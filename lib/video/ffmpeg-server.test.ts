@@ -11,7 +11,7 @@ import { animationState } from "./text-animation"
 import { rasteriseText } from "./text-raster-server"
 import { clipRect, contentCentre, cropLeftOf, cropRightOf, IDENTITY, rotatedCorners, type Transform } from "./transform"
 import { whipBlurStages, WHIP_BLUR } from "./transition-fx"
-import { CUSTOM_TRANSITIONS, isCustomTransition, TRANSITION_TYPES, type CustomTransition } from "./transition-types"
+import { CUSTOM_TRANSITIONS, isCustomTransition, isZoomFullTransition, TRANSITION_TYPES, type CustomTransition } from "./transition-types"
 import { setTransition } from "./transitions"
 
 describe("parseProbe", () => {
@@ -164,6 +164,14 @@ describe("buildExportArgs with layers", () => {
     const g = graph(buildExportArgs(p, layerFiles, "o"))
     expect(g).toContain("[2:a]atrim=1:2,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,adelay=delays=120000S:all=1[a2]")
     expect(g).toContain("[asil][ba][a2]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]")
+  })
+
+  it("fills the canvas with the project's background color", () => {
+    const p = { ...layered(), background: "#1e3a8a" }
+    p.tracks[0] = { id: "t1", clips: [] }
+    const g = graph(buildExportArgs(p, { i: "/x/i.webp", b: "/x/b.mp4" }, "o"))
+    expect(g).toContain("color=c=0x1e3a8a:s=1920x1080:r=30:d=")
+    expect(g).not.toContain("color=c=black:s=1920")
   })
 
   it("starts from the black canvas when the base track is empty, and runs to the last overlay end", () => {
@@ -586,7 +594,8 @@ describe("buildExportArgs with transitions", () => {
   })
 
   it("draws the app's own transitions with xfade's custom expression on planar RGB, timed like the others", () => {
-    for (const type of CUSTOM_TRANSITIONS) {
+    // A zoom cut is never drawn as a transition: it is expanded to a hard cut and a zoom inside one clip first.
+    for (const type of CUSTOM_TRANSITIONS.filter((t) => !isZoomFullTransition(t))) {
       const g = graph(buildExportArgs(project([{ id: "a", asset: "v", in: 1, out: 4, start: 0 }, { id: "b", asset: "w", in: 2, out: 5, start: 3, transition: { type, duration: 2 } }]), xFiles, "o"))
       expect(g).toContain("[ts0]format=gbrap[ga1];[ts1]format=gbrap[gb1];[ga1][gb1]xfade=transition=custom:duration=2:offset=2:expr='")
       expect(g).toContain("',format=yuva420p")
@@ -1384,7 +1393,7 @@ const hasFfmpeg = fs.existsSync(FFMPEG)
     const mixed = ([r, , b]: number[]) => r > 40 && b > 40
     const colors = (f: (x: number, y: number) => number[], points: [number, number][]) => points.map(([x, y]) => (isRed(f(x, y)) ? "A" : isBlue(f(x, y)) ? "B" : "?")).join("")
 
-    it.each(CUSTOM_TRANSITIONS.filter((t) => t !== "glitch"))("%s: the outgoing picture at the start, the incoming one at the end", async (type) => {
+    it.each(CUSTOM_TRANSITIONS.filter((t) => t !== "glitch" && !isZoomFullTransition(t)))("%s: the outgoing picture at the start, the incoming one at the end", async (type) => {
       const out = await renderCustom(type)
       const start = await frame(out, 2.5)
       const end = await frame(out, 3.5)
